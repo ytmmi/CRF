@@ -2,7 +2,9 @@
 src-tauri/target/
 
 # ===== 测试数据集与产物（按规范本地保留，不入库）=====
-test/
+# 仅锚定仓库根目录的数据集目录；不得使用裸 test/ —— 否则会误伤
+# src-tauri/src/test/ 源码模块（历史教训见 optimization-review §10）
+/test/
 
 # ===== 工具缓存与运行时目录 =====
 .codegraph/
