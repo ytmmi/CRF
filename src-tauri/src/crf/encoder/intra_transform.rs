@@ -113,16 +113,17 @@ fn encode_plane(
         }
     }
 
-    // 模式表走 CABAC
-    let mode_stream =
-        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&modes, Some(width / BLK))?
-            .0;
+    // 模式表走 CABAC（v3 载荷 [k][body]）
+    let (mode_body, mode_k) =
+        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&modes, Some(width / BLK))?;
     let coeff_stream = coeff_enc.finish();
 
-    // 子载荷 = [mode_len u32 LE][mode_stream][coeff_stream]
-    let mut payload = Vec::with_capacity(4 + mode_stream.len() + coeff_stream.len());
-    payload.extend_from_slice(&(mode_stream.len() as u32).to_le_bytes());
-    payload.extend_from_slice(&mode_stream);
+    // 子载荷 = [mode_len u32 LE][k u8][mode_body][coeff_stream]
+    let mode_total = 1 + mode_body.len();
+    let mut payload = Vec::with_capacity(4 + mode_total + coeff_stream.len());
+    payload.extend_from_slice(&(mode_total as u32).to_le_bytes());
+    payload.push(mode_k);
+    payload.extend_from_slice(&mode_body);
     payload.extend_from_slice(&coeff_stream);
     Ok((payload, recon))
 }
