@@ -149,11 +149,20 @@ pub fn encode_frame_adaptive(
                     best = Some((data.len(), data, Some(mode)));
                 }
             }
-            None => continue, // Fast-Fail：该候选已确认必败
+            None => continue, // Fast-Fail
         }
     }
 
-    // 条带候选依赖开环批量预测（无法低成本闭环），有损模式跳过以杜绝误差漂移；
+    // P6 候选顺序优化：第三阶段前移平面化编码竞争（高频胜出 13/14 帧前置，
+    // 使后续候选 Fast-Fail 上限更紧）。
+    if compression_type == CompressionType::GolombRice && components == 3 {
+        let payload = encode_planar_payload(image, compression_type, block_size, fq, band_steps)?;
+        let planar = assemble_frame(&payload, image, 0, 3)?;
+        if best.as_ref().is_none_or(|(sz, ..)| planar.len() < *sz) {
+            best = Some((planar.len(), planar, None));
+        }
+    }
+
     // planar 与 CABAC 均可闭环，有损下照常参与竞争；palette 仅限无损低色数场景。
     if !fq.is_lossy() && compression_type == CompressionType::GolombRice {
         // 第三阶段（仅 GolombRice）：条带级自适应预测竞争
@@ -217,19 +226,6 @@ pub fn encode_frame_adaptive(
             if best.as_ref().is_none_or(|(sz, ..)| itbc.len() < *sz) {
                 best = Some((itbc.len(), itbc, None));
             }
-        }
-    }
-
-    // 第四阶段（仅 3 分量）：平面化编码竞争
-    //
-    // 二次元插画差分场景特化：RCT 去相关后 Co/Cg 色度平面在赛璐璐上色下
-    // 大面积恒定，独立编码使 RLE 零行程成倍增长；Y 平面也不再被色度打断。
-    // 有损模式下同样参与：子平面经递归走闭环量化管线。
-    if compression_type == CompressionType::GolombRice && components == 3 {
-        let payload = encode_planar_payload(image, compression_type, block_size, fq, band_steps)?;
-        let planar = assemble_frame(&payload, image, 0, 3)?;
-        if best.as_ref().is_none_or(|(sz, ..)| planar.len() < *sz) {
-            best = Some((planar.len(), planar, None));
         }
     }
 
