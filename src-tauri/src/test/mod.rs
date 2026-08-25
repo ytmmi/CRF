@@ -413,6 +413,15 @@ fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
                 }
             }
         }
+        // CRF_NOISE_ADAPTIVE=1：启用 JPEG 源噪声感知软阈值 + per-band 步长
+        //（色度 band steps 随之启用——评审 §11.1 第二项验证开关）
+        if let Ok(v) = std::env::var("CRF_NOISE_ADAPTIVE") {
+            if v.trim() == "1" {
+                let mut t = tuning.take().unwrap_or_default();
+                t.noise_adaptive = true;
+                tuning = Some(t);
+            }
+        }
         let params = crf::EncodeParams {
             compression_type: "golomb-rice".to_string(),
             block_size: None,

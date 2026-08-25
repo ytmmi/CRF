@@ -160,27 +160,40 @@ pub(crate) fn encode_planar_payload(
         (&co_enc, cw, ch),
         (&cg_enc, cw, ch),
     ];
+    // 色度条带步长（P1 精细化，评审 §11.1 第二项）：
+    // band_steps 按 BAND_HEIGHT(32) 行分段对 Y 估计；色度半分辨率 ch=h/2
+    // 用同 BAND_HEIGHT 分段需 ceil(ch/32)=ceil(h/64) 步——恰为 Y 表
+    // ceil(h/32) 的一半，step_by(2) 完美对齐。YCoCg-R 的 Co/Cg 噪声
+    // 与 Y 空间同源（JPEG 源），从 Y 表下采样映射是合理近似。
+    // 全分辨率色度（half_res=false）时与 Y 同高，直接继承。
+    let chroma_band: Vec<u8> = match band_steps {
+        Some(y_steps) if half_res => y_steps.iter().step_by(2).copied().collect(),
+        Some(y_steps) if !half_res => y_steps.to_vec(),
+        _ => Vec::new(),
+    };
     for (pi, (plane, pw, ph)) in plane_refs.iter().enumerate() {
-        // Y 用亮度步长；Co/Cg 用色度步长。
-        // band_steps（逐条带自适应步长）仅 Y 平面继承——其行划分与原帧
-        // 对齐；Co/Cg 平面可能为半分辨率（ch = h/2），条带映射错位，
-        // 且色度已有 chroma_step 粗化机制，故不启用。
         let pfq = if pi == 0 { fq } else { fq_c };
-        let sub_steps: BandSteps<'_> = if pi == 0 { band_steps } else { None };
+        let sub_steps: BandSteps<'_> = if pi == 0 {
+            band_steps
+        } else if !chroma_band.is_empty() {
+            Some(&chroma_band)
+        } else {
+            None
+        };
         let plane_image = ImageData {
             width: *pw as u16,
             height: *ph as u16,
             bit_depth: image.bit_depth,
-            color_format: ColorFormat::Gray, // 单分量虚拟帧
+            color_format: ColorFormat::Gray,
             pixels: (*plane).clone(),
         };
         let sub_out = encode_frame_adaptive(
             &plane_image,
             compression_type,
             block_size.min(*pw as u16).max(4),
-            false,         // 平面子帧不区分首帧语义
-            pfq,           // 子平面闭环量化（色度平面用更大步长，见调用方）
-            preferred_sub, // 模式继承：前一平面胜出模式引导下一平面
+            false,
+            pfq,
+            preferred_sub,
             sub_steps,
         )?;
         preferred_sub = sub_out.pred_mode;
