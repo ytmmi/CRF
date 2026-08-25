@@ -59,7 +59,10 @@ impl Default for LossyTuning {
         LossyTuning {
             chroma_quant_percent: 130,
             keyframe_interval: 10,
-            deadzone_bias: 0,
+            // 亮度 deadzone（§17 标定）：+4 在 q90(step=2) 多组 −5~11%
+            // 且质量提升；q95(step=1)/q75(step=5) 因 denom 整数除法
+            // 吸收而中性。正 bias 作用于闭环路径单侧加宽负残差死区。
+            deadzone_bias: 4,
             chroma_half_res: true,
             anchor_quality_percent: 100,
             noise_adaptive: false,
