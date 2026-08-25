@@ -160,8 +160,8 @@ pub fn encode_intra_probe(
     let bias = deadzone as i32;
 
     let mut recon = vec![0i32; plane.len()];
-    // P3 专用系数熵编码器：嵌入式 run-level，替代 v2 双流
-    let mut coeff_enc = crate::crf::encoder::coeff_coder::CoeffEncoder::new();
+    // P3 CABAC 系数编码器：概率自适应上下文 + RangeEncoder
+    let mut coeff_enc = crate::crf::encoder::coeff_cabac::CoeffCABAC::new();
     let mut modes: Vec<i32> = Vec::new();
     let mut mode_hist = [0usize; N_MODES];
 
@@ -249,7 +249,6 @@ pub fn encode_intra_probe(
         crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&modes, Some(width / BLK))?
             .0;
     let coeff_stream = coeff_enc.finish();
-
     Ok(ProbeOutput {
         payload_bytes: mode_stream.len() + coeff_stream.len(),
         recon,

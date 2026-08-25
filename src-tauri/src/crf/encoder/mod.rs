@@ -11,6 +11,8 @@
 
 pub mod adaptive;
 pub(crate) mod banded;
+pub mod coeff_cabac;
+#[allow(dead_code)] // P3 定长位流参考实现（已被 coeff_cabac 替代，保留对拍）
 pub mod coeff_coder;
 pub(crate) mod dct_path;
 pub mod exp_golomb;
