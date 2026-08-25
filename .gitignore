@@ -1,0 +1,14 @@
+# ===== Rust 构建产物 =====
+src-tauri/target/
+
+# ===== 测试数据集与产物（按规范本地保留，不入库）=====
+test/
+
+# ===== 工具缓存与运行时目录 =====
+.codegraph/
+.omo/
+
+# ===== 系统杂项 =====
+Thumbs.db
+Desktop.ini
+.DS_Store

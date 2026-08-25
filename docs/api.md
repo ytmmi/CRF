@@ -1,0 +1,450 @@
+# CRF Viewer API 接口文档
+
+## 目录
+
+- [概述](#概述)
+- [Tauri 命令接口](#tauri-命令接口)
+- [数据结构定义](#数据结构定义)
+- [错误处理](#错误处理)
+- [前端服务封装](#前端服务封装)
+
+---
+
+## 概述
+
+CRF Viewer 的前后端通信基于 Tauri 2 的命令系统。前端通过 `invoke()` 函数调用 Rust 后端命令，数据通过 JSON 序列化传输。
+
+### 调用方式
+
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+
+// 基本调用
+const result = await invoke<ResultType>('command_name', { param1: value1 });
+
+// 带错误处理
+try {
+  const result = await invoke<string>('decode_crf', { data: bytes });
+} catch (error) {
+  console.error('解码失败:', error);
+}
+```
+
+---
+
+## Tauri 命令接口
+
+### 文件操作
+
+#### `open_file`
+
+打开文件并返回元数据。
+
+```rust
+#[tauri::command]
+pub fn open_file(path: String) -> Result<FileMetadata, String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `path` | String | 文件绝对路径 |
+
+**返回值**：`FileMetadata`
+
+```typescript
+{
+  path: string;       // 文件路径
+  name: string;       // 文件名
+  size: number;       // 文件大小（字节）
+  modified: string;   // 修改时间（ISO 8601）
+  type: 'image' | 'crf' | 'unknown';  // 文件类型
+}
+```
+
+**示例**：
+
+```typescript
+const metadata = await invoke<FileMetadata>('open_file', { 
+  path: '/Users/test/image.png' 
+});
+console.log(`文件大小: ${metadata.size} bytes`);
+```
+
+---
+
+### 编解码命令
+
+#### `encode_crf`
+
+将图像序列编码为 CRF 格式。
+
+```rust
+#[tauri::command]
+pub fn encode_crf(
+    frames: Vec<ImageData>, 
+    params: EncodeParams
+) -> Result<Vec<u8>, String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `frames` | ImageData[] | 图像帧数组（2~50帧） |
+| `params` | EncodeParams | 编码参数 |
+
+**EncodeParams 结构**：
+
+```typescript
+{
+  compressionType: 'golomb-rice' | 'exp-golomb' | 'transform';
+  blockSize?: number;      // 变换块大小（仅 transform 模式）
+  userMetadata?: string;   // 用户自定义元数据（最多40字节）
+}
+```
+
+**返回值**：`Vec<u8>` - 编码后的 CRF 文件数据
+
+**示例**：
+
+```typescript
+const frames: ImageData[] = [frame1, frame2, frame3];
+const params: EncodeParams = {
+  compressionType: 'golomb-rice',
+  userMetadata: 'test sequence'
+};
+
+const crfData = await invoke<number[]>('encode_crf', { frames, params });
+```
+
+---
+
+#### `decode_crf`
+
+将 CRF 数据解码为图像序列。
+
+```rust
+#[tauri::command]
+pub fn decode_crf(data: Vec<u8>) -> Result<DecodeResult, String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `data` | number[] | CRF 文件数据 |
+
+**返回值**：`DecodeResult`
+
+```typescript
+{
+  metadata: CrfMetadata;    // 文件元数据
+  frames: ImageData[];       // 解码后的帧数据
+}
+```
+
+**示例**：
+
+```typescript
+const fileBytes = await readBinaryFile('test.crf');
+const result = await invoke<DecodeResult>('decode_crf', { 
+  data: Array.from(fileBytes) 
+});
+
+console.log(`解码了 ${result.frames.length} 帧`);
+```
+
+---
+
+#### `get_crf_metadata`
+
+获取 CRF 文件元数据（不解码帧数据）。
+
+```rust
+#[tauri::command]
+pub fn get_crf_metadata(data: Vec<u8>) -> Result<CrfMetadata, String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `data` | number[] | CRF 文件数据（或前64字节） |
+
+**返回值**：`CrfMetadata`
+
+```typescript
+{
+  version: [number, number];   // 版本号 [主版本, 次版本]
+  frameCount: number;           // 帧总数
+  width: number;                // 图像宽度
+  height: number;               // 图像高度
+  bitDepth: number;             // 像素位深
+  colorFormat: string;          // 色彩格式
+  compressionType: string;      // 压缩类型
+  hasIndex: boolean;            // 是否包含帧索引
+  userData: string;             // 用户自定义数据
+  frames: FrameInfo[];          // 帧信息列表
+}
+```
+
+---
+
+### 图像处理命令
+
+#### `load_image`
+
+加载图像文件。
+
+```rust
+#[tauri::command]
+pub fn load_image(path: String) -> Result<ImageData, String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `path` | String | 图像文件路径 |
+
+**返回值**：`ImageData`
+
+---
+
+#### `compute_residual`
+
+计算两帧之间的差值（残差）。
+
+```rust
+#[tauri::command]
+pub fn compute_residual(
+    base: ImageData, 
+    target: ImageData
+) -> Result<ImageData, String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `base` | ImageData | 基准帧 |
+| `target` | ImageData | 目标帧 |
+
+**返回值**：`ImageData` - 残差帧（target - base）
+
+**说明**：
+
+- 两帧必须具有相同的宽高、位深和色彩格式
+- 残差值可能为负数，存储为有符号整数
+
+---
+
+#### `save_image`
+
+保存图像到文件。
+
+```rust
+#[tauri::command]
+pub fn save_image(
+    data: ImageData, 
+    path: String, 
+    format: String
+) -> Result<(), String>
+```
+
+**参数**：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `data` | ImageData | 图像数据 |
+| `path` | String | 保存路径 |
+| `format` | String | 图像格式（'png', 'bmp', 'tiff'） |
+
+---
+
+## 数据结构定义
+
+### ImageData
+
+表示一帧图像数据。
+
+```typescript
+interface ImageData {
+  width: number;      // 图像宽度（像素）
+  height: number;     // 图像高度（像素）
+  bitDepth: number;   // 像素位深（8, 10, 12, 16）
+  colorFormat: ColorFormat;
+  pixels: number[];   // 一维像素数组（行优先存储）
+}
+
+type ColorFormat = 
+  | 'gray'     // 灰度
+  | 'rgb'      // RGB
+  | 'yuv444'   // YUV 4:4:4
+  | 'yuv422'   // YUV 4:2:2
+  | 'yuv420';  // YUV 4:2:0
+```
+
+**像素数组布局**：
+
+- 灰度：`[Y0, Y1, Y2, ...]`
+- RGB：`[R0, G0, B0, R1, G1, B1, ...]`
+- YUV444：`[Y0, U0, V0, Y1, U1, V1, ...]`
+
+### EncodeParams
+
+编码参数配置。
+
+```typescript
+interface EncodeParams {
+  compressionType: CompressionType;
+  blockSize?: number;       // 默认 8
+  userMetadata?: string;    // 最多 40 字节 UTF-8
+}
+
+type CompressionType = 
+  | 'golomb-rice'   // Golomb-Rice 编码
+  | 'exp-golomb'    // 指数哥伦布编码
+  | 'transform';    // 变换 + 熵编码
+```
+
+### CrfMetadata
+
+CRF 文件元数据。
+
+```typescript
+interface CrfMetadata {
+  version: [number, number];   // [1, 0]
+  frameCount: number;           // 2 ~ 50
+  width: number;
+  height: number;
+  bitDepth: number;
+  colorFormat: string;
+  compressionType: string;
+  hasIndex: boolean;
+  userData: string;
+  frames: FrameInfo[];
+}
+
+interface FrameInfo {
+  index: number;    // 帧序号（0-based）
+  offset: number;   // 文件偏移量
+  size: number;     // 帧数据大小（字节）
+  type: string;     // 帧类型
+}
+```
+
+### FileMetadata
+
+文件元数据。
+
+```typescript
+interface FileMetadata {
+  path: string;
+  name: string;
+  size: number;
+  modified: string;
+  type: 'image' | 'crf' | 'unknown';
+}
+```
+
+### DecodeResult
+
+解码结果。
+
+```typescript
+interface DecodeResult {
+  metadata: CrfMetadata;
+  frames: ImageData[];
+}
+```
+
+---
+
+## 错误处理
+
+所有命令在失败时返回 `Err(String)`，错误信息为人类可读的描述。
+
+### 常见错误类型
+
+| 错误信息 | 说明 |
+| :--- | :--- |
+| `Invalid magic number` | 文件魔数不匹配，不是有效的 CRF 文件 |
+| `Unsupported version: x.y` | 文件版本不支持 |
+| `Frame count out of range` | 帧数不在 2~50 范围内 |
+| `Image dimensions mismatch` | 图像尺寸不一致 |
+| `Bit depth not supported` | 不支持的位深 |
+| `Invalid compression type` | 无效的压缩类型 |
+| `CRC checksum failed` | 校验和验证失败 |
+| `File not found` | 文件不存在 |
+| `Permission denied` | 无权限访问文件 |
+
+### 前端错误处理
+
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+
+async function openCrfFile(path: string) {
+  try {
+    const metadata = await invoke<CrfMetadata>('get_crf_metadata', { 
+      data: await readFile(path) 
+    });
+    return metadata;
+  } catch (error) {
+    // error 是字符串类型
+    if (error.includes('Invalid magic')) {
+      showNotification('不是有效的 CRF 文件');
+    } else {
+      showNotification(`打开失败: ${error}`);
+    }
+    throw error;
+  }
+}
+```
+
+---
+
+## 前端服务封装
+
+建议在 `services/tauriCommands.ts` 中统一封装所有后端调用：
+
+```typescript
+// services/tauriCommands.ts
+import { invoke } from '@tauri-apps/api/core';
+import type { 
+  FileMetadata, CrfMetadata, ImageData, 
+  EncodeParams, DecodeResult 
+} from '../types/crf';
+
+export const CrfApi = {
+  async openFile(path: string): Promise<FileMetadata> {
+    return invoke('open_file', { path });
+  },
+
+  async encodeCrf(frames: ImageData[], params: EncodeParams): Promise<number[]> {
+    return invoke('encode_crf', { frames, params });
+  },
+
+  async decodeCrf(data: number[]): Promise<DecodeResult> {
+    return invoke('decode_crf', { data });
+  },
+
+  async getCrfMetadata(data: number[]): Promise<CrfMetadata> {
+    return invoke('get_crf_metadata', { data });
+  },
+
+  async loadImage(path: string): Promise<ImageData> {
+    return invoke('load_image', { path });
+  },
+
+  async computeResidual(base: ImageData, target: ImageData): Promise<ImageData> {
+    return invoke('compute_residual', { base, target });
+  },
+
+  async saveImage(data: ImageData, path: string, format: string): Promise<void> {
+    return invoke('save_image', { data, path, format });
+  },
+};
+```

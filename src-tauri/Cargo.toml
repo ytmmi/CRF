@@ -1,0 +1,18 @@
+[package]
+name = "crf-viewer"
+version = "0.1.0"
+edition = "2021"
+description = "CRF - Diff Image Lossless Compression Viewer"
+
+[dependencies]
+image = { version = "0.25", features = ["png", "bmp", "tiff", "jpeg", "webp"] }
+rayon = "1"
+crc32fast = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+# v1.11 实验记录：曾试验 fat LTO + codegen-units=1，实测未获得稳定收益
+# （编码耗时受机器负载波动影响大于配置差异）且编译时间约翻倍，保守还原。
+# target-cpu=native 明确拒绝：分发产物须保持基线指令集兼容，
+# SIMD 已由 format/simd.rs 运行时分派按需启用。

@@ -1,0 +1,399 @@
+//! 流式编码 API：支持 >50 帧与超大分辨率序列
+//!
+//! [`encode_sequence`](super::sequence::encode_sequence) 要求全部帧驻留
+//! 内存且上限 50 帧；本模块提供**逐帧推送**的流式接口：
+//!
+//! - **内存 O(golden + 单帧 + 码流)**：每帧独立参考 golden 首帧编码，
+//!   处理完立即释放差分/变换中间量——总内存不随帧数线性增长；
+//! - **解除 50 帧上限**：frame_count 为 u16，流式模式支持至多
+//!   65535 帧（索引项 8B/帧，65535 帧索引 ≈ 512KB）；
+//! - **格式完全兼容**：输出文件结构与 encode_sequence 一致
+//!   （header + index + frames + CRC32 footer），解码端无感。
+//!
+//! 正确性保证：复用与 encode_sequence 路径 G 完全相同的单帧编码管线
+//! （golden 差分 → 噪声感知两级滤波 → RCT → 自适应竞争），同参数下
+//! 每帧码流与一次性编码逐字节一致。
+
+use crate::crf::checksum::crc32;
+use crate::crf::error::{CrfError, CrfResult};
+use crate::crf::format::{
+    CompressionType, CrfHeader, EncodeParams, ImageData, FOOTER_MAGIC, FOOTER_SIZE,
+    FRAME_HEADER_SIZE, HEADER_SIZE,
+};
+
+use super::adaptive::encode_frame_adaptive;
+use super::noise::estimate_band_quant_steps;
+use super::FrameQuant;
+
+/// 流式帧数上限（u16 索引容量）
+pub const STREAMING_MAX_FRAMES: usize = 65535;
+
+/// 流式编码器
+///
+/// 用法：
+/// ```ignore
+/// let mut enc = StreamingEncoder::new(&params)?;
+/// enc.push_frame(&first)?;   // 首帧 = golden 基准
+/// for f in rest { enc.push_frame(&f)?; }
+/// let file_bytes = enc.finish()?;
+/// ```
+pub struct StreamingEncoder {
+    params: EncodeParams,
+    compression_type: CompressionType,
+    header: CrfHeader,
+    tuning: crate::crf::format::LossyTuning,
+    lossy_quant_step: Option<u8>,
+    /// 原始质量档位（q95 判定用）
+    lossy_quality_raw: Option<u8>,
+    #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
+    interval: usize,
+
+    /// golden 首帧（**RGB 域**）——常驻差分基准，有损模式下逐位精确
+    golden_rgb: Option<ImageData>,
+    /// 已编码帧体（各帧 [flags][(tree)][stream] 拼接）
+    body: Vec<u8>,
+    /// 每帧在 body 内的相对偏移与大小（finish 时换算为绝对偏移）
+    frame_layout: Vec<(usize, usize)>,
+    frames_written: usize,
+    finished: bool,
+}
+
+impl StreamingEncoder {
+    /// 创建流式编码器
+    pub fn new(params: &EncodeParams) -> CrfResult<Self> {
+        if params.compression_type.is_empty() {
+            return Err(CrfError::InvalidCodingParams(
+                params.compression_type.clone(),
+            ));
+        }
+        let compression_type = match params.compression_type.as_str() {
+            "golomb-rice" | "golomb" => CompressionType::GolombRice,
+            "exp-golomb" | "exp_golomb" | "egc" => CompressionType::ExpGolomb,
+            "transform" | "dct" => CompressionType::Transform,
+            _ => {
+                return Err(CrfError::InvalidCodingParams(
+                    params.compression_type.clone(),
+                ))
+            }
+        };
+
+        // 占位头（finish 时以真实尺寸/帧数重建）
+        let mut header = CrfHeader::new(0, 0, 0, 8, params_color(params), compression_type);
+        header.block_size = params.block_size.unwrap_or(8) as u16;
+        header.prediction_mode = params.prediction_mode;
+
+        let tuning = crate::crf::format::LossyTuning::resolve(params.lossy_tuning.as_ref());
+        let interval = tuning.keyframe_interval.max(1) as usize;
+        let lossy_quant_step = params
+            .lossy_quality
+            .map(crate::crf::format::quant_step_from_quality);
+        let lossy_quality_raw = params.lossy_quality;
+
+        Ok(StreamingEncoder {
+            params: params.clone(),
+            compression_type,
+            header,
+            tuning,
+            lossy_quant_step,
+            lossy_quality_raw,
+            interval,
+            golden_rgb: None,
+            body: Vec::new(),
+            frame_layout: Vec::new(),
+            frames_written: 0,
+            finished: false,
+        })
+    }
+
+    /// 推送一帧（首帧自动成为 golden 无损基准；后续帧为差分帧）
+    ///
+    /// 内存峰值 ≈ 单帧像素 + 编码缓冲——差分/变换中间量在返回前释放，
+    /// 总内存不随已推送帧数增长。
+    pub fn push_frame(&mut self, frame: &ImageData) -> CrfResult<()> {
+        if self.finished {
+            return Err(CrfError::InvalidCodingParams(
+                "encoder already finished".into(),
+            ));
+        }
+        if self.frames_written >= STREAMING_MAX_FRAMES {
+            return Err(CrfError::FrameCountOutOfRange(STREAMING_MAX_FRAMES as u16));
+        }
+        let components = frame.color_format.component_count();
+        let width = frame.width as usize;
+        let height = frame.height as usize;
+        let fq_base = self.frame_quant(self.frames_written);
+
+        match &self.golden_rgb {
+            None => {
+                // ===== 首帧：golden 无损基准 =====
+                // 回填真实尺寸/位深/色彩格式至文件头（finish 校验用）
+                self.header.width = frame.width;
+                self.header.height = frame.height;
+                self.header.bit_depth = frame.bit_depth;
+                self.header.color_format = frame.color_format;
+                // RCT 标志与批量路径对齐（3 分量即启用 YCoCg-R）
+                let use_rct = components == 3;
+                if use_rct {
+                    let mut f = crate::crf::format::Flags::new();
+                    f.set_has_index(true);
+                    f.set_has_rct(true);
+                    self.header.flags = f;
+                }
+                // v1.13 RCT 首帧自适应：RCT 域与 RGB 直通各走完整管线，
+                // 字节最小者胜出（平局保守保持 RCT）；直通胜出时置位
+                // flags.bit3。两路 Fast-Fail 上限独立计算，不跨路传递。
+                // 非 3 分量（Gray）无通道相关性可去除，直接直通编码
+                // （与批量路径 use_rct=false 行为对齐；历史版本此处
+                // 无条件 rct_forward 会令 Gray 序列报错）。
+                let img_eff = if use_rct {
+                    ImageData {
+                        width: frame.width,
+                        height: frame.height,
+                        bit_depth: frame.bit_depth,
+                        color_format: frame.color_format,
+                        pixels: crate::crf::format::rct_forward(&frame.pixels, components)?,
+                    }
+                } else {
+                    ImageData {
+                        width: frame.width,
+                        height: frame.height,
+                        bit_depth: frame.bit_depth,
+                        color_format: frame.color_format,
+                        pixels: frame.pixels.clone(),
+                    }
+                };
+                let data_eff = encode_first_frame_bytes(&img_eff, self)?;
+                let data = if use_rct {
+                    let data_bypass = encode_first_frame_bytes(frame, self)?;
+                    if data_bypass.len() < data_eff.len() {
+                        self.header.flags.set_first_frame_no_rct(true);
+                        data_bypass
+                    } else {
+                        data_eff
+                    }
+                } else {
+                    data_eff
+                };
+                // 保存 **RGB 域**原帧作为后续差分基准（历史缺陷曾存 RCT 域导致跨域相减）
+                self.golden_rgb = Some(ImageData {
+                    width: frame.width,
+                    height: frame.height,
+                    bit_depth: frame.bit_depth,
+                    color_format: frame.color_format,
+                    pixels: frame.pixels.clone(),
+                });
+                self.append_frame(data);
+            }
+            Some(golden) => {
+                // ===== 差分帧：SIMD 差分 → RCT → 编码 =====
+                if golden.pixels.len() != frame.pixels.len() {
+                    return Err(CrfError::ImageDimensionsMismatch {
+                        expected: (golden.width, golden.height),
+                        actual: (frame.width, frame.height),
+                    });
+                }
+                let mut diff = vec![0i32; frame.pixels.len()];
+                crate::crf::format::simd::sub_i32(&frame.pixels, &golden.pixels, &mut diff);
+                let eff_pixels = crate::crf::format::rct_forward(&diff, components)?;
+
+                let fq_band: Vec<u8> = if self.noise_on() && components == 3 {
+                    fq_band_steps(
+                        fq_base.step,
+                        &eff_pixels,
+                        width,
+                        height,
+                        components,
+                        &self.tuning,
+                    )
+                } else {
+                    Vec::new()
+                };
+                let band_ref: super::frame::BandSteps<'_> = if fq_band.is_empty() {
+                    None
+                } else {
+                    Some(&fq_band)
+                };
+
+                let mut data = if self.params.adaptive_prediction {
+                    encode_frame_adaptive(
+                        &ImageData {
+                            width: frame.width,
+                            height: frame.height,
+                            bit_depth: frame.bit_depth,
+                            color_format: frame.color_format,
+                            pixels: eff_pixels,
+                        },
+                        self.compression_type,
+                        self.header.block_size,
+                        false,
+                        fq_base,
+                        None,
+                        band_ref,
+                    )?
+                    .data
+                } else {
+                    super::encode_frame(
+                        &ImageData {
+                            width: frame.width,
+                            height: frame.height,
+                            bit_depth: frame.bit_depth,
+                            color_format: frame.color_format,
+                            pixels: eff_pixels,
+                        },
+                        self.compression_type,
+                        self.header.block_size,
+                        self.header.prediction_mode,
+                        false,
+                        fq_base,
+                        None,
+                    )?
+                };
+                // golden 参考标志（coding_params.bit7）：与批量路径路径 G 对齐，
+                // 全 golden 架构下所有差分帧均参考首帧
+                if data.len() > FRAME_HEADER_SIZE {
+                    data[9] |= 0x80;
+                }
+                self.append_frame(data);
+            }
+        }
+        Ok(())
+    }
+
+    /// 结束编码并输出完整 CRF 文件字节
+    pub fn finish(mut self) -> CrfResult<Vec<u8>> {
+        if self.frames_written < 2 {
+            return Err(CrfError::FrameCountOutOfRange(self.frames_written as u16));
+        }
+        self.finished = true;
+
+        let frame_count = self.frames_written as u16;
+
+        // 重建最终文件头（真实尺寸/帧数/标志）
+        let mut header = self.header.clone();
+        header.frame_count = frame_count;
+        // 在 push_frame 已设置的标志（has_index/has_rct）基础上追加有损标记
+        if let Some(q) = self.lossy_quant_step {
+            header.lossy_quant = q;
+            header.flags.set_has_lossy_quant(true);
+        }
+        header.validate()?;
+
+        let index_size = frame_count as usize * 8;
+        let total_size = HEADER_SIZE + index_size + self.body.len() + FOOTER_SIZE;
+        let mut output = Vec::with_capacity(total_size);
+
+        // 完整文件头（含 magic，64B）
+        header.write_bytes(&mut output)?;
+
+        // 帧索引（offset 相对文件起始；首帧位于 header+index 之后）
+        let frames_start = HEADER_SIZE + index_size;
+
+        // 帧索引：相对偏移换算为绝对偏移（frames_start + body 内偏移）
+        for (rel, size) in &self.frame_layout {
+            let abs = (frames_start + rel) as u32;
+            output.extend_from_slice(&abs.to_le_bytes());
+            output.extend_from_slice(&(*size as u32).to_le_bytes());
+        }
+
+        // 帧数据
+        output.extend_from_slice(&self.body);
+
+        // CRC32（不含文件尾）
+        let crc = crc32(&output);
+        output.extend_from_slice(&crc.to_le_bytes());
+        output.extend_from_slice(&FOOTER_MAGIC);
+
+        Ok(output)
+    }
+
+    fn append_frame(&mut self, data: Vec<u8>) {
+        // 记录帧在 body 内的相对布局（绝对偏移在 finish 时统一换算，
+        // 因为 push 时总帧数未知 → 索引区大小未知）
+        self.frame_layout.push((self.body.len(), data.len()));
+        self.body.extend_from_slice(&data);
+        self.frames_written += 1;
+    }
+
+    fn noise_on(&self) -> bool {
+        self.lossy_quant_step.is_some()
+            && self.tuning.noise_adaptive
+            && self.header.color_format.component_count() == 3
+    }
+
+    fn frame_quant(&self, i: usize) -> FrameQuant {
+        let global_q = self.lossy_quant_step.unwrap_or(0);
+        if global_q == 0 || i == 0 {
+            return FrameQuant::lossless();
+        }
+        FrameQuant {
+            step: global_q,
+            bias: self.tuning.deadzone_bias,
+            chroma_step: self.tuning.chroma_step(global_q),
+            chroma_half_res: global_q > 1 && self.tuning.chroma_half_res,
+            // v1.12：流式路径 q95 矩阵缩放（Q=1 且原始质量档为 95）
+            q1_matrix_scale: global_q == 1
+                && self
+                    .lossy_quality_raw
+                    .map(crate::crf::format::quant::is_q95_perceptual)
+                    == Some(true),
+        }
+    }
+}
+
+fn params_color(_p: &EncodeParams) -> crate::crf::format::ColorFormat {
+    crate::crf::format::ColorFormat::Rgb
+}
+
+/// 首帧编码统一入口（流式路径）：自适应/固定模式分流，
+/// golden 首帧恒无损。供 RCT 双路竞争的两条路复用。
+fn encode_first_frame_bytes(img: &ImageData, enc: &StreamingEncoder) -> CrfResult<Vec<u8>> {
+    if enc.params.adaptive_prediction {
+        Ok(encode_frame_adaptive(
+            img,
+            enc.compression_type,
+            enc.header.block_size,
+            true,
+            FrameQuant::lossless(),
+            None,
+            None,
+        )?
+        .data)
+    } else {
+        super::encode_frame(
+            img,
+            enc.compression_type,
+            enc.header.block_size,
+            enc.header.prediction_mode,
+            true,
+            FrameQuant::lossless(),
+            None,
+        )
+    }
+}
+
+#[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
+fn write_header_fields(header: &CrfHeader, out: &mut Vec<u8>) -> CrfResult<()> {
+    header.write_bytes(out)
+}
+
+fn fq_band_steps(
+    fq_step: u8,
+    eff_pixels: &[i32],
+    width: usize,
+    height: usize,
+    components: usize,
+    tuning: &crate::crf::format::LossyTuning,
+) -> Vec<u8> {
+    estimate_band_quant_steps(
+        eff_pixels,
+        width,
+        height,
+        components,
+        fq_step,
+        tuning.noise_tau_x100,
+    )
+}
+
+// FRAME_HEADER_SIZE 引用占位
+#[allow(unused_imports)]
+const _: usize = FRAME_HEADER_SIZE;
