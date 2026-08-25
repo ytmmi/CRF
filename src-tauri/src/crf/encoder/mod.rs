@@ -11,6 +11,7 @@
 
 pub mod adaptive;
 pub(crate) mod banded;
+pub mod coeff_coder;
 pub(crate) mod dct_path;
 pub mod exp_golomb;
 pub mod frame;

@@ -160,9 +160,8 @@ pub fn encode_intra_probe(
     let bias = deadzone as i32;
 
     let mut recon = vec![0i32; plane.len()];
-    // v2：每块 zigzag + 末尾零截断（EOB 等价）；位置流显式块边界
-    let mut coeffs_trunc: Vec<i32> = Vec::new();
-    let mut last_nz_pos: Vec<i32> = Vec::new();
+    // P3 专用系数熵编码器：嵌入式 run-level，替代 v2 双流
+    let mut coeff_enc = crate::crf::encoder::coeff_coder::CoeffEncoder::new();
     let mut modes: Vec<i32> = Vec::new();
     let mut mode_hist = [0usize; N_MODES];
 
@@ -209,18 +208,9 @@ pub fn encode_intra_probe(
                 qcoeffs[i] = lv;
                 dequant[i] = lv * q;
             }
-            // zigzag 扫描重排（低频前置）；找最后一个非零系数位置截断
+            // zigzag 扫描重排（低频前置）；P3 专用编码器直接编码
             let scanned = crate::crf::format::zigzag_scan(&qcoeffs, BLK);
-            let mut last = -1i32;
-            for (i, &v) in scanned.iter().enumerate() {
-                if v != 0 {
-                    last = i as i32;
-                }
-            }
-            last_nz_pos.push(last);
-            if last >= 0 {
-                coeffs_trunc.extend_from_slice(&scanned[0..=(last as usize)]);
-            }
+            coeff_enc.encode_block(&scanned);
 
             // 反量化 → 逆 DCT → 局部重建（重建用原行优先 dequant，与编码对称）
             let spatial = dct8x8_inverse(&dequant);
@@ -232,17 +222,14 @@ pub fn encode_intra_probe(
         }
     }
 
-    // 信令：模式表 + EOB 位置表 + 截断系数流，三者各自走 RLE+CABAC
+    // 信令：模式表走 RLE+CABAC；系数走专用 CoeffEncoder（P3 run-level）
     let mode_stream =
         crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&modes, Some(width / BLK))?
             .0;
-    let pos_stream =
-        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&last_nz_pos, None)?.0;
-    let coeff_stream =
-        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&coeffs_trunc, None)?.0;
+    let coeff_stream = coeff_enc.finish();
 
     Ok(ProbeOutput {
-        payload_bytes: mode_stream.len() + pos_stream.len() + coeff_stream.len(),
+        payload_bytes: mode_stream.len() + coeff_stream.len(),
         recon,
         mode_hist,
     })
