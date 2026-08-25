@@ -681,6 +681,24 @@ fn verify_crf_against_pngs(
             return false;
         }
     };
+
+    // 工具胜出率统计（规范 §6.2 必报指标）：帧头偏移 +8 处为 frame_type。
+    // frame_type=0/1 熵编码直连、2 条带、3 planar、4 palette、5 CABAC、6 DCT、7 ITBC
+    if result.frames.len() == result.frame_index.len() {
+        let mut type_counts: std::collections::BTreeMap<u8, usize> = Default::default();
+        for entry in &result.frame_index {
+            let off = entry.offset as usize;
+            if off + 8 < data.len() {
+                *type_counts.entry(data[off + 8]).or_insert(0) += 1;
+            }
+        }
+        let dist = type_counts
+            .iter()
+            .map(|(t, c)| format!("type{}×{}", t, c))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("  帧类型分布: {}", dist);
+    }
     drop(data);
 
     if result.frames.len() != png_paths.len() {
