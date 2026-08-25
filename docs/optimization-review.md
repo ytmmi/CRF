@@ -1101,3 +1101,51 @@ PNG1000（14 帧 1024×1820）上对比。
 AVIF PSNR 是 14 张独立图。两口径均解码 RGB 逐像素对比原 PNG，口径
 一致。AVIF 的 NVENC 硬件编码质量可能低于软件 AV1——这是对标合同的
 固有限制（avif.py 使用 av1_nvenc）。
+
+## 20. 规划实施总结与路线状态（2026-08-25）
+
+### 已完成（P0~P6 + P4 + 基准对标）
+
+| 轮次 | 提交 | 目标 | 关键成果 |
+|---|---|---|---|
+| P0 | 842e8c9 | 闭环语义修正 | G_hat 两阶段编码；verify 自包含还原 |
+| P1a | 9c830f9 | 色度解耦 | chroma_half_res 解耦 + chroma_step 升级（q95 −47.2%） |
+| P1b | f2ce786 | 色度死区通道 | chroma_deadzone_bias 独立通道 + bias 符号勘误 |
+| P1c | cf7a5de | 色度死区标定 | 19 组扩展实测，默认 Some(-4) 采纳 |
+| - | 2d017bf | 帧类型统计 | §6.2 必报指标：planar×13+CABAC×1，DCT 零胜出 |
+| P2v1 | 905858c | 变换探针 v1 | 负结果：通用 CABAC 承载变换系数 +55~209% |
+| P2v2 | 2b1df7a | EOB+zigzag | 负结果：位置流开销 > 截断收益 |
+| - | 5d5bfae | golden 标定 | 负结果：首帧有损在当前架构为纯负优化 |
+| P1d | 0b496cc | CfL α 扩展 | ±3 候选，跨内容 −4~24% |
+| P1e | b888df0 | 色度 band | Y 表下采样映射，JPEG 源 −36% |
+| P1f | a575859 | 亮度 deadzone | +4 默认，q90 −5~11% |
+| P4 | 8561873 | 边缘感知下采样 | 中值替代均值防渗色 |
+| P6 | f045542 | DCT 预筛 | q90 −10.7% 耗时+体积+质量三赢 |
+| 基准 | 9ba05b1 | AVIF 全量复测 | CRF/AVIF = 103.8% 体积, +12.5 dB 质量 |
+| 预设 | 7b5f868 | 预设固化 | None(default)==Some(default) 逐字节验证 |
+
+### 累计收益轨迹（q90 @ PNG1000）
+
+`
+基线 4.31 MB → 色度解耦 3.92 MB → 亮度deadzone 3.50 MB → DCT预筛 3.50 MB
+AVIF CQ18: 3.37 MB @ 37.32 dB
+CRF q90:   3.50 MB @ 49.86 dB (体积+3.8%, 质量+12.5dB)
+`
+
+规划 §6.3 阶段 A（匹配质量后 ≤AVIF+10%）已超额达成（+3.8%）。
+
+### 冻结/后置项
+
+| 路线 | 状态 | 原因 |
+|---|---|---|
+| P2 完整版（预测后变换） | 冻结为 v2 探针 | 通用 CABAC 框架下无收益；需专用熵编码器投入 |
+| P3（系数专用熵编码） | 后置 | 同 P2，构成路线依赖闭环 |
+| P5（序列级优化） | 后置 | 依赖 P2 的预测后变换；当前 golden 架构下 previous 参考破坏并行性 |
+| golden_lossless=false | 否决 | 首帧误差注入残差能量暴增，当前架构纯负优化 |
+| 接口正式化（JSON/CLI/UI） | 后置 | lossy-tuning-interface-plan §10，当前标定已隐含固化于 default() |
+
+### 门禁汇总
+- clippy -- -D warnings：零告警
+- cargo test：124 passed / 0 failed / 1 ignored
+- 所有标定默认值已固化于 LossyTuning::default()
+- 无损管线逐字节回归全绿
