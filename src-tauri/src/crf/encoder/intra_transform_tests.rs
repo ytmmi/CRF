@@ -37,7 +37,9 @@ mod tests {
             &img,
             CompressionType::GolombRice,
             1, // q_step=1 → 近无损
-            0,
+            0, // deadzone
+            1, // chroma_step
+            0, // chroma_bias
         )
         .expect("encode failed");
 
@@ -46,6 +48,7 @@ mod tests {
             img.width as usize,
             img.height as usize,
             3,
+            1,
             1,
         )
         .expect("decode failed");
@@ -67,7 +70,7 @@ mod tests {
     fn frame_type8_lossy_reconstruction() {
         // 有损（q_step=5）：解码成功且误差有界
         let img = make_frame(32, 24, 0xBADBEEF);
-        let payload = encode_intra_transform_payload(&img, CompressionType::GolombRice, 5, 0)
+        let payload = encode_intra_transform_payload(&img, CompressionType::GolombRice, 5, 0, 5, 0)
             .expect("encode failed");
 
         let decoded = crate::crf::decoder::intra_transform::decode_intra_transform(
@@ -75,6 +78,7 @@ mod tests {
             img.width as usize,
             img.height as usize,
             3,
+            5,
             5,
         )
         .expect("decode failed");

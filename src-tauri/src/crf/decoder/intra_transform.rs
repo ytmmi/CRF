@@ -23,6 +23,7 @@ pub fn decode_intra_transform(
     height: usize,
     components: usize,
     q_step: u8,
+    chroma_step: u8,
 ) -> CrfResult<Vec<i32>> {
     if components != 3 || data.is_empty() {
         return Err(CrfError::InvalidCodingParams(
@@ -33,7 +34,7 @@ pub fn decode_intra_transform(
     let mut offset = 1; // 跳过 flags
 
     let mut planes: Vec<Vec<i32>> = Vec::with_capacity(3);
-    for _ in 0..3 {
+    for pi in 0..3 {
         if offset + 4 > data.len() {
             return Err(CrfError::InsufficientData {
                 expected: offset + 4,
@@ -50,7 +51,12 @@ pub fn decode_intra_transform(
         }
         let sub = &data[offset..offset + plen];
         offset += plen;
-        planes.push(decode_plane(sub, width, height, q)?);
+        let p_q = if pi == 0 {
+            q
+        } else {
+            chroma_step.max(1) as i32
+        };
+        planes.push(decode_plane(sub, width, height, p_q)?);
     }
 
     // 交织三平面 → RGB

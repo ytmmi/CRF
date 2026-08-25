@@ -128,7 +128,7 @@ pub fn decode_frame(data: &[u8], header: &CrfHeader) -> CrfResult<ImageData> {
     if header.compression_type == CompressionType::GolombRice && frame_header.frame_type == 8 {
         let q_step = header.lossy_quant.max(1);
         let pixels = crate::crf::decoder::intra_transform::decode_intra_transform(
-            frame_data, width, height, components, q_step,
+            frame_data, width, height, components, q_step, q_step,
         )?;
         return Ok(ImageData {
             width: header.width,

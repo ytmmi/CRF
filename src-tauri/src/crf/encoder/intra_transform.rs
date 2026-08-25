@@ -134,6 +134,8 @@ pub fn encode_intra_transform_payload(
     compression_type: CompressionType,
     q_step: u8,
     deadzone: i8,
+    chroma_step: u8,
+    chroma_bias: i8,
 ) -> CrfResult<Vec<u8>> {
     if compression_type != CompressionType::GolombRice {
         return Err(crate::crf::error::CrfError::InvalidCodingParams(
@@ -158,8 +160,13 @@ pub fn encode_intra_transform_payload(
     }
 
     let mut out = vec![0u8]; // flags 预留
-    for plane in &planes {
-        let (payload, _) = encode_plane(plane, w, h, q_step, deadzone)?;
+    for (pi, plane) in planes.iter().enumerate() {
+        let (p_q, p_bias) = if pi == 0 {
+            (q_step, deadzone) // Y: 亮度步长+偏置
+        } else {
+            (chroma_step.max(1), chroma_bias) // Co/Cg: 色度步长+偏置
+        };
+        let (payload, _) = encode_plane(plane, w, h, p_q, p_bias)?;
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(&payload);
     }

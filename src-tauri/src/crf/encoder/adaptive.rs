@@ -431,8 +431,14 @@ pub fn encode_frame_adaptive(
         // 系数流走 CABAC run-level 编码（3 上下文 + 直通 sign/余数）。
         // 仅 3 分量时参与（单分量 Gray 用前序帧级候选）。
         if compression_type == CompressionType::GolombRice && components == 3 {
-            let payload_tf8 =
-                encode_intra_transform_payload(image, compression_type, fq.step, fq.bias)?;
+            let payload_tf8 = encode_intra_transform_payload(
+                image,
+                compression_type,
+                fq.step,
+                fq.bias,
+                fq.chroma_step,
+                fq.chroma_bias,
+            )?;
             let tf8 = assemble_frame(&payload_tf8, image, 0, 8)?;
             if best.as_ref().is_none_or(|(sz, ..)| tf8.len() < *sz) {
                 best = Some((tf8.len(), tf8, None));
