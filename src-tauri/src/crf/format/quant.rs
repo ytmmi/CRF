@@ -65,7 +65,10 @@ impl Default for LossyTuning {
             noise_adaptive: false,
             noise_tau_x100: 150,
             golden_lossless: true,
-            chroma_deadzone_bias: None,
+            // P1 标定采纳（optimization-review §13）：19 组分层实测 ±4 均
+            // 为纯收益（体积均值 −2.4%，质量 max 降 −0.27dB/典型 +0.3dB），
+            // −4 在主要收益锚点（PNG1000/c 组）优于 +4。
+            chroma_deadzone_bias: Some(-4),
         }
     }
 }
@@ -199,13 +202,20 @@ mod tests {
     }
 
     #[test]
-    fn test_chroma_deadzone_bias_default_none() {
-        // 默认 None：序列化往返与 resolve 后保持继承语义
+    fn test_chroma_deadzone_bias_default_and_inherit() {
+        // P1 标定采纳（§13）：默认 Some(-4)；显式 None 仍表达"继承全局偏置"
         let t = LossyTuning::default();
-        assert!(t.chroma_deadzone_bias.is_none(), "默认必须为 None（继承）");
+        assert_eq!(t.chroma_deadzone_bias, Some(-4), "标定采纳的默认档");
         let resolved = LossyTuning::resolve(None);
-        assert!(resolved.chroma_deadzone_bias.is_none());
-        // 显式 Some 在 clone/resolve 后保留
+        assert_eq!(resolved.chroma_deadzone_bias, Some(-4));
+        // 显式 None（继承）与显式正值在 clone/resolve 后保留
+        let inherit = LossyTuning {
+            chroma_deadzone_bias: None,
+            ..Default::default()
+        };
+        assert!(LossyTuning::resolve(Some(&inherit))
+            .chroma_deadzone_bias
+            .is_none());
         let explicit = LossyTuning {
             chroma_deadzone_bias: Some(4),
             ..Default::default()

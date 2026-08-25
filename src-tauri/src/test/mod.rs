@@ -366,6 +366,14 @@ fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
         // 扩展档位（CRF_EXTRA_QUALITY=<q> 时在下方追加，用于低质源压测）
     ];
     let mut schemes: Vec<Scheme> = schemes.into_iter().collect();
+    // 实验工具参数（显式 opt-in）：CRF_ONLY_SCHEME=<文件名子串> 只保留匹配
+    // 的方案（如 q95），供标定扫描裁剪运行时间；不影响默认全量行为。
+    if let Ok(only) = std::env::var("CRF_ONLY_SCHEME") {
+        let needle = only.trim().to_string();
+        if !needle.is_empty() {
+            schemes.retain(|s| s.file.contains(&needle));
+        }
+    }
     if let Ok(q) = std::env::var("CRF_EXTRA_QUALITY") {
         if let Ok(qv) = q.trim().parse::<u8>() {
             schemes.push(Scheme {
