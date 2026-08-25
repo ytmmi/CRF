@@ -64,8 +64,16 @@ impl LossyTuning {
     }
 
     /// 色度步长 = clamp(亮度Q × chroma% , 1, 255)
+    ///
+    /// P1 色度通道解耦（规划 §4.2 策略二）：整数截断会使小步长区间的
+    /// 比例完全失效——如 Q=1 × 130% → floor=1 == 亮度步长，色度量化
+    /// 与亮度完全相同。此时按分量级 Q 选择升一级，使百分比真实生效；
+    /// 其余档位保持 floor 结果不变（行为面最小）。
     pub fn chroma_step(&self, luma_q: u8) -> u8 {
         let scaled = (luma_q as u32 * self.chroma_quant_percent as u32) / 100;
+        if self.chroma_quant_percent > 100 && scaled <= luma_q as u32 && luma_q < 255 {
+            return luma_q + 1;
+        }
         scaled.clamp(1, 255) as u8
     }
 
@@ -150,6 +158,31 @@ mod tests {
         assert_eq!(quant_step_from_quality(50), 10);
         assert_eq!(quant_step_from_quality(25), 15);
         assert_eq!(quant_step_from_quality(1), 20);
+    }
+
+    #[test]
+    fn test_chroma_step_percent_take_effect_at_small_q() {
+        // P1 色度通道解耦：整数截断导致比例失效的小 Q 区间必须升一级
+        let t = LossyTuning::default(); // chroma_quant_percent = 130
+                                        // 失效场景：floor 结果 == 亮度步长 → 升级使百分比真实生效
+        assert_eq!(t.chroma_step(1), 2, "Q=1 × 130% 不得截断回 Q=1");
+        assert_eq!(t.chroma_step(2), 3, "Q=2 × 130% floor=2 == luma，应升级");
+        assert_eq!(t.chroma_step(3), 4);
+        // 比例已真实生效的档位保持 floor 结果（行为面最小）
+        assert_eq!(t.chroma_step(4), 5, "Q=4 × 130% = 5.2 > 4，无需升级");
+        assert_eq!(t.chroma_step(10), 13);
+
+        // 比例 ≤100 时永不触发升级（色度不粗于亮度是显式意图）
+        let mild = LossyTuning {
+            chroma_quant_percent: 100,
+            ..Default::default()
+        };
+        assert_eq!(mild.chroma_step(1), 1);
+        let fine = LossyTuning {
+            chroma_quant_percent: 80,
+            ..Default::default()
+        };
+        assert_eq!(fine.chroma_step(10), 8, "比例<100 时色度更细");
     }
 
     #[test]

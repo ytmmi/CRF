@@ -169,7 +169,10 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             step,
             bias: base_bias,
             chroma_step: tuning.chroma_step(step),
-            chroma_half_res: step > 1 && tuning.chroma_half_res,
+            // P1 4:2:0 解耦（规划 §4.1）：色度半分辨率不再受 step>1 阻断，
+            // 由 chroma_half_res 参数独立决定；planar 载荷内 ss_flags.bit0
+            // 携带该标志，解码对称不受影响；无损锚点经 is_lossy() 自动关闭。
+            chroma_half_res: tuning.chroma_half_res,
             q1_matrix_scale: q95,
         }
     };

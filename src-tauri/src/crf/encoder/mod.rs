@@ -27,6 +27,8 @@ pub mod streaming;
 pub mod transform;
 
 #[cfg(test)]
+mod chroma_tests;
+#[cfg(test)]
 mod closed_loop_tests;
 #[cfg(test)]
 mod streaming_tests;

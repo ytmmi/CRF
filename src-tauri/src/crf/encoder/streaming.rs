@@ -329,7 +329,9 @@ impl StreamingEncoder {
             step: global_q,
             bias: self.tuning.deadzone_bias,
             chroma_step: self.tuning.chroma_step(global_q),
-            chroma_half_res: global_q > 1 && self.tuning.chroma_half_res,
+            // P1 4:2:0 解耦：与批量路径 fq_for_index 对齐，半分辨率由
+            // 参数独立决定（planar 内 is_lossy() 双保险）
+            chroma_half_res: self.tuning.chroma_half_res,
             // v1.12：流式路径 q95 矩阵缩放（Q=1 且原始质量档为 95）
             q1_matrix_scale: global_q == 1
                 && self

@@ -725,3 +725,34 @@ golden_lossless=false 与 q95_soft 的产物与旧实现不同（残差参考更
 - 若后续发现 decode_frame 在某 frame_type 分支与真实文件解码不一致，
   必须立即停止 P1 并回溯本轮的本地重建假设（以端到端 decode_from_bytes
   比对为准）。
+
+## 10. P1 第一轮实施记录：亮/色度量化通道解耦（2026-08-25）
+
+**目标**：落地 [first-frame-optimization-plan.md](first-frame-optimization-plan.md)
+§5-P1 第 2/3 项与 §7 第 4 步——色度采样与量化步长不再被整数亮度步长间接绑架，
+使 Q_target 具备真实的亮/色分离控制能力。
+
+**修改模块及职责**：
+- `src-tauri/src/crf/format/quant.rs`：LossyTuning::chroma_step 失效升档——
+  整数截断导致比例失效的小 Q 区间（floor 结果 == 亮度步长，如 Q=1×130%→1）
+  升一级使百分比真实生效；其余档位保持 floor 不变（行为面最小）。
+  对应规划 §4.2 策略二的"分量级 Q 选择"，定点表达留给矩阵/RDOQ 阶段。
+- `src-tauri/src/crf/encoder/sequence.rs` + `streaming.rs`：
+  chroma_half_res 与 step > 1 解耦，由参数独立决定；
+  planar 载荷 ss_flags.bit0 携带标志、解码端从载荷读取，对称性天然成立；
+  planar 编码入口的 is_lossy() 判定为无损锚点保留双保险。
+- 新增 `chroma_tests.rs`（端到端 ×3）与 quant.rs 单元边界测试 ×1。
+
+**解码对称性依据**：量化器输出 level×q 已重放大回原域，解码器无反量化逻辑；
+半分辨率标志在载荷内。故两项改动的码流语义零影响，旧文件解码不受影响。
+
+**格式/API 影响**：无码流格式变化。行为变化：q95（step=1）档位下半分辨率
+首次真实可用；小 Q 区间色度步长升一级（q90: chroma 2→3）。均为编码端决策变化。
+
+**最大手写源文件**：encoder/tests.rs 980；预警区文件未增长。
+**执行的检查与测试**：fmt/clippy 零告警；cargo test **121 passed / 0 failed**
+（含新增 4 项：3 端到端 + 1 单元边界；planar 存量往返回归通过）。
+**未执行项及原因**：PNG1000 体积/质量方向性验证待 avif.py 基准报告就绪后随 P1
+标定一并执行——本两项的收益需在真实数据集上按 §6.2 必报指标确认。
+**已知风险与回退条件**：若扩展集上 q95 开启半分辨率出现饱和边界渗色，
+回退方案为将解耦范围限定在 anchor 帧，或对色度文字/锐边加保护后再开启。
