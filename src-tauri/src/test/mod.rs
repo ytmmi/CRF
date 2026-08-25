@@ -590,7 +590,7 @@ pub fn run_probe_split_tests(png_dir: &str) {
     println!("\n=== 探针完成 ===");
 }
 
-fn collect_png_paths(dir: &str) -> Vec<String> {
+pub(crate) fn collect_png_paths(dir: &str) -> Vec<String> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .expect("无法读取图像目录")
         .filter_map(|e| e.ok())
@@ -615,7 +615,7 @@ fn collect_png_paths(dir: &str) -> Vec<String> {
 }
 
 /// 加载单张 PNG 为 RGB ImageData
-fn load_single_png(path: &str) -> Option<crf::ImageData> {
+pub(crate) fn load_single_png(path: &str) -> Option<crf::ImageData> {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
@@ -658,7 +658,7 @@ fn load_single_png(path: &str) -> Option<crf::ImageData> {
 ///
 /// 差分由编码器内部完成（input_original_frames=true 时采用首帧参考闭环，
 /// 量化误差不沿链累积）。原始帧仅在加载瞬间存在，序列整体一次性持有。
-fn load_frame_sequence(paths: &[String]) -> Vec<crf::ImageData> {
+pub(crate) fn load_frame_sequence(paths: &[String]) -> Vec<crf::ImageData> {
     let mut frames: Vec<crf::ImageData> = Vec::with_capacity(paths.len());
     for (i, p) in paths.iter().enumerate() {
         print!("加载 [{}/{}] ... \r", i + 1, paths.len());

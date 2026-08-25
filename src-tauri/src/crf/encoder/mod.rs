@@ -15,6 +15,8 @@ pub(crate) mod dct_path;
 pub mod exp_golomb;
 pub mod frame;
 pub mod golomb;
+#[allow(dead_code)] // P2 实验探针：评估期不接入正式码流（§7.3）；收益确认后格式化并移除本豁免
+pub(crate) mod intra_probe;
 pub(crate) mod intrabc;
 pub mod ma_tree;
 pub(crate) mod noise;
