@@ -73,11 +73,33 @@ impl CoeffEncoder {
     }
 
     /// 编码一个 8×8 块的 zigzag 扫描系数（64 元素）
+    ///
+    /// P3 深化（§5-P3 第 4 项）：DC/AC 分离——DC 系数独立编码
+    /// （截断 Rice + sign），AC 系数走 run-level。DC 主导块
+    /// （AC 全零）只需 DC 值 + 1 bit，极紧凑。
     pub fn encode_block(&mut self, zigzag: &[i32]) {
         debug_assert!(zigzag.len() == 64);
-        // 找最后一个非零系数
+        let dc = zigzag[0];
+        // DC: 截断 Rice k=0 + sign
+        let dc_abs = dc.unsigned_abs();
+        write_truncated_rice(
+            &mut self.buffer,
+            &mut self.bit_pos,
+            &mut self.current_byte,
+            dc_abs,
+            0,
+        );
+        write_bit(
+            &mut self.buffer,
+            &mut self.bit_pos,
+            &mut self.current_byte,
+            dc < 0,
+        );
+
+        // AC: zigzag[1..64] 逆序 run-level
+        let ac = &zigzag[1..64];
         let mut last_nz = None;
-        for (i, &v) in zigzag.iter().enumerate().rev() {
+        for (i, &v) in ac.iter().enumerate().rev() {
             if v != 0 {
                 last_nz = Some(i);
                 break;
@@ -85,7 +107,6 @@ impl CoeffEncoder {
         }
         match last_nz {
             None => {
-                // 全零块：1 bit (0)
                 write_bit(
                     &mut self.buffer,
                     &mut self.bit_pos,
@@ -94,27 +115,24 @@ impl CoeffEncoder {
                 );
             }
             Some(last) => {
-                // 非零块：1 bit (1) + 逆序 run-level
                 write_bit(
                     &mut self.buffer,
                     &mut self.bit_pos,
                     &mut self.current_byte,
                     true,
                 );
-                let mut prev_pos = last + 1; // 逆序扫描起点
+                let mut prev_pos = last + 1;
                 for i in (0..=last).rev() {
-                    let v = zigzag[i];
+                    let v = ac[i];
                     if v != 0 {
                         let run = (prev_pos - i - 1) as u32;
-                        // run: 截断一元（上限 63）
                         write_truncated_unary(
                             &mut self.buffer,
                             &mut self.bit_pos,
                             &mut self.current_byte,
                             run,
-                            63,
+                            62,
                         );
-                        // level: 截断 Rice k=0 + sign
                         let av = v.unsigned_abs();
                         write_truncated_rice(
                             &mut self.buffer,
@@ -132,7 +150,6 @@ impl CoeffEncoder {
                         prev_pos = i;
                     }
                 }
-                // 末尾隐式 EOB（不再编码后续 run）
             }
         }
     }
