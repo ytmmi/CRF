@@ -20,7 +20,6 @@ pub mod frame;
 pub mod golomb;
 #[allow(dead_code)] // P2 实验探针：评估期不接入正式码流（§7.3）；收益确认后格式化并移除本豁免
 pub(crate) mod intra_probe;
-#[allow(dead_code)] // frame_type=8 正式格式：接入 adaptive 候选前为 dead code
 pub mod intra_transform;
 pub(crate) mod intrabc;
 pub mod ma_tree;

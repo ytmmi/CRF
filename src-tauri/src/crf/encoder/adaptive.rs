@@ -11,6 +11,7 @@
 use rayon::prelude::*;
 
 use crate::crf::encoder::banded::encode_banded_payload;
+use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 use crate::crf::encoder::planar::encode_planar_payload;
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::format::{
@@ -425,6 +426,20 @@ pub fn encode_frame_adaptive(
             let dct_f = assemble_frame(&final_payload, image, k, 6)?;
             if best.as_ref().is_none_or(|(sz, ..)| dct_f.len() < *sz) {
                 best = Some((dct_f.len(), dct_f, None));
+            }
+        }
+        // 第八阶段：预测后变换 + CABAC 系数编码（frame_type=8，v1.14）
+        //
+        // DC 预测模式 → transform skip（直通量化，避免 DCT 能量扩散）；
+        // H/V/MED 模式 → 8×8 lifting DCT → 量化 → zigzag。
+        // 系数流走 CABAC run-level 编码（3 上下文 + 直通 sign/余数）。
+        // 仅 3 分量时参与（单分量 Gray 用前序帧级候选）。
+        if compression_type == CompressionType::GolombRice && components == 3 {
+            let payload_tf8 =
+                encode_intra_transform_payload(image, compression_type, fq.step, fq.bias)?;
+            let tf8 = assemble_frame(&payload_tf8, image, 0, 8)?;
+            if best.as_ref().is_none_or(|(sz, ..)| tf8.len() < *sz) {
+                best = Some((tf8.len(), tf8, None));
             }
         }
     }

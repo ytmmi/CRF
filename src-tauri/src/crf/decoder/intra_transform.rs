@@ -13,6 +13,7 @@ const BLK: usize = 8;
 const MODE_DC: i32 = 0;
 const MODE_H: i32 = 1;
 const MODE_V: i32 = 2;
+#[allow(dead_code)]
 const MODE_MED: i32 = 3;
 
 /// 解码 frame_type=8 载荷 → 重建整帧 RGB

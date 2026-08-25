@@ -12,7 +12,6 @@ pub mod coeff_cabac;
 pub mod exp_golomb;
 pub mod golomb;
 pub(crate) mod image_export;
-#[allow(dead_code)] // frame_type=8 解码：接入后激活
 pub mod intra_transform;
 pub(crate) mod intrabc;
 pub(crate) mod palette;
@@ -116,6 +115,21 @@ pub fn decode_frame(data: &[u8], header: &CrfHeader) -> CrfResult<ImageData> {
     // （语义同 frame_type=6）。
     if header.compression_type == CompressionType::GolombRice && frame_header.frame_type == 7 {
         let pixels = intrabc::decode_intrabc_payload(frame_data, width, height, components)?;
+        return Ok(ImageData {
+            width: header.width,
+            height: header.height,
+            bit_depth: header.bit_depth,
+            color_format: header.color_format,
+            pixels,
+        });
+    }
+
+    // 预测后变换 + CABAC 系数编码（frame_type=8，v1.14）
+    if header.compression_type == CompressionType::GolombRice && frame_header.frame_type == 8 {
+        let q_step = header.lossy_quant.max(1);
+        let pixels = crate::crf::decoder::intra_transform::decode_intra_transform(
+            frame_data, width, height, components, q_step,
+        )?;
         return Ok(ImageData {
             width: header.width,
             height: header.height,
