@@ -33,7 +33,11 @@ pub(crate) fn encode_planar_payload(
     fq: FrameQuant,
     band_steps: BandSteps<'_>,
 ) -> CrfResult<Vec<u8>> {
-    const CFL_CANDIDATES: [i32; 7] = [-4, -2, -1, 0, 1, 2, 4];
+    // CfL α 候选集（P1 精细化：补齐 ±3 填充稀疏区间）
+    // 存储仍为 4 bit（α+8 ∈ [4,12]），载荷格式不变、解码端对称无须修改。
+    // CfL 为无损整数预测扣除——更准的 α 只影响残差分布（更小残差→更好
+    // 压缩），对无损与有损管线均为潜在正收益，不改变任何码流语义。
+    const CFL_CANDIDATES: [i32; 9] = [-4, -3, -2, -1, 0, 1, 2, 3, 4];
 
     let pixel_count = image.width as usize * image.height as usize;
     let mut planes: [Vec<i32>; 3] = std::array::from_fn(|_| Vec::with_capacity(pixel_count));
