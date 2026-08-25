@@ -174,7 +174,14 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         }
     };
     let all_results: Vec<(Vec<u8>, Option<u8>, bool)> = if params.input_original_frames {
-        // ===== 路径 G =====
+        // ===== 路径 G（P0 两阶段闭环编码）=====
+        // 规范 §5.3：有损 golden 时后续残差必须以文件实际可用的重建首帧
+        // G_hat = rct⁻¹(decode_frame(encode(frame0))) 为参考，而不是原始
+        // frame0——否则解码端 "G_hat + residual" 的还原式会把首帧量化
+        // 误差传导进全部后续帧。两阶段结构：先串行编码 frame0 并本地
+        // 解码重建 G_hat；再以 G_hat 为基准并行生成与编码其余残差帧，
+        // 保持 golden 残差帧之间的并行性与随机访问能力。
+        //
         // golden 差分在 RGB 域进行（与解码端 rct_inverse 出口同域，
         // 避免 RCT 移位舍入的非线性差异破坏逐位一致性）
         let noise_on = lossy_quant_step.is_some() && tuning.noise_adaptive && components == 3;
@@ -191,38 +198,123 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 }
             }
         };
-        // 噪声感知的两级机制（互补而非冗余）：
-        // ① 软阈值预处理（零中心性门控）：在差分原域归零零中心的稠密
-        //    小幅噪声——空间预测无法替代此步（预测残差域方差会被放大）；
-        // ② 闭环 per-band 自适应步长：预测残差域的死区宽度跟随局部
-        //    失真水平——处理结构化的系统性偏差（时间差分等），
-        //    空间预测天然完成中心化，无削半边问题。
-        //
-        // v1.13 RCT 首帧自适应：首帧额外保留轻滤后的 RGB 原域副本
-        // （bypass 候选），供第二阶段与 RCT 域版本做双路完整管线竞争。
-        let encoded_results: Vec<(ImageData, Option<Vec<i32>>)> = frames
+
+        // ===== 阶段 1a：frame0 差分域输入构造（i==0 时差分即原帧本身；
+        // q95_soft 轻滤语义保持不变——轻滤后的首帧就是文件中的真实内容）=====
+        let mut first_diff_rgb = frames[0].pixels.clone();
+        if q95_soft {
+            soft1(&mut first_diff_rgb);
+        }
+        // v1.13 RCT 首帧自适应：保留轻滤后的 RGB 原域副本（bypass 候选），
+        // 与 RCT 域版本做双路完整管线竞争。
+        let first_bypass_rgb = if use_rct {
+            Some(first_diff_rgb.clone())
+        } else {
+            None
+        };
+        let first_eff_pixels = crate::crf::format::rct_forward(&first_diff_rgb, components)?;
+        let first_eff_frame = ImageData {
+            width: frames[0].width,
+            height: frames[0].height,
+            bit_depth: frames[0].bit_depth,
+            color_format: frames[0].color_format,
+            pixels: first_eff_pixels,
+        };
+        drop(first_diff_rgb);
+
+        // ===== 阶段 1b：frame0 编码（fq_for_index(0) 决定无损/有损档位；
+        // 双路竞争字节最小者胜出，平局保守保持 RCT 版）=====
+        let fq_first = fq_for_index(0);
+        let mut data_first = if params.adaptive_prediction {
+            encode_frame_adaptive(
+                &first_eff_frame,
+                compression_type,
+                header.block_size,
+                false, // 与既有路径 G 行为一致：批量接口不携带首帧语义
+                fq_first,
+                None,
+                None,
+            )?
+            .data
+        } else {
+            encode_frame(
+                &first_eff_frame,
+                compression_type,
+                header.block_size,
+                header.prediction_mode,
+                false,
+                fq_first,
+                None,
+            )?
+        };
+        let mut first_no_rct = false;
+        if let Some(bypass) = first_bypass_rgb {
+            let bypass_img = ImageData {
+                width: first_eff_frame.width,
+                height: first_eff_frame.height,
+                bit_depth: first_eff_frame.bit_depth,
+                color_format: first_eff_frame.color_format,
+                pixels: bypass,
+            };
+            let bypass_data = if params.adaptive_prediction {
+                encode_frame_adaptive(
+                    &bypass_img,
+                    compression_type,
+                    header.block_size,
+                    false,
+                    fq_first,
+                    None,
+                    None,
+                )?
+                .data
+            } else {
+                encode_frame(
+                    &bypass_img,
+                    compression_type,
+                    header.block_size,
+                    header.prediction_mode,
+                    false,
+                    fq_first,
+                    None,
+                )?
+            };
+            if bypass_data.len() < data_first.len() {
+                data_first = bypass_data;
+                first_no_rct = true;
+            }
+        }
+        if first_no_rct {
+            header.flags.set_first_frame_no_rct(true);
+        }
+        let first_result: (Vec<u8>, Option<u8>, bool) = (data_first.clone(), None, false);
+
+        // ===== 阶段 1c：本地闭环重建 G_hat =====
+        // 复用解码端同一 decode_frame 入口与最终文件头上下文（flags 含
+        // has_rct / first_frame_no_rct / lossy_quant），保证编码端本地
+        // 重建与文件自包含解码逐位一致——这是闭环语义的定义本身。
+        let mut g_hat_img = crate::crf::decoder::decode_frame(&data_first, &header)?;
+        if header.flags.has_rct() && !header.flags.first_frame_no_rct() {
+            g_hat_img.pixels = crate::crf::format::rct_inverse(&g_hat_img.pixels, components)?;
+        }
+        let g_hat = g_hat_img.pixels; // RGB 域重建首帧
+
+        // ===== 阶段 2：后续帧并行差分编码（残差 = 原始帧 − G_hat）=====
+        // v1.13 RCT 首帧自适应的双路竞争仅属于首帧；差分帧逻辑保持原样。
+        let rest_results: Vec<(Vec<u8>, Option<u8>, bool)> = frames
             .par_iter()
             .enumerate()
-            .map(|(i, frame)| -> CrfResult<(ImageData, Option<Vec<i32>>)> {
-                // golden 差分（RGB 域）：eff = frame − 首帧（i==0 为原帧本身）
-                // 差分结果再变换到 YCoCg-R 域供熵编码；
-                // 量化档位由 fq_for_index 在编码阶段按帧序号决定
-                let mut diff_rgb: Vec<i32> = if i == 0 {
-                    frame.pixels.clone()
-                } else {
-                    // SIMD 分派：AVX2 向量化逐元素相减（结果与标量逐位一致）
-                    let mut d = vec![0i32; frame.pixels.len()];
-                    crate::crf::format::simd::sub_i32(&frame.pixels, &frames[0].pixels, &mut d);
-                    d
-                };
-                // v1.12 q95 空间域轻滤：差分帧 |v|≤1 归零；
-                // golden_lossless=false 时首帧同样轻滤（视觉无损语义一致）
+            .skip(1)
+            .map(|(i, frame)| -> CrfResult<(Vec<u8>, Option<u8>, bool)> {
+                // P0 闭环核心：差分基准为本地重建的 G_hat（而非 frames[0]）。
+                // 无损 golden 时 G_hat == frames[0]（decode 精确还原），产物
+                // 与旧实现逐字节一致；有损 golden 时误差不再向后续帧传导。
+                let mut diff_rgb = vec![0i32; frame.pixels.len()];
+                crate::crf::format::simd::sub_i32(&frame.pixels, &g_hat, &mut diff_rgb);
                 if q95_soft {
                     soft1(&mut diff_rgb);
                 }
-                // ① 软阈值预处理：仅差分帧（i>0）、零中心性门控内生效；
-                // golden 首帧是像素级基准，绝不触碰。
-                if noise_on && i > 0 {
+                // 噪声感知软阈值预处理（仅差分帧、零中心性门控内生效）
+                if noise_on {
                     use super::noise::{
                         estimate_interleaved_band_thresholds, soft_threshold_interleaved,
                     };
@@ -241,129 +333,66 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                         &thresholds,
                     );
                 }
-                // 双路竞争的两条路输入必须同质量语义：直通候选同样取
-                // 轻滤后的 diff_rgb（i==0 时即原帧或 q95 轻滤版）
-                let bypass_rgb = if use_rct && i == 0 {
-                    Some(diff_rgb.clone())
-                } else {
-                    None
-                };
                 let eff_pixels = crate::crf::format::rct_forward(&diff_rgb, components)?;
-                Ok((
-                    ImageData {
-                        width: frame.width,
-                        height: frame.height,
-                        bit_depth: frame.bit_depth,
-                        color_format: frame.color_format,
-                        pixels: eff_pixels,
-                    },
-                    bypass_rgb,
-                ))
+                let eff_frame = ImageData {
+                    width: frame.width,
+                    height: frame.height,
+                    bit_depth: frame.bit_depth,
+                    color_format: frame.color_format,
+                    pixels: eff_pixels,
+                };
+                let fq = fq_for_index(i);
+                // 闭环 per-band 自适应步长（噪声归一化）：失真稠密的条带
+                // 死区加宽，静止为主的条带保持基础步长精细度。
+                let band_steps: Vec<u8> = if noise_on {
+                    use super::noise::estimate_band_quant_steps;
+                    estimate_band_quant_steps(
+                        &eff_frame.pixels,
+                        eff_frame.width as usize,
+                        eff_frame.height as usize,
+                        components,
+                        fq.step,
+                        tuning.noise_tau_x100,
+                    )
+                } else {
+                    Vec::new()
+                };
+                let band_ref: super::frame::BandSteps<'_> =
+                    if noise_on { Some(&band_steps) } else { None };
+                let mut data = if params.adaptive_prediction {
+                    encode_frame_adaptive(
+                        &eff_frame,
+                        compression_type,
+                        header.block_size,
+                        false, // 差分帧无首帧语义
+                        fq,
+                        None,
+                        band_ref,
+                    )?
+                    .data
+                } else {
+                    encode_frame(
+                        &eff_frame,
+                        compression_type,
+                        header.block_size,
+                        header.prediction_mode,
+                        false,
+                        fq,
+                        None,
+                    )?
+                };
+                // golden 参考标志（coding_params.bit7）：全 golden 架构下所有
+                // 差分帧均参考首帧
+                if data.len() > FRAME_HEADER_SIZE {
+                    data[9] |= 0x80;
+                }
+                Ok((data, None, true))
             })
             .collect::<Result<Vec<_>, CrfError>>()?;
 
-        // v1.13 RCT 首帧自适应：首帧直通版本胜出时置位文件头 flags.bit3
-        let mut first_no_rct = false;
-        let all_results: Vec<(Vec<u8>, Option<u8>, bool)> = encoded_results
-            .into_iter()
-            .enumerate()
-            .map(
-                |(i, (eff_frame, bypass_rgb))| -> CrfResult<(Vec<u8>, Option<u8>, bool)> {
-                    // 对差分帧执行完整自适应管线编码（含空间闭环/条带/CABAC 竞争）
-                    let fq = fq_for_index(i);
-                    // 闭环 per-band 自适应步长（噪声归一化）：失真稠密的条带
-                    // 死区加宽，静止为主的条带保持基础步长精细度。作用域为
-                    // RCT 域差分（闭环量化所在域）——空间预测天然完成中心化，
-                    // 常数漂移被邻居预测抵消，无需零中心性判定。
-                    let band_steps: Vec<u8> = if noise_on && i > 0 {
-                        use super::noise::estimate_band_quant_steps;
-                        estimate_band_quant_steps(
-                            &eff_frame.pixels,
-                            eff_frame.width as usize,
-                            eff_frame.height as usize,
-                            components,
-                            fq.step,
-                            tuning.noise_tau_x100,
-                        )
-                    } else {
-                        Vec::new()
-                    };
-                    let band_ref: super::frame::BandSteps<'_> = if noise_on && i > 0 {
-                        Some(&band_steps)
-                    } else {
-                        None
-                    };
-                    let mut data = if params.adaptive_prediction {
-                        encode_frame_adaptive(
-                            &eff_frame,
-                            compression_type,
-                            header.block_size,
-                            false, // 差分帧无首帧语义
-                            fq,
-                            None,
-                            band_ref,
-                        )?
-                        .data
-                    } else {
-                        encode_frame(
-                            &eff_frame,
-                            compression_type,
-                            header.block_size,
-                            header.prediction_mode,
-                            false,
-                            FrameQuant::lossless(),
-                            None,
-                        )?
-                    };
-                    // v1.13：首帧与 RGB 直通版本双路竞争（字节最小者胜出，
-                    // 平局保守保持 RCT 版）。两路各自走完整自适应管线、
-                    // 各自内部 Fast-Fail——上限独立计算，不跨路传递。
-                    if let Some(bypass) = bypass_rgb {
-                        let bypass_img = ImageData {
-                            width: eff_frame.width,
-                            height: eff_frame.height,
-                            bit_depth: eff_frame.bit_depth,
-                            color_format: eff_frame.color_format,
-                            pixels: bypass,
-                        };
-                        let bypass_data = if params.adaptive_prediction {
-                            encode_frame_adaptive(
-                                &bypass_img,
-                                compression_type,
-                                header.block_size,
-                                false,
-                                fq,
-                                None,
-                                None,
-                            )?
-                            .data
-                        } else {
-                            encode_frame(
-                                &bypass_img,
-                                compression_type,
-                                header.block_size,
-                                header.prediction_mode,
-                                false,
-                                FrameQuant::lossless(),
-                                None,
-                            )?
-                        };
-                        if bypass_data.len() < data.len() {
-                            data = bypass_data;
-                            first_no_rct = true;
-                        }
-                    }
-                    let golden = i > 0;
-                    if golden && data.len() > FRAME_HEADER_SIZE {
-                        data[9] |= 0x80; // coding_params.bit7 = golden 参考标志
-                    }
-                    Ok((data, None, golden))
-                },
-            )
-            .collect::<Result<Vec<_>, CrfError>>()?;
-        if first_no_rct {
-            header.flags.set_first_frame_no_rct(true);
-        }
+        let mut all_results = Vec::with_capacity(frames.len());
+        all_results.push(first_result);
+        all_results.extend(rest_results);
         all_results
     } else {
         // ===== 路径 C：兼容（预差分序列 + 模式继承 + 关键帧间隔）=====

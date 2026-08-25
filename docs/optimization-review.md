@@ -676,3 +676,52 @@ AVIF CQ18 指标作为可复现护栏，不替代目标预设“肉眼几乎不�
 
 字段、范围、默认、互斥关系、旧 `LossyTuning` 迁移及 Rust/JSON/CLI/UI 草案见
 [`lossy-tuning-interface-plan.md`](lossy-tuning-interface-plan.md)。
+
+## 9. P0 实施记录：有损 golden 闭环参考语义修正（2026-08-25）
+
+**目标**：落地 [first-frame-optimization-plan.md](first-frame-optimization-plan.md) §5-P0 与 §7 第 1/2 步——
+修正批量路径的差分参考与测试恢复语义。本轮不涉及压缩率收益验收。
+
+**修改模块及职责**：
+- `src-tauri/src/crf/encoder/sequence.rs`（578 行）：路径 G 重构为两阶段闭环编码。
+  阶段一串行编码 frame0 并经解码端同一 decode_frame 入口本地重建 G_hat
+  （RGB 域，含 RCT 双路竞争与 flags.bit3 回写）；阶段二以 G_hat 为基准
+  并行生成并编码其余残差帧。无损 golden 时 G_hat == frames[0]，
+  产物与旧实现逐字节一致（由既有 114 项回归锁定）。
+- `src-tauri/src/test/mod.rs`：erify_crf_against_pngs 的 golden 还原基准从
+  重新加载源首帧 PNG 改为 CRF 文件自身解码出的 frame0——消除有损 golden 下
+  对文件自包含解码质量的系统性高估（历史缺陷）。
+- `src-tauri/src/crf/encoder/closed_loop_tests.rs`（新增，约 200 行）：
+  P0 专项验证模块（无损逐像素往返 / 有损 golden 无参考漂移 / q95 结构闭环）。
+
+**格式/API 影响**：无码流格式变化。行为变化仅限有损 golden 场景：
+golden_lossless=false 与 q95_soft 的产物与旧实现不同（残差参考更正确）；
+按本文 §8.1 约定，旧有损质量数据继续标记为非权威。
+
+**最大手写源文件**：src-tauri/src/crf/encoder/tests.rs 980 行
+**800 行以上预警文件及拆分处理**：encoder/tests.rs 980 / 	est/mod.rs 约 985 /
+ormat/prediction.rs 800（触及预警线）。本轮未向预警文件追加实质功能；
+后续新增测试应建立独立领域文件（参照 closed_loop_tests 先例），不得回填。
+
+**执行的检查与测试**：
+- cargo fmt --check 通过；cargo clippy -- -D warnings 零告警；
+- cargo test **117 passed / 0 failed**（114 存量回归 + 3 项 P0 专项全通过；
+  存量全绿即无损产物逐字节不变的直接证据）；
+- P0-4 误差分解：p0_lossy_golden_no_reference_drift 以逐帧平均绝对误差
+  相对首帧误差基线的有界性作为参考失配的可测信号。
+
+**未执行项及原因**：
+- §5-P0 第 1 步（avif.py 只读基准报告固化）依赖外部 FFmpeg 环境，留待
+  P1 标定前单独执行；
+- streaming 路径当前强制无损 golden，语义自洽，未做两阶段改造；
+  Q_target 接入流式首帧有损时需对称改造（记入 P1 前置清单）；
+- PNG1000 全量重测待 avif.py 基准报告就绪后一并执行。
+
+**新增依赖**：无。
+
+**已知风险与停止/回退条件**：
+- 有损 golden 产物的字节分布变化可能使 P1 标定的历史对照点偏移——
+  标定时一律以本版本重新生成基线；
+- 若后续发现 decode_frame 在某 frame_type 分支与真实文件解码不一致，
+  必须立即停止 P1 并回溯本轮的本地重建假设（以端到端 decode_from_bytes
+  比对为准）。
