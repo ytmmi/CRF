@@ -115,6 +115,15 @@ pub fn encode_frame_adaptive(
         }
     }
 
+    // P6 预筛指标：残差平均绝对值（用于 CABAC/DCT 候选的快速跳过判定）
+    let pixel_count = width * height * components;
+    let avg_abs_res = ranked
+        .first()
+        .map(|&(sad, _)| sad as f64 / pixel_count as f64)
+        .unwrap_or(0.0);
+    let dct_threshold = (fq.step.max(1) as f64) * 0.1;
+    let dct_worth = avg_abs_res >= dct_threshold;
+
     // 第二阶段：top-2 真实编码，取字节数最小者
     // (字节数, 数据, 帧级可识别的预测模式——条带/三平面/调色板胜出时为 None)
     //
@@ -233,8 +242,10 @@ pub fn encode_frame_adaptive(
     //
     // 取采样 SAD 最优的预测模式，残差位流改由自适应算术编码承载。
     // escape/商前缀等偏斜分布通常再省 5%~10%。
+    // P6 预筛（§5-P6）：残差能量极低时 CABAC 无法改善平面化候选
+    //（RLE 对零行程已最优），跳过闭环预测以节省时间。
     if compression_type == CompressionType::GolombRice {
-        if let Some(&(_, best_mode)) = ranked.first() {
+        if let Some(&(_, best_mode)) = ranked.first().filter(|_| avg_abs_res >= 0.5) {
             // CABAC 候选同样走闭环（有损）或开环（无损），与帧级路径一致。
             // v2 梯度分级上下文：空间域残差流传入 stride 启用因果梯度分级
             let predicted = if fq.is_lossy() {
@@ -302,14 +313,6 @@ pub fn encode_frame_adaptive(
     // 跳过 DCT 可能改变 Fast-Fail 上限链使产物变化，只要解码质量
     // 不劣化即为有效收益（速度+可能的体积双赢）。纹理/噪声内容
     //（残差能量高）照常竞争。
-    let pixel_count = width * height * components;
-    let avg_abs_res = ranked
-        .first()
-        .map(|&(sad, _)| sad as f64 / pixel_count as f64)
-        .unwrap_or(0.0);
-    let dct_threshold = (fq.step.max(1) as f64) * 0.1;
-    let dct_worth = avg_abs_res >= dct_threshold;
-
     if compression_type == CompressionType::GolombRice && dct_worth {
         const TRELLIS_FLAG_BIT: u8 = 0x10;
         const QM_FLAG_BIT: u8 = 0x40;
@@ -430,7 +433,8 @@ pub fn encode_frame_adaptive(
         // H/V/MED 模式 → 8×8 lifting DCT → 量化 → zigzag。
         // 系数流走 CABAC run-level 编码（3 上下文 + 直通 sign/余数）。
         // 仅 3 分量时参与（单分量 Gray 用前序帧级候选）。
-        if compression_type == CompressionType::GolombRice && components == 3 {
+        // P6 预筛：同 DCT 指标——平坦内容时跳过（DCT 无收益则 frame_type=8 也无）。
+        if compression_type == CompressionType::GolombRice && components == 3 && dct_worth {
             let payload_tf8 = encode_intra_transform_payload(
                 image,
                 compression_type,
