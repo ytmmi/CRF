@@ -160,7 +160,9 @@ pub fn encode_intra_probe(
     let bias = deadzone as i32;
 
     let mut recon = vec![0i32; plane.len()];
-    let mut coeffs = vec![0i32; plane.len()];
+    // v2：每块 zigzag + 末尾零截断（EOB 等价）；位置流显式块边界
+    let mut coeffs_trunc: Vec<i32> = Vec::new();
+    let mut last_nz_pos: Vec<i32> = Vec::new();
     let mut modes: Vec<i32> = Vec::new();
     let mut mode_hist = [0usize; N_MODES];
 
@@ -192,25 +194,35 @@ pub fn encode_intra_probe(
             mode_hist[best_mode as usize] += 1;
             modes.push(best_mode);
 
-            // 残差 → DCT → 量化（level 域）→ 反量化 → 逆 DCT → 局部重建
+            // 残差 → DCT → 量化（level 域）→ zigzag → 末尾零截断
+            block.fill(0); // v2 修复：每块重置，避免边块越界槽位残留
             for by in 0..bh {
                 for bx in 0..bw {
                     block[by * BLK + bx] = plane[(y0 + by) * width + x0 + bx] - best_pred[by][bx];
                 }
             }
             let freq = dct8x8_forward(&block);
+            let mut qcoeffs = [0i32; 64];
             let mut dequant = [0i32; 64];
             for (i, &f) in freq.iter().enumerate() {
                 let lv = quant_scalar(f, q, bias);
-                // 仅回写块内有效像素；边块越界槽位保持 0
-                //（解码端对称填充，不影响闭环重建）
-                let iy = i / BLK;
-                let ix = i % BLK;
-                if iy < bh && ix < bw {
-                    coeffs[(y0 + iy) * width + x0 + ix] = lv;
-                }
+                qcoeffs[i] = lv;
                 dequant[i] = lv * q;
             }
+            // zigzag 扫描重排（低频前置）；找最后一个非零系数位置截断
+            let scanned = crate::crf::format::zigzag_scan(&qcoeffs, BLK);
+            let mut last = -1i32;
+            for (i, &v) in scanned.iter().enumerate() {
+                if v != 0 {
+                    last = i as i32;
+                }
+            }
+            last_nz_pos.push(last);
+            if last >= 0 {
+                coeffs_trunc.extend_from_slice(&scanned[0..=(last as usize)]);
+            }
+
+            // 反量化 → 逆 DCT → 局部重建（重建用原行优先 dequant，与编码对称）
             let spatial = dct8x8_inverse(&dequant);
             for by in 0..bh {
                 for bx in 0..bw {
@@ -220,15 +232,17 @@ pub fn encode_intra_probe(
         }
     }
 
-    // 信令：模式表（小整数符号流）与系数（level 域）各自走 RLE+CABAC
+    // 信令：模式表 + EOB 位置表 + 截断系数流，三者各自走 RLE+CABAC
     let mode_stream =
         crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&modes, Some(width / BLK))?
             .0;
+    let pos_stream =
+        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&last_nz_pos, None)?.0;
     let coeff_stream =
-        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&coeffs, None)?.0;
+        crate::crf::encoder::rle_cabac::encode_frame_rle_cabac_adaptive(&coeffs_trunc, None)?.0;
 
     Ok(ProbeOutput {
-        payload_bytes: mode_stream.len() + coeff_stream.len(),
+        payload_bytes: mode_stream.len() + pos_stream.len() + coeff_stream.len(),
         recon,
         mode_hist,
     })
