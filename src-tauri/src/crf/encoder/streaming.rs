@@ -329,6 +329,11 @@ impl StreamingEncoder {
             step: global_q,
             bias: self.tuning.deadzone_bias,
             chroma_step: self.tuning.chroma_step(global_q),
+            // P1 色度精细化：独立死区通道（None → 继承全局偏置）
+            chroma_bias: self
+                .tuning
+                .chroma_deadzone_bias
+                .unwrap_or(self.tuning.deadzone_bias),
             // P1 4:2:0 解耦：与批量路径 fq_for_index 对齐，半分辨率由
             // 参数独立决定（planar 内 is_lossy() 双保险）
             chroma_half_res: self.tuning.chroma_half_res,

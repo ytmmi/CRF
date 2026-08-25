@@ -20,6 +20,9 @@ pub(crate) struct FrameQuant {
     pub bias: i8,
     /// 色度平面步长（planar 的 Co/Cg 用；0=与 step 相同）
     pub chroma_step: u8,
+    /// 色度死区偏置（P1 色度精细化）：planar 的 Co/Cg 子平面使用；
+    /// 由 LossyTuning.chroma_deadzone_bias 在构造点解析（None → 继承 bias）
+    pub chroma_bias: i8,
     /// 色度半分辨率标志（planar 的 Co/Cg 用 2×2 均值下采样，对标 yuv420p）
     pub chroma_half_res: bool,
     /// v1.12 q95 视觉无损档：Q=1 下许可感知矩阵缩放（高频 Q_pos=2）。
@@ -33,6 +36,7 @@ impl FrameQuant {
             step: 0,
             bias: 0,
             chroma_step: 0,
+            chroma_bias: 0,
             chroma_half_res: false,
             q1_matrix_scale: false,
         }

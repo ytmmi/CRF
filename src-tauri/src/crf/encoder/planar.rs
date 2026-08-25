@@ -127,12 +127,14 @@ pub(crate) fn encode_planar_payload(
         (co_adj, cg_adj, image.width as usize, image.height as usize)
     };
 
-    // 色度平面量化步长：chroma_step>0 时用之（人眼对色度失真不敏感）
+    // 色度平面量化步长：chroma_step>0 时用之（人眼对色度失真不敏感）。
+    // 死区偏置用 chroma_bias（P1 独立通道；构造点已解析继承语义）
     let fq_c = if fq.chroma_step > 0 {
         FrameQuant {
             step: fq.chroma_step,
-            bias: fq.bias,
+            bias: fq.chroma_bias,
             chroma_step: fq.chroma_step,
+            chroma_bias: fq.chroma_bias,
             chroma_half_res: half_res,
             q1_matrix_scale: fq.q1_matrix_scale,
         }
@@ -141,6 +143,7 @@ pub(crate) fn encode_planar_payload(
             step: fq.step,
             bias: fq.bias,
             chroma_step: 0,
+            chroma_bias: fq.chroma_bias,
             chroma_half_res: half_res,
             q1_matrix_scale: fq.q1_matrix_scale,
         }

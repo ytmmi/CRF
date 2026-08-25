@@ -366,8 +366,8 @@ fn quant_scalar(v: i32, q: i32) -> i32 {
     }
 }
 
-/// 带死区偏置的量化单点：bias 为 /64 定点偏置，
-/// 正值加宽归零区（小残差更倾向映射为 0），负值收窄。
+/// 带死区偏置的单点量化：bias 为 /64 定点偏置。
+/// **正 bias 单侧加宽负残差死区（负向 ±1~±3 映射为 0），负 bias 单侧加宽正向死区——与批量路径 quantize_residuals_tuned 的双向语义相反，标定以实测为准（optimization-review §12）。**
 #[inline]
 fn quant_scalar_biased(v: i32, q: i32, bias_r6: i32) -> i32 {
     let denom = q * 64;

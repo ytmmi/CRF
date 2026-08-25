@@ -18,8 +18,12 @@ pub struct LossyTuning {
     /// 关键帧间隔：每 N 帧插入一个无损刷新帧，阻断差分链量化误差累积；
     /// 0 表示仅首帧无损。参考 H.264/AV1 IDR interval。
     pub keyframe_interval: u8,
-    /// 死区偏置（-32..=32，/64 定点）：正值更激进归零小残差
-    /// （体积更小、暗部/纹理细节略降），负值保细节。参考 x264 deadzone。
+    /// 死区偏置（-32..=32，/64 定点）：**注意本字段仅作用于批量标量量化
+    /// 路径（quantize_residuals_tuned），其公式无符号翻转——正 bias 抬高
+    /// 双向归零阈值（更难归零、更精确）；负 bias 降低阈值（更易归零）。
+    /// 闭环路径（quant_scalar_biased，prediction.rs）的符号约定相反：
+    /// 正 bias 单侧加宽负残差死区。两条路径的 bias 不可以互换理解，
+    /// 标定时必须以实测产物为准（见 optimization-review §12）。**
     pub deadzone_bias: i8,
     /// 色度半分辨率（对标 AVIF/HEVC yuv420p）：Co/Cg 平面 2×2 均值下采样，
     /// 解码端双线性上采样。人眼对色度分辨率不敏感，可大幅缩减色度比特。
@@ -40,6 +44,14 @@ pub struct LossyTuning {
     /// 中首帧占体积 53~97%，放开后有损档位收益大幅提升；
     /// 代价是全部帧的还原都携带首帧量化误差（展示用途可接受）。
     pub golden_lossless: bool,
+    /// 色度死区偏置独立通道（P1 色度精细化，规划 §5.3 deadzone_chroma 位）：
+    /// None = 继承 `deadzone_bias`（§3.3 继承语义，默认）；
+    /// Some(x) = Co/Cg 平面显式使用 x。
+    /// **作用路径为 planar 子平面的闭环量化（quant_scalar_biased）**，
+    /// 符号语义见其文档：正 bias 单侧加宽负残差死区（负向 ±1~±3 归零），
+    /// 负 bias 单侧加宽正向死区。PNG1000 q95 实测 ±4 均为纯收益
+    /// （体积 −9.4%，质量 +0.3dB，见 optimization-review §12 扫描表）。
+    pub chroma_deadzone_bias: Option<i8>,
 }
 
 impl Default for LossyTuning {
@@ -53,6 +65,7 @@ impl Default for LossyTuning {
             noise_adaptive: false,
             noise_tau_x100: 150,
             golden_lossless: true,
+            chroma_deadzone_bias: None,
         }
     }
 }
@@ -183,6 +196,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(fine.chroma_step(10), 8, "比例<100 时色度更细");
+    }
+
+    #[test]
+    fn test_chroma_deadzone_bias_default_none() {
+        // 默认 None：序列化往返与 resolve 后保持继承语义
+        let t = LossyTuning::default();
+        assert!(t.chroma_deadzone_bias.is_none(), "默认必须为 None（继承）");
+        let resolved = LossyTuning::resolve(None);
+        assert!(resolved.chroma_deadzone_bias.is_none());
+        // 显式 Some 在 clone/resolve 后保留
+        let explicit = LossyTuning {
+            chroma_deadzone_bias: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(
+            LossyTuning::resolve(Some(&explicit)).chroma_deadzone_bias,
+            Some(4)
+        );
     }
 
     #[test]

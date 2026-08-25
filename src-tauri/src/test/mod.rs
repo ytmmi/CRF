@@ -394,6 +394,17 @@ fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
             t.golden_lossless = false;
             tuning = Some(t);
         }
+        // 实验工具参数（显式 opt-in，规范 §6）：标定扫描用环境变量注入。
+        // CRF_CHROMA_DEADZONE=<-32..32>：色度死区偏置独立通道
+        if let Ok(v) = std::env::var("CRF_CHROMA_DEADZONE") {
+            if let Ok(bias) = v.trim().parse::<i8>() {
+                if (-32..=32).contains(&bias) {
+                    let mut t = tuning.take().unwrap_or_default();
+                    t.chroma_deadzone_bias = Some(bias);
+                    tuning = Some(t);
+                }
+            }
+        }
         let params = crf::EncodeParams {
             compression_type: "golomb-rice".to_string(),
             block_size: None,

@@ -169,6 +169,8 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             step,
             bias: base_bias,
             chroma_step: tuning.chroma_step(step),
+            // P1 色度精细化：色度死区偏置独立通道（None → 继承全局偏置）
+            chroma_bias: tuning.chroma_deadzone_bias.unwrap_or(base_bias),
             // P1 4:2:0 解耦（规划 §4.1）：色度半分辨率不再受 step>1 阻断，
             // 由 chroma_half_res 参数独立决定；planar 载荷内 ss_flags.bit0
             // 携带该标志，解码对称不受影响；无损锚点经 is_lossy() 自动关闭。
@@ -565,8 +567,9 @@ fn fq_for_chain_index(
         step: gq,
         bias: base_bias,
         chroma_step: tuning.chroma_step(gq),
+        chroma_bias: tuning.chroma_deadzone_bias.unwrap_or(base_bias),
         chroma_half_res: gq > 1 && tuning.chroma_half_res,
-        // v1.12：链式路径为兼容语义，q95 矩阵缩放仅支持推荐路径 G
+        // v1.12：显式路径为兼容保留，q95 矩阵缩放仅支撑推荐路径 G
         q1_matrix_scale: false,
     }
 }

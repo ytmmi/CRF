@@ -808,3 +808,48 @@ verify 新增帧类型分布统计后，PNG1000 有损档位实测分布为：
   c. q95 档 deadzone 微调搜索（目标：质量带内进一步压字节）。
 - 此排序变更与规划 §8 "只深化通用 RLE+CABAC → 低优先"不冲突：planar
   的色度步长/死区属于量化参数标定，不是熵编码符号化改造。
+
+## 12. P1 第二轮实施记录：planar 色度死区偏置独立通道 + 符号语义勘误（2026-08-25）
+
+**目标**：落地评审 §11.1 定向的 planar 色度精细化第一项——色度死区偏置
+独立化，并以 PNG1000 扫描验证收益方向。
+
+**修改模块及职责**：
+- `format/quant.rs`：LossyTuning 新增 `chroma_deadzone_bias: Option<i8>`
+  （None=继承 deadzone_bias，§3.3 继承语义；对齐规划 §5.3 deadzone_chroma 位）；
+- `encoder/frame.rs`：FrameQuant 新增 chroma_bias 字段（构造点解析后的有效值）；
+- `encoder/sequence.rs` / `streaming.rs`：fq_for_index、fq_for_chain_index、
+  frame_quant 三处构造点解析注入；
+- `encoder/planar.rs`：fq_c 死区改用 fq.chroma_bias；
+- `test/mod.rs`：实验工具参数 CRF_CHROMA_DEADZONE（显式 opt-in，范围
+  -32..32 校验），供标定扫描；
+- **语义勘误**：quantize_residuals_tuned（批量）与 quant_scalar_biased（闭环）
+  的 bias 符号约定相反（前者无符号翻转=正 bias 双向抬阈值；后者单侧翻转=
+  正 bias 加宽负残差死区）。两处误导性注释已按真实行为修正。该不一致为
+  既有问题，本轮扫描时暴露。
+
+**PNG1000 q95 扫描**（14 帧口径；ref=chroma_deadzone None→0）：
+
+| dz | 字节 | avg(帧1-13) | worst |
+|---|---:|---:|---:|
+| None(0) | 4,844,935 | 49.964 | 46.120 |
+| −4 | 4,389,658 (−9.4%) | 50.257 | 46.270 |
+| +4 | 4,407,162 (−9.0%) | 50.327 | 46.320 |
+| +8 / +12 | 4,407,162（饱和） | 同 +4 | 同 +4 |
+
+±bias 各归零一侧的色度小幅残差（闭环路径单侧语义）；planar 变小后竞争
+格局移动，质量反升约 +0.3dB——体积与质量同时改善，纯收益确认。
+
+**格式/API 影响**：无码流变化；LossyTuning 结构新增字段（Rust API 面，
+JSON/UI 暴露按接口规划 §10 后续版本跟进）。默认 None 保持既有产物逐字节
+不变（实测复现 4,844,935 B ✓）。
+
+**最大手写源文件**：encoder/tests.rs 980（预警区未增长）。
+**执行的检查与测试**：fmt/clippy 零告警；cargo test **122 passed / 0 failed**
+（+1 继承语义单元测试）；扫描轮产物快照留存 temp 目录。
+**未执行项及原因**：默认值是否采纳 Some(±4) 待扩展数据集（30 序列分层）
+标定后决定——本轮仅提交机制与扫描数据；Co/Cg 条带级步长因半分辨率行映射
+错位继续后置。
+**已知风险**：单侧归零可能引入色度单侧偏移的视觉伪影，扩展集验收时需
+按内容层做放大目检；两套量化路径 bias 语义相反的问题若未来统一，
+须同步更新本字段文档并重跑全部标定。
