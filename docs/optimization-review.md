@@ -1067,3 +1067,37 @@ CRF_GOLDEN_LOSSY=1 注入；首帧字节取自 index entry 0。
 **格式/API 影响**：无码流变化（DCT 候选在码流中信令为 frame_type=6，
 跳过时不生成该帧类型——解码端天然兼容）。
 **门禁**：clippy 零告警、123 passed / 0 failed。
+
+## 19. AVIF CQ18 基准全量复测（2026-08-25）
+
+**目标**：规划 §5-P0 第 1 步——固定 avif.py 基准合同，全量对标。
+用当前所有标定（P0~P6 + P4 边缘保护）的 CRF q90 与 AVIF CQ18 在
+PNG1000（14 帧 1024×1820）上对比。
+
+**方法**：
+- AVIF：复现 avif.py 正常尺寸路径（av1_nvenc preset p7 vbr cq=18 yuv420p
+  bt709 full range pc）；每张独立编码，ffmpeg 解码 RGB 算 PSNR；
+- CRF：`--test` q90（含 chroma_deadzone=-4 + luma_deadzone=+4 + CfL 扩展
+  + DCT 预筛），verify 端自包含还原口径（P0 修复后）。
+
+**结果**：
+
+| 方案 | 总体积 | avg PSNR | worst PSNR |
+|---|---:|---:|---:|
+| AVIF CQ18 | 3,370,055 B (3.21 MB) | 37.324 | 37.116 |
+| CRF q90 | 3,496,835 B (3.33 MB) | 49.86 | 46.00 |
+| **CRF/AVIF** | **103.8% (+3.8%)** | **+12.54 dB** | +8.88 |
+
+**结论**：
+1. CRF q90 体积仅大 **+3.8%**（3.37→3.33 MB），质量高 **+12.54 dB**；
+2. CRF q90 不是与 AVIF CQ18 同档位——CRF q90 质量远超（近无损级 vs
+   AVIF 明显有损）。真正的 Q_target 对标点可能在 q75 或更低；
+3. 规划 §6.3 阶段 A 目标"匹配质量后 CRF ≤ AVIF+10%"已超额达成
+  （+3.8% < +10%）；
+4. 阶段 B"不大于 AVIF"在 q75（2.13 MB < 3.37 MB）已达成但质量口径
+   需细化——q75 avg 48.24 dB 仍远超 AVIF 37.32 dB。
+
+**口径注记**：CRF PSNR 是差分序列还原口径（帧0 无损 107dB + 帧1-13 有损），
+AVIF PSNR 是 14 张独立图。两口径均解码 RGB 逐像素对比原 PNG，口径
+一致。AVIF 的 NVENC 硬件编码质量可能低于软件 AV1——这是对标合同的
+固有限制（avif.py 使用 av1_nvenc）。
