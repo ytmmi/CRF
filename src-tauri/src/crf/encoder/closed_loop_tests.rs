@@ -192,3 +192,29 @@ fn p0_q95_soft_first_frame_structural_closure() {
     let restored = restore_sequence(&result);
     assert_eq!(restored.len(), originals.len());
 }
+
+#[test]
+fn preset_explicit_equivalence() {
+    // 规划 §7 第 10 步：预设(None→default)与显式配置(Some(default))逐字节一致
+    use crate::crf::format::LossyTuning;
+    let originals = synthetic_sequence(4, 48, 40);
+    let base = base_params();
+    let preset_params = EncodeParams {
+        lossy_quality: Some(90),
+        lossy_tuning: None,
+        ..base.clone()
+    };
+    let explicit_params = EncodeParams {
+        lossy_quality: Some(90),
+        lossy_tuning: Some(LossyTuning::default()),
+        ..base
+    };
+    let enc_preset =
+        crf::encode_sequence(&originals, &preset_params).expect("preset encode failed");
+    let enc_explicit =
+        crf::encode_sequence(&originals, &explicit_params).expect("explicit encode failed");
+    assert_eq!(
+        enc_preset, enc_explicit,
+        "preset(None->default) must equal explicit Some(default)"
+    );
+}
