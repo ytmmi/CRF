@@ -21,6 +21,8 @@
   | 4 | 调色板模式（低色数 ≤256） |
   | 5 | RLE+CABAC 自适应算术编码（符号分离 + 邻域分级上下文） |
   | 6 | DCT 变换域量化（4×4 lifting DCT → 死区量化 → RLE+CABAC） |
+  | 7 | 帧内块复制（ITBC，8×8 hash 链 LZ 式重复纹理） |
+  | 8 | 预测后变换 + CABAC 系数编码（v1.14：三平面逐块预测→skip/DCT→run-level CABAC） |
 
 - **预测模式**：None / Horizontal / Vertical / Average / DC / Med(JPEG-LS) / Paeth(AV1)
 - **可逆色彩变换**：YCoCg-R（文件头 flags.bit1 标记）
@@ -62,3 +64,39 @@
 
 文件头字段表、位流格式、编码管线流程图、版本历史等详见：
 [`../crf格式标准.md`](../crf格式标准.md)
+
+## frame_type=8：预测后变换 + CABAC 系数编码（v1.14）
+
+**编码路径**：RCT → 三平面拆分 → 每平面逐 8×8 块：
+- 邻域预测（DC/H/V/MED，引用已重建像素）
+- DC 模式 → transform skip（残差直通量化，避免 DCT 能量扩散）
+- H/V/MED 模式 → 8×8 lifting DCT → 死区量化
+- 系数 zigzag 扫描 → CABAC run-level 嵌入式编码（全零块 1 bit）
+
+**载荷布局**：
+`
+[flags u8]                   // 保留（当前 0）
+[len_y u32 LE][y_payload]    // Y 平面子载荷
+[len_co u32 LE][co_payload]  // Co 平面子载荷
+[len_cg u32 LE][cg_payload]  // Cg 平面子载荷
+`
+**子载荷布局**：
+`
+[mode_len u32 LE][mode_stream][coeff_stream]
+`
+- mode_stream：RLE+CABAC 压缩的预测模式表（每块值 0..3）
+- coeff_stream：CABAC 系数流（3 上下文：nonzero/run/level_prefix + 直通余数/sign）
+
+**CABAC 上下文**：
+| 上下文 | 初始 prob | 作用 |
+|---|---|---|
+| ctx_nonzero | 2048 | 块是否有非零系数 |
+| ctx_run | 2048 | run 截断一元 bit |
+| ctx_level_q | 2048 | level 商前缀 bit |
+| 余数 + sign | — | 等概率直通 |
+
+**版本兼容**：frame_type=8 在 v1.14 引入；旧版本解码器遇到 type=8 返回
+UnsupportedVersion 错误（不尝试猜测解码）。
+
+**PNG1000 实测**（Y 平面探针，CABAC 版）：q90 帧1 −24.5%、帧2 −24.2%
+（超越自适应空间域管线）；q75 帧1 −14.9%（从 v1 的 +171% 逆转）。
