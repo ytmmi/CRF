@@ -193,32 +193,54 @@ pub fn encode_intra_probe(
             mode_hist[best_mode as usize] += 1;
             modes.push(best_mode);
 
-            // 残差 → DCT → 量化（level 域）→ zigzag → 末尾零截断
-            block.fill(0); // v2 修复：每块重置，避免边块越界槽位残留
+            // 残差 → [transform skip 或 DCT] → 量化 → zigzag → P3 编码
+            // P2 transform skip（§5-P2 关键约束）：DC 预测模式的平坦块
+            // 残差已极小，DCT 变换会扩散能量到 AC（DC 大 + AC 零散非零），
+            // 直通量化更紧凑。H/V/MED 模式走 DCT（残差有方向性，变换集中能量）。
+            block.fill(0);
             for by in 0..bh {
                 for bx in 0..bw {
                     block[by * BLK + bx] = plane[(y0 + by) * width + x0 + bx] - best_pred[by][bx];
                 }
             }
-            let freq = dct8x8_forward(&block);
-            let mut qcoeffs = [0i32; 64];
-            let mut dequant = [0i32; 64];
-            for (i, &f) in freq.iter().enumerate() {
-                let lv = quant_scalar(f, q, bias);
-                qcoeffs[i] = lv;
-                dequant[i] = lv * q;
-            }
-            // zigzag 扫描重排（低频前置）；P3 专用编码器直接编码
-            let scanned = crate::crf::format::zigzag_scan(&qcoeffs, BLK);
-            coeff_enc.encode_block(&scanned);
-
-            // 反量化 → 逆 DCT → 局部重建（重建用原行优先 dequant，与编码对称）
-            let spatial = dct8x8_inverse(&dequant);
-            for by in 0..bh {
-                for bx in 0..bw {
-                    recon[(y0 + by) * width + x0 + bx] = spatial[by * BLK + bx] + best_pred[by][bx];
+            let scanned = if best_mode == MODE_DC {
+                // transform skip：残差直接量化（行优先 = zigzag 0..63 语义不同，
+                // 但 CoeffEncoder 不关心物理位置——只编码 run-level）
+                let mut qres = [0i32; 64];
+                let mut dequant = [0i32; 64];
+                for (i, &r) in block.iter().enumerate() {
+                    let lv = quant_scalar(r, q, bias);
+                    qres[i] = lv;
+                    dequant[i] = lv * q;
                 }
-            }
+                // 重建：dequant + pred（无逆 DCT）
+                for by in 0..bh {
+                    for bx in 0..bw {
+                        recon[(y0 + by) * width + x0 + bx] =
+                            dequant[by * BLK + bx] + best_pred[by][bx];
+                    }
+                }
+                crate::crf::format::zigzag_scan(&qres, BLK)
+            } else {
+                // DCT 路径
+                let freq = dct8x8_forward(&block);
+                let mut qcoeffs = [0i32; 64];
+                let mut dequant = [0i32; 64];
+                for (i, &f) in freq.iter().enumerate() {
+                    let lv = quant_scalar(f, q, bias);
+                    qcoeffs[i] = lv;
+                    dequant[i] = lv * q;
+                }
+                let spatial = dct8x8_inverse(&dequant);
+                for by in 0..bh {
+                    for bx in 0..bw {
+                        recon[(y0 + by) * width + x0 + bx] =
+                            spatial[by * BLK + bx] + best_pred[by][bx];
+                    }
+                }
+                crate::crf::format::zigzag_scan(&qcoeffs, BLK)
+            };
+            coeff_enc.encode_block(&scanned);
         }
     }
 
