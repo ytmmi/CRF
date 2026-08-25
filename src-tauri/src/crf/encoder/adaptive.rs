@@ -299,7 +299,21 @@ pub fn encode_frame_adaptive(
     //   bit5 = 宽度 8 标记、bit7 = 高度 8 标记（组合出 {4×4,8×8,8×4,4×8}）、
     //   bit6 = 感知矩阵、bit4 = Trellis（仅有损）。
     //   bit7 在 v1.11 及更早文件中恒为 0，向后兼容。
-    if compression_type == CompressionType::GolombRice {
+    //
+    // P6 速度优化（§5-P6）：DCT 候选预筛——残差能量低于 step 的 10%
+    // 时跳过全部 DCT 候选。约束由"逐字节一致"放宽为"质量不劣化"：
+    // 跳过 DCT 可能改变 Fast-Fail 上限链使产物变化，只要解码质量
+    // 不劣化即为有效收益（速度+可能的体积双赢）。纹理/噪声内容
+    //（残差能量高）照常竞争。
+    let pixel_count = width * height * components;
+    let avg_abs_res = ranked
+        .first()
+        .map(|&(sad, _)| sad as f64 / pixel_count as f64)
+        .unwrap_or(0.0);
+    let dct_threshold = (fq.step.max(1) as f64) * 0.1;
+    let dct_worth = avg_abs_res >= dct_threshold;
+
+    if compression_type == CompressionType::GolombRice && dct_worth {
         const TRELLIS_FLAG_BIT: u8 = 0x10;
         const QM_FLAG_BIT: u8 = 0x40;
         const BW8_FLAG_BIT: u8 = 0x20; // 原 BS8：宽度=8
