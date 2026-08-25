@@ -49,7 +49,7 @@ impl CoeffCABAC {
             }
             Some(last) => {
                 self.rc.encode_bit(true, &mut self.ctx_nonzero);
-                let mut prev_pos = last + 1;
+                let mut prev_pos = 64; // 从数组末尾开始，第一个 run = 63-last
                 for i in (0..=last).rev() {
                     let v = zigzag[i];
                     if v != 0 {

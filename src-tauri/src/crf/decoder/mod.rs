@@ -7,9 +7,13 @@
 //! - 熵解码器族：golomb / rle_golomb / exp_golomb / rle_cabac / transform
 
 pub(crate) mod banded;
+#[allow(dead_code)] // P3 CABAC 解码器：frame_type=8 接入后激活
+pub mod coeff_cabac;
 pub mod exp_golomb;
 pub mod golomb;
 pub(crate) mod image_export;
+#[allow(dead_code)] // frame_type=8 解码：接入后激活
+pub mod intra_transform;
 pub(crate) mod intrabc;
 pub(crate) mod palette;
 pub(crate) mod planar;
