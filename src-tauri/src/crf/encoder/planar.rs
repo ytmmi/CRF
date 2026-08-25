@@ -96,32 +96,53 @@ pub(crate) fn encode_planar_payload(
         if half_res { 0x01 } else { 0x00 },
     ];
 
-    // 色度半分辨率：Co/Cg 平面 2×2 均值下采样（对标 AVIF/HEVC yuv420p；
-    // 人眼对色度分辨率不敏感，色度比特缩减约 4 倍）
+    // 色度半分辨率：Co/Cg 平面 2×2 下采样（对标 AVIF/HEVC yuv420p）
+    // P4 边缘保护（§5-P4）：2×2 块内方差大于阈值时用中值替代均值——
+    // 色度边界处均值会产生渗色（跨区域混合），中值选择主侧值保持锐度。
+    // 无码流变化（编码端预处理，解码端只看到下采样后数据）。
     let (co_enc, cg_enc, cw, ch) = if half_res {
         let full_w = image.width as usize;
         let full_h = image.height as usize;
         let cw = full_w.div_ceil(2);
         let ch = full_h.div_ceil(2);
+        const DS_EDGE_THRESHOLD: i32 = 8; // 2×2 块内 range > 此值判定为边界
         let ds = |p: &[i32]| -> Vec<i32> {
             let mut small = vec![0i32; cw * ch];
             for sy in 0..ch {
                 for sx in 0..cw {
                     let x0 = sx * 2;
                     let y0 = sy * 2;
-                    let mut sum = 0i64;
-                    let mut cnt = 0i64;
+                    let mut vals: [i32; 4] = [0; 4];
+                    let mut cnt = 0usize;
                     for dy in 0..2 {
                         for dx in 0..2 {
                             let px = x0 + dx;
                             let py = y0 + dy;
                             if px < full_w && py < full_h {
-                                sum += p[py * full_w + px] as i64;
+                                vals[cnt] = p[py * full_w + px];
                                 cnt += 1;
                             }
                         }
                     }
-                    small[sy * cw + sx] = (sum / cnt) as i32;
+                    if cnt == 0 {
+                        small[sy * cw + sx] = 0;
+                    } else if cnt == 1 {
+                        small[sy * cw + sx] = vals[0];
+                    } else {
+                        let lo = vals[..cnt].iter().min().copied().unwrap();
+                        let hi = vals[..cnt].iter().max().copied().unwrap();
+                        if hi - lo > DS_EDGE_THRESHOLD {
+                            // 边界：用中值（排序后取中），避免均值渗色
+                            let mut sorted: [i32; 4] = vals;
+                            sorted[..cnt].sort_unstable();
+                            let mid = cnt / 2;
+                            small[sy * cw + sx] = sorted[mid];
+                        } else {
+                            // 平坦：均值
+                            let sum: i64 = vals[..cnt].iter().map(|&v| v as i64).sum();
+                            small[sy * cw + sx] = (sum / cnt as i64) as i32;
+                        }
+                    }
                 }
             }
             small
