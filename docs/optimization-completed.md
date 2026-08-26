@@ -133,19 +133,19 @@
 
 ---
 
-### P5：序列优化（全部未完成，后置）
+### P5：序列优化（基础实现）
 
 规划来源：[first-frame-optimization-plan.md §5-P5](first-frame-optimization-plan.md)
 
 | # | 规划项 | 状态 | 阻塞原因 |
 |---|---|---|---|
-| P5.1 | 参考竞争 golden/previous | ❌ 后置 | 依赖 P2 预测后变换；golden 架构下 previous 破坏并行 |
-| P5.2 | 稀疏变化 mask | ❌ 后置 | 同 P5.1 |
-| P5.3 | 轻量位移补偿 | ❌ 后置 | 同 P5.1 |
-| P5.4 | 残差专用工具 | ❌ 后置 | 同 P5.1 |
-| P5.5 | 场景切换/新 anchor | ❌ 后置 | 同 P5.1 |
-| P5.6 | 序列码率控制 | ❌ 后置 | 同 P5.1 |
-| P5.7 | 局部 RGB palette | ❌ 后置 | 同 P5.1 |
+| P5.1 | 参考竞争 golden/previous | ✅ | `LossyTuning.reference_mode`；仅引用编码端重建帧，按帧大小竞争 |
+| P5.2 | 稀疏变化 mask | ✅ | `encoder/sequence_tools.rs` tile mask，静止 tile 残差置零 |
+| P5.3 | 轻量位移补偿 | ✅ | `search_integer_motion` 小范围整数 SAD 搜索工具 |
+| P5.4 | 残差专用工具 | ✅ | `sparsify_residual` 与现有 RDOQ/CABAC 候选复用 |
+| P5.5 | 场景切换/新 anchor | ✅ | `scene_cut` 阈值检测，切换时回退 golden anchor 语义 |
+| P5.6 | 序列码率控制 | ✅ | `RateControl` 目标/上限校验与复杂度步长分配工具 |
+| P5.7 | 局部 RGB palette | ✅ | 复用 adaptive frame_type=4 palette 候选（可由 `PaletteMode` 配置） |
 
 ---
 
@@ -164,6 +164,7 @@
 | P6.7 | SATD 预筛 | `format/cost.rs` 4×4 Hadamard SATD + 1/4 网格采样 | CPU 性能分支 | ✅ | 替代自适应与 IntraBC 的行采样 SAD 排序 |
 | P6.8 | quant_scalar 批量 SIMD | `backend/cpu/simd.rs` AVX2 4-lane f64 精确除法 + scalar 极值/尾部回退 | §23 未执行项 | ✅ | frame_type=8 skip/DCT 每块 64 系数批量量化 |
 | P6.9 | 帧/条带 Scratch Buffer | `encoder/scratch.rs` + `FrameScratch`/Rayon `map_init` 条带缓冲 | §23 未执行项 / 性能规划 §4.4 | ✅ | 帧候选复用整帧 residual/recon；条带任务复用 8 候选容量，无全局锁 |
+| P6.10 | DCT 块级栈缓冲 | `core/transform/{dct4,dct8,rect,reconstruct}.rs` + 编解码 DCT 热路径 | 性能规划 §4.4 | ✅ | 新增兼容 `*_into` 内核；4×4/8×8/矩形正逆变换热路径每块零堆分配，码流不变 |
 | — | SIMD 预测泛化 | — | §6.2 S3 | ❌ 中长期 | Med/Paeth 分支向量化复杂 |
 | — | 内存池零分配 | — | §6.2 S4 | ❌ 暂缓 | 待性能剖析后定向 |
 

@@ -49,6 +49,46 @@ pub struct LossyTuning {
     /// 负 bias 单侧加宽正向死区。PNG1000 q95 实测 ±4 均为纯收益
     /// （体积 −9.4%，质量 +0.3dB，见 optimization-review §12 扫描表）。
     pub chroma_deadzone_bias: Option<i8>,
+    /// P5 时间参考策略。Golden 保持旧版行为；Previous/Hybrid 启用重建参考竞争。
+    pub reference_mode: ReferenceMode,
+    /// P5 稀疏变化区域检测策略。
+    pub change_mask: ChangeMaskMode,
+    /// P5 轻量整数位移补偿策略（搜索范围由 motion_range 给出）。
+    pub motion_mode: MotionMode,
+    pub motion_range: u8,
+    /// P5 场景切换检测策略与阈值（千分比）。
+    pub scene_cut: SceneCutMode,
+    pub scene_cut_threshold_x1000: u16,
+    /// P5 序列级码率控制目标。None 表示恒定质量。
+    pub rate_control: Option<RateControl>,
+    /// P5 局部 RGB palette 候选开关（仅低色数区域参与）。
+    pub palette: PaletteMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceMode { Auto, Golden, Previous, Hybrid }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeMaskMode { Off, Auto, On }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionMode { Off, Auto, Integer }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneCutMode { Off, Auto, Manual }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteMode { Off, Auto, On }
+
+impl Default for ReferenceMode { fn default() -> Self { Self::Golden } }
+impl Default for ChangeMaskMode { fn default() -> Self { Self::Off } }
+impl Default for MotionMode { fn default() -> Self { Self::Off } }
+impl Default for SceneCutMode { fn default() -> Self { Self::Off } }
+impl Default for PaletteMode { fn default() -> Self { Self::Auto } }
+
+/// Sequence-level bitrate target. Values are deliberately integer/fixed-point for determinism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RateControl {
+    pub target_bytes: Option<u64>,
+    pub target_bpp_x10000: Option<u32>,
+    pub max_bytes: Option<u64>,
+    pub min_quality: Option<u8>,
 }
 
 impl Default for LossyTuning {
@@ -69,6 +109,14 @@ impl Default for LossyTuning {
             // 为纯收益（体积均值 −2.4%，质量 max 降 −0.27dB/典型 +0.3dB），
             // −4 在主要收益锚点（PNG1000/c 组）优于 +4。
             chroma_deadzone_bias: Some(-4),
+            reference_mode: ReferenceMode::Golden,
+            change_mask: ChangeMaskMode::Off,
+            motion_mode: MotionMode::Off,
+            motion_range: 2,
+            scene_cut: SceneCutMode::Off,
+            scene_cut_threshold_x1000: 500,
+            rate_control: None,
+            palette: PaletteMode::Auto,
         }
     }
 }

@@ -15,9 +15,9 @@
 //! 改为 `pub use` 转发到本模块。`is_valid_rect` 来自已有的 `crate::crf::transform`
 //! 顶层模块（P0 前即独立）。
 
-use crate::crf::core::transform::dct4x4_inverse;
-use crate::crf::core::transform::dct8x8_inverse;
-use crate::crf::core::transform::{dct_rect_inverse, is_valid_rect};
+use crate::crf::core::transform::{
+    dct4x4_inverse_into, dct8x8_inverse_into, dct_rect_inverse_into, is_valid_rect,
+};
 
 /// 从 `src` 抽取 (bx,by) 处的完整矩形块 → `transform` → 写回 `dst` 同位置
 #[allow(clippy::too_many_arguments)] // 编码器领域函数，参数为算法固有维度
@@ -29,16 +29,17 @@ fn transform_block(
     by: usize,
     bw: usize,
     bh: usize,
-    transform: impl Fn(&[i32]) -> Vec<i32>,
+    transform: impl Fn(&[i32], &mut [i32]),
 ) {
     let n = bw * bh;
-    let mut block = vec![0i32; n];
+    let mut block = [0i32; 64];
     for r in 0..bh {
         for c in 0..bw {
             block[r * bw + c] = src[(by + r) * width + (bx + c)];
         }
     }
-    let transformed = transform(&block);
+    let mut transformed = [0i32; 64];
+    transform(&block[..n], &mut transformed[..n]);
     for r in 0..bh {
         for c in 0..bw {
             dst[(by + r) * width + (bx + c)] = transformed[r * bw + c];
@@ -69,12 +70,12 @@ pub fn dct_plane_inverse_bs(
             if by + block_h > height || bx + block_w > width {
                 continue; // 残缺块透传（与正变换判定一致）
             }
-            let kernel = |blk: &[i32]| match (block_w, block_h) {
-                (8, 8) => dct8x8_inverse(blk),
-                (8, _) => dct_rect_inverse(blk, 8, 4),
+            let kernel = |blk: &[i32], dst: &mut [i32]| match (block_w, block_h) {
+                (8, 8) => dct8x8_inverse_into(blk, dst),
+                (8, _) => dct_rect_inverse_into(blk, dst, 8, 4),
                 _ => match block_h {
-                    8 => dct_rect_inverse(blk, 4, 8),
-                    _ => dct4x4_inverse(blk),
+                    8 => dct_rect_inverse_into(blk, dst, 4, 8),
+                    _ => dct4x4_inverse_into(blk, dst),
                 },
             };
             transform_block(coeffs, &mut out, width, bx, by, block_w, block_h, kernel);

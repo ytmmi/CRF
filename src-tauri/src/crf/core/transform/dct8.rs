@@ -103,8 +103,9 @@ pub fn dct8_inv(
 /// 二维 8×8 整数 DCT 正变换（行变换 → 列变换）
 ///
 /// 输入输出均为行优先 64 元素块。
-pub fn dct8x8_forward(block: &[i32]) -> Vec<i32> {
+pub(crate) fn dct8x8_forward_into(block: &[i32], out: &mut [i32]) {
     assert_eq!(block.len(), 64);
+    assert_eq!(out.len(), 64);
     let mut tmp = [0i32; 64];
 
     for r in 0..8 {
@@ -129,7 +130,6 @@ pub fn dct8x8_forward(block: &[i32]) -> Vec<i32> {
         tmp[base + 7] = y7;
     }
 
-    let mut out = vec![0i32; 64];
     for c in 0..8 {
         let (y0, y1, y2, y3, y4, y5, y6, y7) = dct8_fwd(
             tmp[c],
@@ -150,12 +150,18 @@ pub fn dct8x8_forward(block: &[i32]) -> Vec<i32> {
         out[48 + c] = y6;
         out[56 + c] = y7;
     }
+}
+
+pub fn dct8x8_forward(block: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; 64];
+    dct8x8_forward_into(block, &mut out);
     out
 }
 
 /// 二维 8×8 整数 DCT 逆变换（列逆变换 → 行逆变换，严格互逆）
-pub fn dct8x8_inverse(block: &[i32]) -> Vec<i32> {
+pub(crate) fn dct8x8_inverse_into(block: &[i32], out: &mut [i32]) {
     assert_eq!(block.len(), 64);
+    assert_eq!(out.len(), 64);
     let mut tmp = [0i32; 64];
 
     for c in 0..8 {
@@ -179,7 +185,6 @@ pub fn dct8x8_inverse(block: &[i32]) -> Vec<i32> {
         tmp[56 + c] = x7;
     }
 
-    let mut out = vec![0i32; 64];
     for r in 0..8 {
         let base = r * 8;
         let (x0, x1, x2, x3, x4, x5, x6, x7) = dct8_inv(
@@ -201,6 +206,11 @@ pub fn dct8x8_inverse(block: &[i32]) -> Vec<i32> {
         out[base + 6] = x6;
         out[base + 7] = x7;
     }
+}
+
+pub fn dct8x8_inverse(block: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; 64];
+    dct8x8_inverse_into(block, &mut out);
     out
 }
 

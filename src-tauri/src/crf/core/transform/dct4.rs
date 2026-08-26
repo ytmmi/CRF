@@ -92,8 +92,9 @@ pub fn dct4_inv(y0: i32, y1: i32, y2: i32, y3: i32) -> (i32, i32, i32, i32) {
 /// 二维 4×4 整数 DCT 正变换（行变换 → 列变换）
 ///
 /// 输入输出均为行优先 16 元素块。
-pub fn dct4x4_forward(block: &[i32]) -> Vec<i32> {
+pub(crate) fn dct4x4_forward_into(block: &[i32], out: &mut [i32]) {
     assert_eq!(block.len(), 16);
+    assert_eq!(out.len(), 16);
     let mut tmp = [0i32; 16];
 
     // 行变换
@@ -112,7 +113,6 @@ pub fn dct4x4_forward(block: &[i32]) -> Vec<i32> {
     }
 
     // 列变换
-    let mut out = vec![0i32; 16];
     for c in 0..4 {
         let (y0, y1, y2, y3) = dct4_fwd(tmp[c], tmp[4 + c], tmp[8 + c], tmp[12 + c]);
         out[c] = y0;
@@ -120,12 +120,18 @@ pub fn dct4x4_forward(block: &[i32]) -> Vec<i32> {
         out[8 + c] = y2;
         out[12 + c] = y3;
     }
+}
+
+pub fn dct4x4_forward(block: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; 16];
+    dct4x4_forward_into(block, &mut out);
     out
 }
 
 /// 二维 4×4 整数 DCT 逆变换（列逆变换 → 行逆变换，与正变换严格互逆）
-pub fn dct4x4_inverse(block: &[i32]) -> Vec<i32> {
+pub(crate) fn dct4x4_inverse_into(block: &[i32], out: &mut [i32]) {
     assert_eq!(block.len(), 16);
+    assert_eq!(out.len(), 16);
     let mut tmp = [0i32; 16];
 
     // 列逆变换（先撤销后执行的列正变换）
@@ -138,7 +144,6 @@ pub fn dct4x4_inverse(block: &[i32]) -> Vec<i32> {
     }
 
     // 行逆变换
-    let mut out = vec![0i32; 16];
     for r in 0..4 {
         let base = r * 4;
         let (x0, x1, x2, x3) = dct4_inv(tmp[base], tmp[base + 1], tmp[base + 2], tmp[base + 3]);
@@ -147,6 +152,11 @@ pub fn dct4x4_inverse(block: &[i32]) -> Vec<i32> {
         out[base + 2] = x2;
         out[base + 3] = x3;
     }
+}
+
+pub fn dct4x4_inverse(block: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; 16];
+    dct4x4_inverse_into(block, &mut out);
     out
 }
 

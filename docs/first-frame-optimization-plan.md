@@ -14,8 +14,8 @@ Q95、Q96、Q97 等（有损与无损两条管线并行、互不改变语义）
 > - P2 intra 路径 — ✅ 探针 + 正式格式化 frame_type=8；四叉树关闭
 > - P3 系数熵编码 — ◐ 最小版 run-level✅；上下文建模深化未做
 > - P4 感知量化 — ◐ 仅饱和色边保护；其余未做
-> - P5 序列优化 — ❌ 全部后置（依赖 P2）
-> - P6 速度 — ◐ 候选剪枝/Fast-Fail/SIMD/批量位写/SATD 预筛/quant_scalar 批量 SIMD/帧与条带 Scratch Buffer✅；预测 SIMD 泛化/全局内存池未做
+> - P5 序列优化 — ✅ 基础实现（参考竞争、变化 Mask、整数位移、场景锚点、码率护栏与 palette）
+> - P6 速度 — ◐ 候选剪枝/Fast-Fail/SIMD/批量位写/SATD 预筛/quant_scalar 批量 SIMD/帧与条带 Scratch Buffer/DCT 块级零分配✅；预测 SIMD 泛化/全局内存池未做
 
 后续实现与每次构建必须遵守
 [《CRF 项目开发、算法与构建标准》](project-standards.md)，尤其是单文件不超过 1000 行、

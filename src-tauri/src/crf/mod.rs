@@ -29,7 +29,10 @@ pub use core::prediction::intra::apply_prediction;
 #[allow(unused_imports)]
 pub use format::{closed_loop_predict_quant_banded, satd_for_mode_sampled};
 #[allow(unused_imports)]
-pub use core::config::lossy::LossyTuning;
+pub use core::config::lossy::{
+    ChangeMaskMode, LossyTuning, MotionMode, PaletteMode, RateControl, ReferenceMode,
+    SceneCutMode,
+};
 #[allow(unused_imports)]
 pub use core::domain::{
     ColorFormat, DecodeResult, EncodeParams, ImageData, PredictionMode,

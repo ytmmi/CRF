@@ -27,10 +27,12 @@ pub fn is_valid_rect(bw: usize, bh: usize) -> bool {
 /// 二维矩形 DCT 正变换：行过 `bw` 点核、列过 `bh` 点核
 ///
 /// `block` 为行优先 `bw*bh` 元素；输出同布局。
-pub fn dct_rect_forward(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
+pub(crate) fn dct_rect_forward_into(block: &[i32], out: &mut [i32], bw: usize, bh: usize) {
     debug_assert!(is_valid_rect(bw, bh));
     let n = bw * bh;
-    let mut tmp = vec![0i32; n];
+    assert_eq!(block.len(), n);
+    assert_eq!(out.len(), n);
+    let mut tmp = [0i32; 64];
 
     // 行变换（水平频率，bw 点一维核）
     for r in 0..bh {
@@ -59,7 +61,6 @@ pub fn dct_rect_forward(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
     }
 
     // 列变换（垂直频率，bh 点一维核）：逐列收集→变换→写回
-    let mut out = vec![0i32; n];
     for c in 0..bw {
         if bh == 8 {
             let col: [i32; 8] = [
@@ -91,14 +92,21 @@ pub fn dct_rect_forward(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
             out[3 * bw + c] = y3;
         }
     }
+}
+
+pub fn dct_rect_forward(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
+    let mut out = vec![0i32; bw * bh];
+    dct_rect_forward_into(block, &mut out, bw, bh);
     out
 }
 
 /// 二维矩形 DCT 逆变换（列逆 → 行逆，与正变换严格互逆）
-pub fn dct_rect_inverse(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
+pub(crate) fn dct_rect_inverse_into(block: &[i32], out: &mut [i32], bw: usize, bh: usize) {
     debug_assert!(is_valid_rect(bw, bh));
     let n = bw * bh;
-    let mut tmp = vec![0i32; n];
+    assert_eq!(block.len(), n);
+    assert_eq!(out.len(), n);
+    let mut tmp = [0i32; 64];
 
     // 列逆变换（撤销后执行的列正变换）
     for c in 0..bw {
@@ -130,7 +138,6 @@ pub fn dct_rect_inverse(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
     }
 
     // 行逆变换
-    let mut out = vec![0i32; n];
     for r in 0..bh {
         let base = r * bw;
         if bw == 8 {
@@ -150,6 +157,11 @@ pub fn dct_rect_inverse(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
             out[base..base + 4].copy_from_slice(&[x0, x1, x2, x3]);
         }
     }
+}
+
+pub fn dct_rect_inverse(block: &[i32], bw: usize, bh: usize) -> Vec<i32> {
+    let mut out = vec![0i32; bw * bh];
+    dct_rect_inverse_into(block, &mut out, bw, bh);
     out
 }
 

@@ -30,6 +30,7 @@ pub mod rle_cabac;
 pub mod rle_golomb;
 pub(crate) mod scratch;
 pub mod sequence;
+pub mod sequence_tools;
 /// session：序列级 session 与辅助函数（P3 架构迁移）
 pub mod session;
 pub mod streaming;

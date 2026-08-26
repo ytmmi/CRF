@@ -13,8 +13,7 @@
 //! - 预测一律引用本地重建像素（编码/解码闭环一致，§5-P2 关键约束）。
 
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::core::transform::dct8x8_forward;
-use crate::crf::core::transform::dct8x8_inverse;
+use crate::crf::core::transform::{dct8x8_forward_into, dct8x8_inverse_into};
 
 /// 变换块尺寸（v1 固定 8×8）
 const BLK: usize = 8;
@@ -215,7 +214,8 @@ pub fn encode_intra_probe(
                 crate::crf::core::entropy::scan::zigzag_scan(&qres, BLK)
             } else {
                 // DCT 路径
-                let freq = dct8x8_forward(&block);
+                let mut freq = [0i32; 64];
+                dct8x8_forward_into(&block, &mut freq);
                 let mut qcoeffs = [0i32; 64];
                 let mut dequant = [0i32; 64];
                 crate::crf::backend::ops::quantize_levels_biased(
@@ -227,7 +227,8 @@ pub fn encode_intra_probe(
                 for (dequantized, &level) in dequant.iter_mut().zip(qcoeffs.iter()) {
                     *dequantized = level * q;
                 }
-                let spatial = dct8x8_inverse(&dequant);
+                let mut spatial = [0i32; 64];
+                dct8x8_inverse_into(&dequant, &mut spatial);
                 for by in 0..bh {
                     for bx in 0..bw {
                         recon[(y0 + by) * width + x0 + bx] =

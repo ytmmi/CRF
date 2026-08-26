@@ -142,6 +142,13 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
 
     // 真有损精细调参（None → 默认：色度×130%、关键帧间隔 10、无死区偏置）
     let tuning = crate::crf::core::config::lossy::LossyTuning::resolve(params.lossy_tuning.as_ref());
+    if let Some(rate) = tuning.rate_control {
+        if rate.target_bytes.is_some() && rate.target_bpp_x10000.is_some() {
+            return Err(CrfError::InvalidCodingParams(
+                "target_bytes and target_bpp_x10000 are mutually exclusive".into(),
+            ));
+        }
+    }
     let interval = tuning.keyframe_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;
 
@@ -513,6 +520,84 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         all
     };
 
+    // P5.1/P5.2/P5.5: 可选的 reconstructed previous 竞争。
+    // 默认保持 Golden 旧语义；显式选择 Previous/Hybrid 时逐帧比较码字长度，
+    // 并仅使用已重建帧作为参考。Hybrid 在场景切换时回到 golden（新 anchor
+    // 的码流语义与 golden 相同，因而兼容旧解码器）。
+    let all_results = if params.input_original_frames
+        && !matches!(tuning.reference_mode, crate::crf::core::config::lossy::ReferenceMode::Golden)
+        && !all_results.is_empty()
+    {
+        let mut out = all_results;
+        let first_recon = crate::crf::decoder::reconstruct::reconstruct_frame(&out[0].0, &header)?;
+        let first_in_rct = use_rct && !header.flags.first_frame_no_rct();
+        let mut previous = if first_in_rct {
+            crate::crf::core::color::rct::rct_inverse(&first_recon.pixels, components)?
+        } else { first_recon.pixels };
+        for i in 1..out.len() {
+            let frame = &frames[i];
+            let fq = fq_for_index(i);
+            let mut diff = vec![0i32; frame.pixels.len()];
+            crate::crf::backend::ops::sub_i32(&frame.pixels, &previous, &mut diff);
+            // 稀疏变化 mask：静止 tile 直接写零；这是解码透明的残差优化。
+            if !matches!(tuning.change_mask, crate::crf::core::config::lossy::ChangeMaskMode::Off) {
+                let ts = header.block_size.max(4) as usize;
+                let mask = super::sequence_tools::change_mask(
+                    &frame.pixels, &previous, frame.width as usize, frame.height as usize,
+                    components, ts, if fq.step > 0 { (fq.step / 2) as i32 } else { 0 });
+                super::sequence_tools::apply_change_mask(
+                    &mut diff, &mask, frame.width as usize, frame.height as usize, components, ts);
+            }
+            let eff = crate::crf::core::color::rct::rct_forward(&diff, components)?;
+            let eff_frame = ImageData { width: frame.width, height: frame.height, bit_depth: frame.bit_depth, color_format: frame.color_format, pixels: eff };
+            // 场景切换检测：残差均值超过阈值时视为新 anchor，跳过 previous
+            // 候选，使用 golden 参考保持随机访问与误差隔离。
+            let periodic_anchor = tuning.keyframe_interval > 0
+                && i.is_multiple_of(tuning.keyframe_interval as usize);
+            let scene_cut = periodic_anchor || (
+                !matches!(tuning.scene_cut, crate::crf::core::config::lossy::SceneCutMode::Off)
+                    && (diff.iter().map(|v| v.unsigned_abs() as u64).sum::<u64>()
+                        / diff.len().max(1) as u64)
+                        > ((tuning.scene_cut_threshold_x1000 as u64 * 255) / 1000)
+            );
+            let mut candidate = if scene_cut {
+                Vec::new()
+            } else if params.adaptive_prediction {
+                encode_frame_adaptive(&eff_frame, compression_type, header.block_size, false, fq, None, None)?.data
+            } else {
+                encode_frame(&eff_frame, compression_type, header.block_size, header.prediction_mode, false, fq, None)?
+            };
+            // previous 标志为 bit7=0；golden 候选保留 bit7=1。
+            let force_previous = matches!(
+                tuning.reference_mode,
+                crate::crf::core::config::lossy::ReferenceMode::Previous
+            );
+            if !candidate.is_empty() && (force_previous || candidate.len() < out[i].0.len()) {
+                let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&candidate, &header)?;
+                let mut rgb = recon.pixels;
+                if use_rct { rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?; }
+                previous = previous.iter().zip(rgb.iter()).map(|(a,b)| a + b).collect();
+                out[i] = (candidate, None, false);
+            } else {
+                // 竞争失败时，仍更新 previous 为实际胜出的重建帧。
+                let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&out[i].0, &header)?;
+                let mut rgb = recon.pixels;
+                if use_rct { rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?; }
+                previous = if first_in_rct {
+                    let base = crate::crf::decoder::reconstruct::reconstruct_frame(&out[0].0, &header)?;
+                    let base = crate::crf::core::color::rct::rct_inverse(&base.pixels, components)?;
+                    base.iter().zip(rgb.iter()).map(|(a,b)| a + b).collect()
+                } else {
+                    let base = crate::crf::decoder::reconstruct::reconstruct_frame(&out[0].0, &header)?;
+                    base.pixels.iter().zip(rgb.iter()).map(|(a,b)| a + b).collect()
+                };
+            }
+        }
+        out
+    } else {
+        all_results
+    };
+
     for (frame_data, _, golden) in all_results.into_iter() {
         let frame_size = frame_data.len() as u32;
         encoded_frames.push((frame_data, current_offset, frame_size, golden));
@@ -525,6 +610,27 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         frames_start,
         &encoded_frames,
     )?;
+
+    // P5.6 码率护栏：目标由配置层以定点整数表达，编码结果不得静默突破硬上限。
+    if let Some(rate) = tuning.rate_control {
+        let size = output.len() as u64;
+        if let Some(max) = rate.max_bytes {
+            if size > max {
+                return Err(CrfError::InvalidCodingParams(format!(
+                    "sequence exceeds max_bytes ({} > {})", size, max
+                )));
+            }
+        }
+        if let Some(target) = rate.target_bytes {
+            // 目标字节是软目标：报告/调用方可据此进行二次调参；仅在明显超出
+            // （>125%）时返回错误，避免对旧调用造成意外失败。
+            if size > target.saturating_mul(5) / 4 {
+                return Err(CrfError::InvalidCodingParams(format!(
+                    "sequence target_bytes infeasible ({} > {})", size, target
+                )));
+            }
+        }
+    }
 
     Ok(output)
 }

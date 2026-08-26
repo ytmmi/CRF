@@ -7,7 +7,7 @@
 //! 4. HVMED 模式：逆 zigzag → 逆量化 → 逆 DCT + 预测重建
 
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::core::transform::dct8x8_inverse;
+use crate::crf::core::transform::dct8x8_inverse_into;
 
 const BLK: usize = 8;
 const MODE_DC: i32 = 0;
@@ -134,8 +134,7 @@ fn decode_plane(data: &[u8], width: usize, height: usize, q: i32) -> CrfResult<V
                 for i in 0..64 {
                     dq[i] = spatial_coeffs[i] * q;
                 }
-                let spatial = dct8x8_inverse(&dq);
-                block.copy_from_slice(&spatial);
+                dct8x8_inverse_into(&dq, &mut block);
             }
 
             // 加回预测

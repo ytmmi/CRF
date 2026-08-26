@@ -28,5 +28,10 @@ pub mod reconstruct;
 
 // 与旧顶层 transform 一致的公共 re-export（兼容路径）
 pub use dct4::{dct4x4_forward, dct4x4_inverse};
+pub(crate) use dct4::{dct4x4_forward_into, dct4x4_inverse_into};
+#[allow(unused_imports)] // 兼容 API；生产热路径使用无分配的 *_into 版本
 pub use dct8::{dct8x8_forward, dct8x8_inverse};
+pub(crate) use dct8::{dct8x8_forward_into, dct8x8_inverse_into};
+#[allow(unused_imports)] // 兼容 API；生产热路径使用无分配的 *_into 版本
 pub use rect::{dct_rect_forward, dct_rect_inverse, is_valid_rect};
+pub(crate) use rect::{dct_rect_forward_into, dct_rect_inverse_into};

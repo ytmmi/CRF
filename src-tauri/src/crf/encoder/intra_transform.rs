@@ -20,7 +20,7 @@ use crate::crf::encoder::coeff_cabac::CoeffCABAC;
 use crate::crf::error::CrfResult;
 use crate::crf::core::domain::{CompressionType, ImageData};
 use crate::crf::core::prediction::intra::{apply_prediction, undo_prediction};
-use crate::crf::core::transform::{dct8x8_forward, dct8x8_inverse};
+use crate::crf::core::transform::{dct8x8_forward_into, dct8x8_inverse_into};
 
 const BLK: usize = 8;
 const MODE_DC: i32 = 0;
@@ -96,7 +96,8 @@ fn encode_plane(
                 crate::crf::core::entropy::scan::zigzag_scan(&qres, BLK)
             } else {
                 // DCT 路径
-                let freq = dct8x8_forward(&block);
+                let mut freq = [0i32; 64];
+                dct8x8_forward_into(&block, &mut freq);
                 let mut qc = [0i32; 64];
                 let mut dq = [0i32; 64];
                 crate::crf::backend::ops::quantize_levels_biased(
@@ -108,7 +109,8 @@ fn encode_plane(
                 for (dequantized, &level) in dq.iter_mut().zip(qc.iter()) {
                     *dequantized = level * q;
                 }
-                let spatial = dct8x8_inverse(&dq);
+                let mut spatial = [0i32; 64];
+                dct8x8_inverse_into(&dq, &mut spatial);
                 for by in 0..bh {
                     for bx in 0..bw {
                         recon[(y0 + by) * width + x0 + bx] =

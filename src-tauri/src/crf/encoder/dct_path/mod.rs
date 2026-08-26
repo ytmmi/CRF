@@ -17,9 +17,9 @@
 pub mod qm;
 
 use crate::crf::format::quantize_residuals;
-use crate::crf::core::transform::dct4x4_forward;
-use crate::crf::core::transform::dct8x8_forward;
-use crate::crf::core::transform::{dct_rect_forward, is_valid_rect};
+use crate::crf::core::transform::{
+    dct4x4_forward_into, dct8x8_forward_into, dct_rect_forward_into, is_valid_rect,
+};
 use qm::{quantize_coeffs_with_matrix, DCT_PERCEPTUAL_QM, DCT_PERCEPTUAL_QM8};
 
 /// 块形状合法集（v1.12：{bw, bh} 对，bw/bh ∈ {4, 8}）
@@ -47,16 +47,17 @@ fn transform_block(
     by: usize,
     bw: usize,
     bh: usize,
-    transform: impl Fn(&[i32]) -> Vec<i32>,
+    transform: impl Fn(&[i32], &mut [i32]),
 ) {
     let n = bw * bh;
-    let mut block = vec![0i32; n];
+    let mut block = [0i32; 64];
     for r in 0..bh {
         for c in 0..bw {
             block[r * bw + c] = src[(by + r) * width + (bx + c)];
         }
     }
-    let transformed = transform(&block);
+    let mut transformed = [0i32; 64];
+    transform(&block[..n], &mut transformed[..n]);
     for r in 0..bh {
         for c in 0..bw {
             dst[(by + r) * width + (bx + c)] = transformed[r * bw + c];
@@ -89,12 +90,12 @@ pub fn dct_plane_forward_bs(
             if by + block_h > height || bx + block_w > width {
                 continue; // 残缺块透传
             }
-            let kernel = |blk: &[i32]| match (block_w, block_h) {
-                (8, 8) => dct8x8_forward(blk),
-                (8, _) => dct_rect_forward(blk, 8, 4),
+            let kernel = |blk: &[i32], dst: &mut [i32]| match (block_w, block_h) {
+                (8, 8) => dct8x8_forward_into(blk, dst),
+                (8, _) => dct_rect_forward_into(blk, dst, 8, 4),
                 _ => match block_h {
-                    8 => dct_rect_forward(blk, 4, 8),
-                    _ => dct4x4_forward(blk),
+                    8 => dct_rect_forward_into(blk, dst, 4, 8),
+                    _ => dct4x4_forward_into(blk, dst),
                 },
             };
             transform_block(pixels, &mut out, width, bx, by, block_w, block_h, kernel);
