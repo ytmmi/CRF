@@ -1,0 +1,8 @@
+[package]
+name = "crf-cuda"
+version = "0.1.0"
+edition = "2021"
+description = "Sidecar NVIDIA CUDA driver-API backend for CRF"
+
+[lib]
+crate-type = ["cdylib"]

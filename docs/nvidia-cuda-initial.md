@@ -7,14 +7,14 @@
 - `crf::backend::gpu::capability::probe_nvidia`：通过 `nvidia-smi` 读取设备名、驱动版本、显存和 compute capability。
 - `crf::backend::gpu::resolve_backend`：按请求后端、像素阈值、驱动可用性和显存预算选择 CPU 或 NVIDIA CUDA；`Auto/GpuAuto` 安全回退，强制 `NvidiaCuda` 返回 `Unavailable`。
 - `crf::backend::gpu::memory`：统一传输模式枚举和 i32 批处理显存估算，避免尺寸计算溢出。
-- `NvidiaCudaBackend`：通过公共 `BackendKernel` 暴露窄适配层；启用 feature 后提供 `diff_i32`，使用 CUDA Driver API 动态加载 `nvcuda.dll` 并执行内嵌 PTX。
+- `NvidiaCudaBackend`：通过公共 `BackendKernel` 暴露窄适配层；启用 feature 后提供 `diff_i32`，通过旁路 `crf_cuda.dll` 调用 CUDA Driver API 并执行 PTX。
 - CUDA 运行时会缓存 Driver、context、module 和 kernel function；每次调用仅分配/释放输入输出缓冲区，降低重复初始化开销，并在会话销毁时安全释放 CUDA 资源。
 
 默认 feature 为 `nvidia-cuda`，统一 `backend::ops::sub_i32` 会在首次达到 1M 元素时检查设备并优先使用 GPU；小输入、无 NVIDIA 环境、驱动异常或 kernel 失败会自动切换到 CPU。GPU 失败状态会被记忆，避免每次调用重复探测。
 
 使用 `--no-default-features` 可生成纯 CPU 构建；两种构建都不改变 CRF 码流语义。
 
-正式分发产物只依赖 NVIDIA 驱动提供的 `nvcuda.dll`，不依赖 CUDA Toolkit、`nvcc` 或 `cudart.dll`。Toolkit（例如 `D:\BianCen\cuda\cuda133`）仅用于本地开发和可选的工具链检查。
+正式分发产物由 `crf-viewer.exe` 与同目录的 `crf_cuda.dll` 组成；该 DLL 只依赖 NVIDIA 驱动提供的 `nvcuda.dll`，不依赖 CUDA Toolkit、`nvcc` 或 `cudart.dll`。Toolkit（例如 `D:\BianCen\cuda\cuda133`）仅用于本地开发和可选的工具链检查。
 
 ## 启用 NVIDIA 构建
 
@@ -22,7 +22,9 @@ Toolkit 可位于 `D:\BianCen\cuda\cuda133`，无需加入全局 PATH。当前 D
 
 ```powershell
 $env:CUDA_PATH = 'D:\BianCen\cuda\cuda133'
-cargo check --manifest-path src-tauri/Cargo.toml --features nvidia-cuda
+cargo check --manifest-path src-tauri/Cargo.toml --workspace --features nvidia-cuda
+cargo build --manifest-path src-tauri/Cargo.toml --workspace --release --features nvidia-cuda
+$env:CRF_CUDA_DLL = (Resolve-Path src-tauri/target/release/crf_cuda.dll)
 cargo test --manifest-path src-tauri/Cargo.toml --features nvidia-cuda crf::backend::gpu::cuda::tests::cuda_diff_matches_scalar_when_driver_is_available -- --nocapture
 ```
 
@@ -40,7 +42,16 @@ cargo test --manifest-path src-tauri/Cargo.toml --features nvidia-cuda crf::back
 ```text
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
-cargo build --manifest-path src-tauri/Cargo.toml --release --features nvidia-cuda
+cargo build --manifest-path src-tauri/Cargo.toml --workspace --release --features nvidia-cuda
 ```
+
+从 workspace 构建会同时生成两个文件：
+
+```text
+src-tauri/target/release/crf-viewer.exe
+src-tauri/target/release/crf_cuda.dll
+```
+
+发布时请保持二者位于同一目录；也可通过 `CRF_CUDA_DLL` 指定 DLL 的绝对路径进行诊断。
 
 探针失败、显存预算不足或小图输入都必须保留可解释的回退原因；不得在 encoder、decoder 或 Tauri command 中直接调用 CUDA API。
