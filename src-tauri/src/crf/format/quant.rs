@@ -7,8 +7,7 @@
 //! 解码端无需感知量化步长：编码器直接输出重建值域（Q 的倍数）的残差，
 //! 熵解码结果即为反量化后的预测残差，后续逆预测流程与无损完全一致。
 //!
-//! **迁移说明（P4）**：`LossyTuning`、`quant_step_from_quality`、
-//! `is_q95_perceptual` 已迁至 `core/config/lossy.rs`（规划 §3.2）。
+//! 有损参数解析统一由 `core/config/lossy_v2` 提供；本模块仅保留底层量化数学 helper。
 
 /// 批量死区量化（含偏置）
 pub fn quantize_residuals_tuned(residuals: &[i32], q_step: u8, deadzone_bias: i8) -> Vec<i32> {

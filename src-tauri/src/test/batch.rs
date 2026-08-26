@@ -72,12 +72,11 @@ pub fn run_streaming_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &st
 
         let frames = load_frame_sequence(paths);
         let params = crf::EncodeParams {
+            lossy: quality.map(|q| crate::crf::LossyOptionsV2Builder::preset(q as u16 * 100).build().unwrap()),
             compression_type: "golomb-rice".to_string(),
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
             adaptive_prediction: true,
-            lossy_quality: quality,
-            lossy_tuning: None,
             input_original_frames: false,
             user_metadata: None,
         };
@@ -184,12 +183,11 @@ pub fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
         let t = Instant::now();
 
         let params = crf::EncodeParams {
+            lossy: scheme.quality.map(|q| crate::crf::LossyOptionsV2Builder::preset(q as u16 * 100).build().unwrap()),
             compression_type: "golomb-rice".to_string(),
             block_size: None,
             prediction_mode: scheme.mode,
             adaptive_prediction: scheme.adaptive,
-            lossy_quality: scheme.quality,
-            lossy_tuning: None,
             input_original_frames: false,
             user_metadata: None,
         };

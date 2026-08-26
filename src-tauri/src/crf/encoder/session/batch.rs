@@ -8,7 +8,7 @@
 use crate::crf::checksum::crc32;
 use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, HEADER_SIZE};
 use crate::crf::core::bitstream::header::CrfHeader;
-use crate::crf::core::config::lossy::LossyTuning;
+use crate::crf::core::config::lossy_v2::KernelLossyConfig;
 use crate::crf::encoder::frame::FrameQuant;
 use crate::crf::error::CrfResult;
 
@@ -20,7 +20,7 @@ use crate::crf::error::CrfResult;
 pub fn fq_for_index(
     i: usize,
     lossy_quant_step: Option<u8>,
-    tuning: &LossyTuning,
+    tuning: &KernelLossyConfig,
     base_bias: i8,
     interval: usize,
     q95: bool,
@@ -29,20 +29,22 @@ pub fn fq_for_index(
     if global_q == 0 {
         return FrameQuant::lossless();
     }
-    if i == 0 && tuning.golden_lossless {
-        return FrameQuant::lossless();
-    }
     let is_anchor = i.is_multiple_of(interval);
-    let step = if is_anchor {
-        tuning.anchor_step(global_q)
+    let step = if i == 0 {
+        tuning.first_frame_step
+    } else if is_anchor {
+        tuning.anchor_step
     } else {
         global_q
     };
+    if step == 0 {
+        return FrameQuant::lossless();
+    }
     FrameQuant {
         step,
         bias: base_bias,
         chroma_step: tuning.chroma_step(step),
-        chroma_bias: tuning.chroma_deadzone_bias.unwrap_or(base_bias),
+        chroma_bias: tuning.chroma_deadzone_bias,
         chroma_half_res: tuning.chroma_half_res,
         q1_matrix_scale: q95,
     }
@@ -54,18 +56,18 @@ pub fn fq_for_index(
 pub fn fq_for_chain_index(
     i: usize,
     lossy_quant_step: Option<u8>,
-    tuning: &LossyTuning,
+    tuning: &KernelLossyConfig,
     base_bias: i8,
 ) -> FrameQuant {
     let gq = lossy_quant_step.unwrap_or(0);
-    if gq == 0 || i.is_multiple_of(tuning.keyframe_interval.max(1) as usize) {
+    if gq == 0 || i.is_multiple_of(tuning.anchor_interval.max(1) as usize) {
         return FrameQuant::lossless();
     }
     FrameQuant {
         step: gq,
         bias: base_bias,
         chroma_step: tuning.chroma_step(gq),
-        chroma_bias: tuning.chroma_deadzone_bias.unwrap_or(base_bias),
+        chroma_bias: tuning.chroma_deadzone_bias,
         chroma_half_res: gq > 1 && tuning.chroma_half_res,
         q1_matrix_scale: false,
     }

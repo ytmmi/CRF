@@ -2,16 +2,13 @@
 
 **规划日期**：2026-08-25  
 **适用范围**：有损管线；无损管线不读取这些参数  
-**状态**：接口与算法控制面规划，本轮不实现、不构建  
+**状态**：V2 控制面、JSON/CLI/schema 已实施；V1 已删除，算法字段继续分阶段接入  
 **关联方案**：[目标高质量预设与首帧优化](first-frame-optimization-plan.md)
 
-> **进度同步（2026-08-26）**：V2 顶层模型（`LossyOptionsV2`/`ResolvedLossyReport`/
-> `resolve_without_encoding`/builder/`validate`）**均未实施**；`EncodeParams` 仍是 V1 结构
-> （`lossy_quality: Option<u8>` + `lossy_tuning: Option<LossyTuning>`）。已完成的仅是 V1
-> `LossyTuning` 的零散字段扩展：`chroma_deadzone_bias`（默认 Some(-4)）、`deadzone_bias`
-> （默认 4）、`chroma_half_res` 解耦（不再受 step>1 阻断）、`chroma_step` 升级（Q=1×130%
-> 截断升一级）。已完成项逐项清单见 [optimization-completed.md](optimization-completed.md)
-> 第三节。本文档保留 V2 未完成规划。
+> **进度同步（2026-08-26）**：V2 顶层模型、`ResolvedLossyReport`、严格校验、
+> `resolve_without_encoding()`、Builder 与 V2 编码内核直连已落地；V1 API 及兼容适配器已删除；同时提供严格
+> JSON、常用 CLI flags、专家配置文件、resolved 导出和 UI 专家面板 schema。仓库当前没有
+> React/Tauri 前端源码，因此 UI 落地点是可直接供未来前端消费的 schema 与解析 API。
 
 后续实现必须遵守[《CRF 项目开发、算法与构建标准》](project-standards.md)，不得把配置
 解析、预设映射、像素算法、码流信令和 UI 逻辑重新杂交进同一模块。
@@ -134,7 +131,7 @@ pub enum LossyBase {
 pub lossy: Option<LossyOptionsV2> // None = 无损管线
 ```
 
-`lossy_quality` 和旧 `lossy_tuning` 在兼容期由适配器转换为 V2，不应与 V2 同时生效。
+V1 的 `lossy_quality` 和 `lossy_tuning` 已删除，不提供运行时兼容适配。
 
 ## 5. 稳定公开参数
 

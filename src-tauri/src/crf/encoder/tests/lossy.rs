@@ -1,6 +1,7 @@
 //! 有损模式误差边界、golden 还原、噪声感知 A/B 测试
 
 use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
+use crate::crf::LossyOptionsV2Builder;
 
 use super::super::encode_sequence;
 use super::create_test_frames;
@@ -38,11 +39,9 @@ fn test_lossy_mode_error_bound_and_size() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: q,
-        lossy_tuning: Some(crate::crf::core::config::lossy::LossyTuning {
-            chroma_half_res: half_res,
-            ..Default::default()
-        }),
+        lossy: q.map(|q| LossyOptionsV2Builder::preset(q as u16 * 100)
+            .chroma_sampling(if half_res { crate::crf::core::config::lossy_v2::ChromaSampling::Cs420 } else { crate::crf::core::config::lossy_v2::ChromaSampling::Cs444 })
+            .build().unwrap()),
         // 对比测试启用原始帧输入：预差分序列在量化后仍保留链式
         // 累积噪声（残差能量不降反升），无法体现有损的滤噪收益。
         input_original_frames: true,
@@ -51,7 +50,7 @@ fn test_lossy_mode_error_bound_and_size() {
 
     let lossless = encode_sequence(&frames, &mk_params(false, None)).unwrap();
     // 二分定位：先关 half_res 验证 CABAC 路径，再开 half_res 验证 planar 交互
-    let lossy = encode_sequence(&frames, &mk_params(false, Some(50))).unwrap(); // Q=10 无 half-res
+    let lossy = encode_sequence(&frames, &mk_params(true, Some(50))).unwrap(); // Q=10 + 4:2:0
 
     // 诊断：逐帧解析帧头（frame_type / coding_params）
     {
@@ -170,8 +169,7 @@ fn test_debug_golden_minimal() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: true,
         user_metadata: None,
     };
@@ -202,8 +200,7 @@ fn test_first_frame_dual_path_competition() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: None,
     };
@@ -279,10 +276,13 @@ fn test_noise_adaptive_lossy_ab() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: q,
-        lossy_tuning: Some(crate::crf::core::config::lossy::LossyTuning {
-            noise_adaptive: noise_on,
-            ..Default::default()
+        lossy: q.map(|q| {
+            let mut o = LossyOptionsV2Builder::preset(q as u16 * 100).build().unwrap();
+            if noise_on {
+                o.perceptual.noise_mode = crate::crf::core::config::lossy_v2::NoiseMode::Manual;
+                o.perceptual.noise_tau_x100 = Some(150);
+            }
+            o
         }),
         input_original_frames: true,
         user_metadata: None,

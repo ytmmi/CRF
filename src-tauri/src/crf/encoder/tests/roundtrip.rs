@@ -18,8 +18,7 @@ fn test_encode_decode_golomb_roundtrip() {
         block_size: None,
         prediction_mode: PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: Some("test".to_string()),
     };
@@ -39,8 +38,7 @@ fn test_encode_decode_exp_golomb_roundtrip() {
         block_size: None,
         prediction_mode: PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: None,
     };
@@ -57,8 +55,7 @@ fn test_encode_frame_count_validation() {
         block_size: None,
         prediction_mode: PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: None,
     };
@@ -194,8 +191,7 @@ fn test_palette_roundtrip_low_color() {
             block_size: None,
             prediction_mode: PredictionMode::Average,
             adaptive_prediction: true,
-            lossy_quality: None,
-            lossy_tuning: None,
+            lossy: None,
             input_original_frames: false,
             user_metadata: None,
         };
@@ -265,8 +261,7 @@ fn test_palette_copy_above_benefit() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: None,
     };

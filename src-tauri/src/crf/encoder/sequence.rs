@@ -132,24 +132,21 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     header.validate()?;
 
     // 真有损：质量档位映射为量化步长，写入文件头（flags.bit2 + byte21）
-    let lossy_quant_step = params
-        .lossy_quality
-        .map(crate::crf::core::config::lossy::quant_step_from_quality);
+    let tuning = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
+        params.lossy.as_ref(),
+        crate::crf::core::config::lossy_v2::ResolveContext {
+            components: Some(components),
+            frame_count: Some(frames.len()),
+        },
+    )
+    .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
+    let lossy_quant_step = tuning.enabled.then_some(tuning.global_step);
     if let Some(q) = lossy_quant_step {
         header.lossy_quant = q;
         header.flags.set_has_lossy_quant(true);
     }
 
-    // 真有损精细调参（None → 默认：色度×130%、关键帧间隔 10、无死区偏置）
-    let tuning = crate::crf::core::config::lossy::LossyTuning::resolve(params.lossy_tuning.as_ref());
-    if let Some(rate) = tuning.rate_control {
-        if rate.target_bytes.is_some() && rate.target_bpp_x10000.is_some() {
-            return Err(CrfError::InvalidCodingParams(
-                "target_bytes and target_bpp_x10000 are mutually exclusive".into(),
-            ));
-        }
-    }
-    let interval = tuning.keyframe_interval.max(1) as usize;
+    let interval = tuning.anchor_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;
 
     // 计算帧索引偏移量
@@ -168,10 +165,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     // 对标 AVIF 全帧统一 CRF；<100 锚点更高精度；0=锚点无损）。
     // v1.12：q95 视觉无损档（is_q95_perceptual）时差分帧携带矩阵缩放许可；
     // golden 首帧默认强制无损，golden_lossless=false 时按锚点档位量化。
-    let q95 = params
-        .lossy_quality
-        .map(crate::crf::core::config::lossy::is_q95_perceptual)
-        .unwrap_or(false);
+    let q95 = tuning.q95_perceptual;
     // 使用 session::batch::fq_for_index（P3 架构迁移）
     let fq_for_index = |i: usize| -> FrameQuant {
         super::session::batch::fq_for_index(i, lossy_quant_step, &tuning, base_bias, interval, q95)
@@ -525,7 +519,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     // 并仅使用已重建帧作为参考。Hybrid 在场景切换时回到 golden（新 anchor
     // 的码流语义与 golden 相同，因而兼容旧解码器）。
     let all_results = if params.input_original_frames
-        && !matches!(tuning.reference_mode, crate::crf::core::config::lossy::ReferenceMode::Golden)
+        && !matches!(tuning.reference_mode, crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden)
         && !all_results.is_empty()
     {
         let mut out = all_results;
@@ -540,7 +534,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             let mut diff = vec![0i32; frame.pixels.len()];
             crate::crf::backend::ops::sub_i32(&frame.pixels, &previous, &mut diff);
             // 稀疏变化 mask：静止 tile 直接写零；这是解码透明的残差优化。
-            if !matches!(tuning.change_mask, crate::crf::core::config::lossy::ChangeMaskMode::Off) {
+            if !matches!(tuning.change_mask, crate::crf::core::config::lossy_v2::ToolMode::Off) {
                 let ts = header.block_size.max(4) as usize;
                 let mask = super::sequence_tools::change_mask(
                     &frame.pixels, &previous, frame.width as usize, frame.height as usize,
@@ -552,10 +546,10 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             let eff_frame = ImageData { width: frame.width, height: frame.height, bit_depth: frame.bit_depth, color_format: frame.color_format, pixels: eff };
             // 场景切换检测：残差均值超过阈值时视为新 anchor，跳过 previous
             // 候选，使用 golden 参考保持随机访问与误差隔离。
-            let periodic_anchor = tuning.keyframe_interval > 0
-                && i.is_multiple_of(tuning.keyframe_interval as usize);
+            let periodic_anchor = tuning.anchor_interval > 0
+                && i.is_multiple_of(tuning.anchor_interval as usize);
             let scene_cut = periodic_anchor || (
-                !matches!(tuning.scene_cut, crate::crf::core::config::lossy::SceneCutMode::Off)
+                !matches!(tuning.scene_cut, crate::crf::core::config::lossy_v2::SceneCutModeV2::Off)
                     && (diff.iter().map(|v| v.unsigned_abs() as u64).sum::<u64>()
                         / diff.len().max(1) as u64)
                         > ((tuning.scene_cut_threshold_x1000 as u64 * 255) / 1000)
@@ -570,7 +564,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             // previous 标志为 bit7=0；golden 候选保留 bit7=1。
             let force_previous = matches!(
                 tuning.reference_mode,
-                crate::crf::core::config::lossy::ReferenceMode::Previous
+                crate::crf::core::config::lossy_v2::ReferenceModeV2::Previous
             );
             if !candidate.is_empty() && (force_previous || candidate.len() < out[i].0.len()) {
                 let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&candidate, &header)?;
@@ -612,7 +606,8 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     )?;
 
     // P5.6 码率护栏：目标由配置层以定点整数表达，编码结果不得静默突破硬上限。
-    if let Some(rate) = tuning.rate_control {
+    if tuning.enabled {
+        let rate = &tuning.rate;
         let size = output.len() as u64;
         if let Some(max) = rate.max_bytes {
             if size > max {

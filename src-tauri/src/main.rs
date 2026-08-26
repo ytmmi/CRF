@@ -1,3 +1,4 @@
+mod cli_config;
 mod crf;
 mod test;
 
@@ -9,6 +10,17 @@ use std::io::BufReader;
 fn main() {
     // 检查命令行参数，决定运行模式
     let args: Vec<String> = std::env::args().collect();
+    let cli_lossy = cli_config::parse(&args).unwrap_or_else(|e| {
+        eprintln!("Configuration error: {e}");
+        std::process::exit(2);
+    });
+    cli_config::write_requested_exports(&cli_lossy).unwrap_or_else(|e| {
+        eprintln!("Configuration export error: {e}");
+        std::process::exit(2);
+    });
+    if cli_lossy.dump_schema.is_some() || cli_lossy.dump_resolved.is_some() {
+        return;
+    }
     if args.len() > 1 && args[1] == "--debug-pixels" {
         test::debug_pixels(&args[2], &args[3]);
         return;
@@ -191,8 +203,7 @@ fn main() {
         block_size: None,
         prediction_mode: crf::PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: cli_lossy.lossy.clone(),
         input_original_frames: false,
         user_metadata: Some(format!(
             "{} residual frames, {}x{}",

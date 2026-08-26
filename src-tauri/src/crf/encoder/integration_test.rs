@@ -56,8 +56,7 @@ mod integration_tests {
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
             adaptive_prediction: true,
-            lossy_quality: None,
-            lossy_tuning: None,
+            lossy: None,
             input_original_frames: false,
             user_metadata: None,
         };
@@ -94,8 +93,7 @@ mod integration_tests {
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
             adaptive_prediction: true,
-            lossy_quality: Some(quality),
-            lossy_tuning: None,
+            lossy: None,
             input_original_frames: true,
             user_metadata: None,
         };
@@ -169,8 +167,7 @@ mod integration_tests {
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
             adaptive_prediction: true,
-            lossy_quality: None,
-            lossy_tuning: None,
+            lossy: None,
             input_original_frames: false,
             user_metadata: Some("integration-test-1000".to_string()),
         };
@@ -213,8 +210,7 @@ mod integration_tests {
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
             adaptive_prediction: true,
-            lossy_quality: None,
-            lossy_tuning: None,
+            lossy: None,
             input_original_frames: false,
             user_metadata: Some("integration-test-2000".to_string()),
         };

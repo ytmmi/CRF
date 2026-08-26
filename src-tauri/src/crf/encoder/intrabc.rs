@@ -533,8 +533,7 @@ mod tests {
             block_size: None,
             prediction_mode: PredictionMode::Average,
             adaptive_prediction: true,
-            lossy_quality: None,
-            lossy_tuning: None,
+            lossy: None,
             input_original_frames: true,
             user_metadata: None,
         };

@@ -165,7 +165,7 @@ impl ResolvedConfig {
     /// - 压缩类型字符串 → [`CompressionType`]（非法值返回错误）；
     /// - 文件头模板：帧数、尺寸、位深、色彩格式、block_size、预测模式、索引标志；
     /// - `use_rct`：由分量数经 [`rct_applicable`] 解析；
-    /// - `quant_step`：由 `lossy_quality` 经 [`quant_step_from_quality`] 映射（None=0 无损）。
+    /// - `quant_step`：由 V2 resolved config 映射（`lossy=None` 时为 0 无损）。
     ///
     /// 批量和 streaming 都必须共用同一份解析结果（不得分别解析）。
     pub fn resolve(
@@ -173,7 +173,6 @@ impl ResolvedConfig {
         frames: &[ImageData],
     ) -> crate::crf::error::CrfResult<Self> {
         use crate::crf::core::color::rct::rct_applicable;
-        use crate::crf::core::config::lossy::quant_step_from_quality;
         use crate::crf::core::domain::{CompressionType, Flags};
         use crate::crf::error::CrfError;
 
@@ -215,10 +214,15 @@ impl ResolvedConfig {
         let use_rct = rct_applicable(components);
 
         // 有损量化步长（None=无损）
-        let quant_step = params
-            .lossy_quality
-            .map(quant_step_from_quality)
-            .unwrap_or(0);
+        let lossy = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
+            params.lossy.as_ref(),
+            crate::crf::core::config::lossy_v2::ResolveContext {
+                components: Some(components),
+                frame_count: Some(frames.len()),
+            },
+        )
+        .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
+        let quant_step = lossy.enabled.then_some(lossy.global_step).unwrap_or(0);
 
         Ok(ResolvedConfig {
             params: params.clone(),

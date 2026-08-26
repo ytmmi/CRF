@@ -29,8 +29,7 @@ fn test_decode_golomb_roundtrip() {
         block_size: None,
         prediction_mode: crate::crf::core::domain::PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: None,
     };
@@ -52,8 +51,7 @@ fn test_decode_exp_golomb_roundtrip() {
         block_size: None,
         prediction_mode: crate::crf::core::domain::PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: None,
     };
@@ -181,8 +179,7 @@ fn test_lossy_golden_sequence_roundtrip() {
         block_size: None,
         prediction_mode: crate::crf::core::domain::PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: Some(75),
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: true,
         user_metadata: None,
     };

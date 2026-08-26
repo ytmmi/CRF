@@ -8,7 +8,7 @@
 //!    （单元边界见 format/quant.rs::tests），本模块验证其经完整管线
 //!    （planar 三平面候选参与竞争）的端到端自洽。
 
-use crate::crf::core::config::lossy::LossyTuning;
+use crate::crf::LossyOptionsV2Builder;
 use crate::crf::core::domain::ColorFormat;
 use crate::crf::{self, EncodeParams, ImageData, PredictionMode};
 
@@ -47,8 +47,7 @@ fn base_params() -> EncodeParams {
         block_size: None,
         prediction_mode: PredictionMode::None,
         adaptive_prediction: true,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: true,
         user_metadata: None,
     }
@@ -69,8 +68,8 @@ fn p1_chroma_half_res_decoupled_from_step_q95() {
     // 解耦后 chroma_half_res=true 应真实进入 planar 候选。
     let originals = synthetic_sequence(3, 64, 48);
     let params = EncodeParams {
-        lossy_quality: Some(95),
-        ..base_params() // 默认 LossyTuning：chroma_half_res=true
+        lossy: Some(LossyOptionsV2Builder::preset(9500).chroma_sampling(crate::crf::core::config::lossy_v2::ChromaSampling::Cs420).build().unwrap()),
+        ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q95 编码失败");
     let result = crf::decode_from_bytes(&encoded).expect("解码失败");
@@ -87,13 +86,8 @@ fn p1_chroma_half_res_decoupled_from_step_q95() {
 fn p1_chroma_half_res_disabled_explicitly() {
     // 显式关闭半分辨率：参数独立可控性的另一面
     let originals = synthetic_sequence(3, 64, 48);
-    let tuning = LossyTuning {
-        chroma_half_res: false,
-        ..Default::default()
-    };
     let params = EncodeParams {
-        lossy_quality: Some(75),
-        lossy_tuning: Some(tuning),
+        lossy: Some(LossyOptionsV2Builder::preset(7500).chroma_sampling(crate::crf::core::config::lossy_v2::ChromaSampling::Cs444).build().unwrap()),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q75 编码失败");
@@ -107,7 +101,7 @@ fn p1_chroma_step_effective_end_to_end() {
     // 完整管线往返成功；误差有界（视觉无损语义不被破坏）
     let originals = synthetic_sequence(4, 56, 44);
     let params = EncodeParams {
-        lossy_quality: Some(90),
+        lossy: Some(LossyOptionsV2Builder::preset(9000).build().unwrap()),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q90 编码失败");

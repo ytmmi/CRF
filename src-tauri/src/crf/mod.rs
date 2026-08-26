@@ -29,9 +29,9 @@ pub use core::prediction::intra::apply_prediction;
 #[allow(unused_imports)]
 pub use format::{closed_loop_predict_quant_banded, satd_for_mode_sampled};
 #[allow(unused_imports)]
-pub use core::config::lossy::{
-    ChangeMaskMode, LossyTuning, MotionMode, PaletteMode, RateControl, ReferenceMode,
-    SceneCutMode,
+pub use core::config::lossy_v2::{
+    expert_panel_schema, ChromaSampling, ConfigError, LossyBase, LossyOptionsV2,
+    LossyOptionsV2Builder, ResolvedLossyReport,
 };
 #[allow(unused_imports)]
 pub use core::domain::{
@@ -63,8 +63,7 @@ pub fn encode(
         block_size: None,
         prediction_mode: PredictionMode::None,
         adaptive_prediction: false,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false,
         user_metadata: user_metadata.map(|s| s.to_string()),
     };

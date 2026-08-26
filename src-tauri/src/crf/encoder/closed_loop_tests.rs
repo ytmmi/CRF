@@ -50,8 +50,7 @@ fn base_params() -> EncodeParams {
         block_size: None,
         prediction_mode: PredictionMode::None,
         adaptive_prediction: true,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: true,
         user_metadata: None,
     }
@@ -80,7 +79,7 @@ fn mean_abs_error(restored: &[i32], original: &[i32]) -> f64 {
 fn p0_lossless_golden_pixel_exact_roundtrip() {
     // 无损管线回归锚点：两阶段改造不得改变无损产物语义
     let originals = synthetic_sequence(4, 48, 40);
-    let params = base_params(); // lossy_quality=None → 无损
+    let params = base_params(); // lossy=None → 无损
     let encoded = crf::encode_sequence(&originals, &params).expect("无损编码失败");
     let result = crf::decode_from_bytes(&encoded).expect("解码失败");
 
@@ -101,13 +100,8 @@ fn p0_lossy_golden_no_reference_drift() {
     // 后续帧残差必须相对本地重建 G_hat 生成。若存在参考失配，
     // 每帧还原误差都会包含完整的首帧误差场（系统性偏移不衰减）。
     let originals = synthetic_sequence(5, 48, 40);
-    let tuning = crate::crf::core::config::lossy::LossyTuning {
-        golden_lossless: false,
-        ..Default::default()
-    };
     let params = EncodeParams {
-        lossy_quality: Some(75), // 明显量化步长，使首帧误差可观
-        lossy_tuning: Some(tuning),
+        lossy: Some(crate::crf::LossyOptionsV2Builder::preset(7500).build().unwrap()),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("有损编码失败");
@@ -152,7 +146,7 @@ fn p0_q95_soft_first_frame_structural_closure() {
     // 具体率失真数值归 P1 标定。
     let originals = synthetic_sequence(3, 40, 32);
     let params = EncodeParams {
-        lossy_quality: Some(95),
+        lossy: Some(crate::crf::LossyOptionsV2Builder::preset(9500).reference_mode(crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden).build().unwrap()),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q95 编码失败");
@@ -175,17 +169,14 @@ fn p0_q95_soft_first_frame_structural_closure() {
 #[test]
 fn preset_explicit_equivalence() {
     // 规划 §7 第 10 步：预设(None→default)与显式配置(Some(default))逐字节一致
-    use crate::crf::core::config::lossy::LossyTuning;
     let originals = synthetic_sequence(4, 48, 40);
     let base = base_params();
     let preset_params = EncodeParams {
-        lossy_quality: Some(90),
-        lossy_tuning: None,
+        lossy: Some(crate::crf::LossyOptionsV2Builder::preset(9000).build().unwrap()),
         ..base.clone()
     };
     let explicit_params = EncodeParams {
-        lossy_quality: Some(90),
-        lossy_tuning: Some(LossyTuning::default()),
+        lossy: Some(crate::crf::LossyOptionsV2Builder::explicit_steps(512, 768).build().unwrap()),
         ..base
     };
     let enc_preset =

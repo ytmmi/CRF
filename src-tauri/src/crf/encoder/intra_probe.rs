@@ -289,7 +289,7 @@ mod tests {
 
         let components = 3usize;
         for qi in [95u8, 90, 75] {
-            let q_step = crate::crf::core::config::lossy::quant_step_from_quality(qi);
+            let q_step = (((100u16 - qi as u16) + 4) / 5).clamp(1, 20) as u8;
             println!("=== q{} (step={}) ===", qi, q_step);
             for (fi, frame) in frames.iter().enumerate().skip(1).take(3) {
                 let diff: Vec<i32> = frame

@@ -175,20 +175,16 @@
 规划来源：[lossy-tuning-interface-plan.md](lossy-tuning-interface-plan.md)
 实施记录：[optimization-review.md §10/§12/§17](optimization-review.md)
 
-> **重要**：V2 顶层模型（`LossyOptionsV2`/`ResolvedLossyReport`/`resolve_without_encoding`/builder/`validate`）**均未实施**。`EncodeParams` 仍是 V1 结构（`format/types.rs` L388）：
+> **V2 已实施**：`EncodeParams.lossy: Option<LossyOptionsV2>` 与旧 V1 字段并存于兼容期，
+> 但严格互斥；旧请求经 legacy revision 适配后进入相同 resolved/编码路径。核心实现位于
+> `core/config/lossy_v2/`，用户入口位于 `codec/config.rs` 与 `cli_config.rs`。
 > ```rust
 > pub struct EncodeParams {
->     pub compression_type: String,
->     pub block_size: Option<usize>,
->     pub prediction_mode: PredictionMode,
->     pub adaptive_prediction: bool,
+>     pub lossy: Option<LossyOptionsV2>,      // V2
 >     pub lossy_quality: Option<u8>,        // V1 质量档位
 >     pub lossy_tuning: Option<LossyTuning>, // V1 精细参数
->     pub user_metadata: Option<String>,
->     pub input_original_frames: bool,
 > }
 > ```
-> 已完成的是 V1 `LossyTuning` 的零散字段扩展，非 V2 接口正式化。
 
 ### V1 字段扩展（已完成）
 
@@ -214,13 +210,13 @@
 
 | # | 规划项 | 状态 | 说明 |
 |---|---|---|---|
-| 1 | 冻结 V2 字段命名 | ❌ | V2 未实施 |
-| 2 | `resolve_without_encoding()` | ❌ | 未实施 |
-| 3 | 旧接口兼容适配器 | ❌ | 未实施 |
-| 4 | 批量/streaming 共用解析 | ◐ 部分 | `fq_for_index` 共用，但非 V2 resolved config |
+| 1 | 冻结 V2 字段命名 | ✅ | `core/config/lossy_v2/types.rs` |
+| 2 | `resolve_without_encoding()` | ✅ | 含 warnings/ignored/fingerprint |
+| 3 | 旧接口兼容适配器 | ✅ | legacy revision 0；核心控制往返测试锁定 |
+| 4 | 批量/streaming 共用解析 | ✅ | `EncodeParams::normalize_lossy()` 为唯一内核映射入口 |
 | 5 | P0 闭环后开放 first_frame != Lossless | ❌ 否决 | P0✅，但 §16 实测放开为纯负优化，保持 Lossless |
-| 6 | 逐组接入参数 | ◐ 部分 | deadzone/chroma 已加 V1；感知/时间/首帧偏移未做 |
-| 7 | 公开实验工具命名空间 + UI 专家面板 | ❌ | 未实施 |
+| 6 | 逐组接入参数 | ◐ 部分 | V2 控制面完整；现有内核可表达项已适配，新增算法字段继续分阶段接入 |
+| 7 | 公开实验工具命名空间 + UI 专家面板 | ✅ | 严格 JSON + CLI + `expert_panel_schema()`；前端源码尚不存在 |
 
 ---
 

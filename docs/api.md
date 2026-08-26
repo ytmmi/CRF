@@ -102,8 +102,47 @@ pub fn encode_crf(
   compressionType: 'golomb-rice' | 'exp-golomb' | 'transform';
   blockSize?: number;      // 变换块大小（仅 transform 模式）
   userMetadata?: string;   // 用户自定义元数据（最多40字节）
+  lossy?: LossyOptionsV2;  // 唯一有损配置入口；省略即无损
 }
 ```
+
+### 有损 V2 配置 API
+
+Rust/SDK 提供：
+
+```rust
+LossyOptionsV2Builder::preset(9650)
+    .chroma_sampling(ChromaSampling::Cs420)
+    .first_frame_offset(50)
+    .effort(8)
+    .build()?;
+
+options.validate()?;
+let report = options.resolve_without_encoding()?;
+let canonical_json = crf::codec::resolve_lossy_json(request_json)?;
+let panel_schema = crf::codec::lossy_expert_schema_json()?;
+```
+
+JSON 支持文档中的人类小数字段（例如 `quality: 96.5`、`lumaStep: 1.375`），解析时先以
+十进制定点转换，再进入 V2；canonical/resolved JSON 使用带单位后缀的整数，例如
+`qualityX100: 9650`。未知字段、超精度小数和范围错误均明确报错。
+
+当前 CLI 用户入口：
+
+```text
+--lossy-quality 96.50
+--target-bytes 3370055
+--first-frame-quality-offset 0.50
+--chroma-sampling auto|444|422|420
+--perceptual-strength 0..200
+--effort 0..10
+--expert-config path/to/lossy-v2.json
+--dump-resolved-config path/to/resolved.json
+--dump-expert-schema path/to/panel-schema.json
+```
+
+仓库当前没有 React/Tauri 前端实现；`lossy_expert_schema_json()` 提供高级/实验面板的字段、
+单位、范围、枚举选项与影响说明，后续前端不得复制另一份默认和校验逻辑。
 
 **返回值**：`Vec<u8>` - 编码后的 CRF 文件数据
 

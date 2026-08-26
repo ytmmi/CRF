@@ -18,6 +18,7 @@
 //!
 //! 参考：[编解码器分层重构规划](../../../../docs/codec-architecture-refactor-plan.md) §4.1 / §5.1
 
+pub mod config;
 pub mod decode;
 pub mod encode;
 pub mod error;
@@ -29,4 +30,6 @@ pub use decode::{decode_from_bytes, decode_from_reader, DecodeRequest};
 pub use encode::{encode, encode_to_writer, EncodeRequest, EncodeReport};
 
 // 对外错误类型（公共 API 面）
+#[allow(unused_imports)]
+pub use config::{lossy_expert_schema_json, resolve_lossy_json};
 pub use error::CodecError;

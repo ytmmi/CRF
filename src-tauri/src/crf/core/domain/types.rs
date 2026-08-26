@@ -407,15 +407,10 @@ pub struct EncodeParams {
     /// 启用后编码器对每帧独立评估各候选预测模式的残差代价，
     /// 选出最优模式并在帧头记录；解码端自动跟随帧头指示。
     pub adaptive_prediction: bool,
-    /// 有损压缩质量（1~100）；None = 无损（默认，与有损路径并行可选）
-    ///
-    /// Some(q) 时启用残差死区量化，量化步长
-    /// `Q = clamp((100 − q + 4) / 5, 1, 20)`：q≥96 时 Q=1（近无损），
-    /// q 越低步长越大、压缩率越高、失真越大。
-    /// 有损模式下条带/三平面/调色板候选被跳过，仅保留帧级 top-2 与 CABAC。
-    pub lossy_quality: Option<u8>,
-    /// 真有损精细调参（None → 全默认：色度×130%、关键帧间隔 10、无死区偏置）
-    pub lossy_tuning: Option<crate::crf::core::config::lossy::LossyTuning>,
+    /// 唯一有损配置入口。None = 无损管线。
+    pub lossy: Option<crate::crf::core::config::lossy_v2::LossyOptionsV2>,
+    /// @deprecated 仅为源码迁移期保留；新调用必须使用 `lossy`。
+    /// @deprecated 仅为源码迁移期保留；新调用必须使用 `lossy`。
     /// 用户自定义元数据
     pub user_metadata: Option<String>,
     /// 输入序列语义（默认 false = 兼容旧约定：frames[0] 为首帧原图、frames[1..] 为预差分残差帧）

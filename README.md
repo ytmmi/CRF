@@ -171,6 +171,22 @@ EXE。该 DLL 只使用 NVIDIA 驱动提供的 `nvcuda.dll`，目标机无需 CU
    - 选择输出目录
    - 获得与原始完全一致的差分图序列
 
+### 有损 V2 命令行配置
+
+常用精细参数可直接传入；完整专家参数使用版本化 JSON：
+
+```bash
+cd src-tauri
+cargo run -- --lossy-quality 96.50 --chroma-sampling 420 --effort 8
+cargo run -- --expert-config path/to/lossy-v2.json
+cargo run -- --lossy-quality 96.50 --dump-resolved-config resolved.json
+cargo run -- --dump-expert-schema panel-schema.json
+```
+
+`--expert-config` 同时接受直接的 V2 对象和 `{ "lossy": { ... } }` 包装格式。V2 是唯一
+有损配置接口；详细字段、固定点单位和校验规则见
+[API 文档](docs/api.md)。
+
 ### 快捷键
 
 | 快捷键 | 功能 |
@@ -316,11 +332,11 @@ A: 针对二次元插画差分数据（大面积不变 + 平坦色块），自�
 | 编码速度（q90） | ≈ 800ms/帧（自适应全候选） | PNG1000 14 帧 |
 | 变换域候选 | frame_type=8（预测后变换 + CABAC 系数编码） | v1.14 正式格式化，已接入竞争 |
 
-**双模式说明**：无损与真有损并行可选——`EncodeParams.lossy_quality: Option<u8>`
-控制档位（None=无损），`lossy_tuning` 提供色度量化偏置、关键帧间隔、
-死区偏置三组精细参数（参考 JPEG/AVIF/WebP/H.264 的率失真工具设计）。
+**双模式说明**：无损与真有损并行可选——`EncodeParams.lossy: Option<LossyOptionsV2>`
+是唯一入口（None=无损），V2 提供质量预设、显式量化、色度、感知、首帧、时间参考与
+序列码率控制（参考 JPEG/AVIF/WebP/H.264 的率失真工具设计）。
 
-**噪声感知**（v1.8，`lossy_tuning.noise_adaptive=true` 默认关闭）：面向
+**噪声感知**（V2 `perceptual.noiseMode`）：面向
 JPEG/WebP 有损源的差分压缩增强。按条带估计残差失真水平，两级生效：
 ①零中心性门控软阈值（系统性偏移场与两极化结构场自动零介入）；
 ②闭环 per-band 自适应步长（死区宽度跟随局部失真水平）。解码端无感、

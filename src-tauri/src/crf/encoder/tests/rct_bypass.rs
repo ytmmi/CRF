@@ -10,8 +10,7 @@ fn mk_rgb_adaptive_params() -> EncodeParams {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: true,
         user_metadata: None,
     }
@@ -182,8 +181,7 @@ fn test_rct_first_frame_lossy_smoke() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: Some(75),
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: true,
         user_metadata: None,
     };
@@ -231,8 +229,7 @@ fn test_rct_first_frame_bypass_path_c() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy_quality: None,
-        lossy_tuning: None,
+        lossy: None,
         input_original_frames: false, // 路径 C
         user_metadata: None,
     };

@@ -40,10 +40,8 @@ pub struct StreamingEncoder {
     params: EncodeParams,
     compression_type: CompressionType,
     header: CrfHeader,
-    tuning: crate::crf::core::config::lossy::LossyTuning,
+    tuning: crate::crf::core::config::lossy_v2::KernelLossyConfig,
     lossy_quant_step: Option<u8>,
-    /// 原始质量档位（q95 判定用）
-    lossy_quality_raw: Option<u8>,
     #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
     interval: usize,
 
@@ -81,12 +79,13 @@ impl StreamingEncoder {
         header.block_size = params.block_size.unwrap_or(8) as u16;
         header.prediction_mode = params.prediction_mode;
 
-        let tuning = crate::crf::core::config::lossy::LossyTuning::resolve(params.lossy_tuning.as_ref());
-        let interval = tuning.keyframe_interval.max(1) as usize;
-        let lossy_quant_step = params
-            .lossy_quality
-            .map(crate::crf::core::config::lossy::quant_step_from_quality);
-        let lossy_quality_raw = params.lossy_quality;
+        let tuning = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
+            params.lossy.as_ref(),
+            crate::crf::core::config::lossy_v2::ResolveContext::default(),
+        )
+        .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
+        let interval = tuning.anchor_interval.max(1) as usize;
+        let lossy_quant_step = tuning.enabled.then_some(tuning.global_step);
 
         Ok(StreamingEncoder {
             params: params.clone(),
@@ -94,7 +93,6 @@ impl StreamingEncoder {
             header,
             tuning,
             lossy_quant_step,
-            lossy_quality_raw,
             interval,
             golden_rgb: None,
             body: Vec::new(),
@@ -326,10 +324,7 @@ impl StreamingEncoder {
         //    golden_lossless=false（批量路径允许有损首帧）；
         //  - 旧实现无锚点帧间隔（keyframe_interval）步长折算。
         // 现统一委托 session::batch::fq_for_index，语义与 batch 完全一致。
-        let q95 = self
-            .lossy_quality_raw
-            .map(crate::crf::core::config::lossy::is_q95_perceptual)
-            .unwrap_or(false);
+        let q95 = self.tuning.q95_perceptual;
         super::session::batch::fq_for_index(
             i,
             self.lossy_quant_step,
@@ -386,7 +381,7 @@ fn fq_band_steps(
     width: usize,
     height: usize,
     components: usize,
-    tuning: &crate::crf::core::config::lossy::LossyTuning,
+    tuning: &crate::crf::core::config::lossy_v2::KernelLossyConfig,
 ) -> Vec<u8> {
     estimate_band_quant_steps(
         eff_pixels,

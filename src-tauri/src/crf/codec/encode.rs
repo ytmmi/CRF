@@ -36,6 +36,8 @@ pub struct EncodeReport {
     pub resolved: crate::crf::core::contract::ResolvedConfig,
     /// 编码过程中的告警（如 backend 回退、候选裁剪等）
     pub warnings: Vec<String>,
+    /// V2 有损配置解析报告；无损请求为 None。
+    pub lossy: Option<crate::crf::core::config::lossy_v2::ResolvedLossyReport>,
 }
 
 /// 编码 facade 入口
@@ -43,6 +45,22 @@ pub struct EncodeReport {
 /// 转发到 `crate::crf::encoder::encode_sequence`（迁移期旧入口保持生产）。
 /// P3 之后旧入口将反转为转发到本函数。
 pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError> {
+    let lossy = request
+        .params
+        .lossy
+        .as_ref()
+        .map(|v| {
+            v.resolve_for_input(crate::crf::core::config::lossy_v2::ResolveContext {
+                components: request.frames.first().map(|f| f.color_format.component_count()),
+                frame_count: Some(request.frames.len()),
+            })
+        })
+        .transpose()
+        .map_err(|e| super::CodecError::InvalidInput(e.to_string()))?;
+    let warnings = lossy
+        .as_ref()
+        .map(|r| r.warnings.iter().map(|w| w.message.clone()).collect())
+        .unwrap_or_default();
     // 解析并冻结不可变配置（批量和 streaming 共用同一解析逻辑）
     let resolved = crate::crf::core::contract::ResolvedConfig::resolve(&request.params, &request.frames)
         .map_err(super::CodecError::from)?;
@@ -55,7 +73,8 @@ pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError>
     Ok(EncodeReport {
         bytes,
         resolved,
-        warnings: Vec::new(),
+        warnings,
+        lossy,
     })
 }
 
