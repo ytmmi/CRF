@@ -1,6 +1,7 @@
 //! bitstream —— 格式契约与容器
 //!
 //! 规划文档 §3.3。包含：
+//! - constants.rs：码流格式常量（原 format/constants.rs，P4 迁入）
 //! - version.rs：bitstream version/feature bits
 //! - header.rs：Header/Flags 编解码
 //! - index.rs：FrameIndexEntry
@@ -15,10 +16,8 @@
 //! 它应能在不加载完整图像的情况下解析元数据、索引和 payload 范围，
 //! 并提供安全的 bounded slice/reader。
 //!
-//! **P0 状态**：空骨架。现有 `format/header.rs`、`format/constants.rs`、
-//! `format/types.rs` 的 `CrfHeader`/`FrameHeader`/`FrameIndexEntry`/`Flags`
-//! 将在 P2 迁移到本模块。迁移期通过 re-export 保持兼容。
+//! **迁移状态（P4）**：constants 模块已迁入（原 format/constants.rs）。
+//! format/constants.rs 保留为 pub use 转发层。
 
-#![allow(dead_code)]
-
-// P2 阶段迁入子模块（当前为空声明）
+/// constants：码流格式常量（P4 迁入，原 format/constants.rs）
+pub mod constants;

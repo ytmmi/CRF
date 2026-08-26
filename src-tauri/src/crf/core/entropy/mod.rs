@@ -24,3 +24,5 @@
 
 /// context：上下文模型定义和更新契约（CtxModel/CtxIds/MaTree）
 pub mod context;
+/// scan：Zigzag 扫描与符号编码（P4 迁入，原 format/zigzag.rs）
+pub mod scan;
