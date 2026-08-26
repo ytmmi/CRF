@@ -111,6 +111,9 @@ crf-viewer/
 |   +-- api.md                    # API 接口文档
 |   +-- crf-format.md             # CRF 格式规范
 |   +-- development.md            # 开发指南
+|   +-- project-standards.md      # 强制项目开发、算法与构建标准
+|   +-- codec-architecture-refactor-plan.md # 编解码器分层重构规划
+|   +-- performance-optimization-plan.md # CPU/GPU 性能规划
 |   +-- user-guide.md             # 用户手册
 +-- src/                          # 前端源码 (React)
 |   +-- components/               # UI 组件

@@ -5,6 +5,10 @@
 > [《CRF 项目开发、算法与构建标准》](project-standards.md)为强制准则；行为现状仍须
 > 以代码和当前格式规范核对。
 
+当前文档中的 `crf/encoder.rs`、`crf/decoder.rs` 等结构图是早期概览，不代表目标实现
+边界。编码器/解码器的正式分层、公共核心、容器层、帧管线、参考状态和迁移顺序以
+[《CRF 编码器/解码器分层架构重构规划》](codec-architecture-refactor-plan.md)为准。
+
 ## 目录
 
 - [系统概述](#系统概述)

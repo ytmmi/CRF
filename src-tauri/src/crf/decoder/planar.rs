@@ -69,13 +69,6 @@ pub(crate) fn decode_planar(data: &[u8], header: &CrfHeader) -> CrfResult<Vec<i3
 
     let mut planes: Vec<Vec<i32>> = Vec::with_capacity(3);
     let mut offset = 2;
-    eprintln!(
-        "DBG planar: half={} cw={} ch={} data_len={}",
-        half_res,
-        cw,
-        ch,
-        data.len()
-    );
 
     for plane_idx in 0..3 {
         if offset + 4 > data.len() {
@@ -92,15 +85,6 @@ pub(crate) fn decode_planar(data: &[u8], header: &CrfHeader) -> CrfResult<Vec<i3
             data[offset + 2],
             data[offset + 3],
         ]) as usize;
-        eprintln!(
-            "DBG sub{}: raw_len={} bytes=[{:02x} {:02x} {:02x} {:02x}]",
-            plane_idx,
-            sub_len,
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3]
-        );
         offset += 4;
 
         if offset + sub_len > data.len() {
@@ -123,7 +107,6 @@ pub(crate) fn decode_planar(data: &[u8], header: &CrfHeader) -> CrfResult<Vec<i3
         }
         let sub_frame = decode_frame(&data[offset..offset + sub_len], &sub_header)?;
         planes.push(sub_frame.pixels);
-        eprintln!("DBG plane {}: {} px", plane_idx, planes[plane_idx].len());
         offset += sub_len;
     }
 

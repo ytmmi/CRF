@@ -186,6 +186,8 @@ crf-viewer/
 │   ├── crf-format.md             # CRF 格式规范
 │   ├── development.md            # 开发指南
 │   ├── project-standards.md      # 强制项目开发、算法与构建标准
+│   ├── codec-architecture-refactor-plan.md # 编解码器分层重构规划
+│   ├── performance-optimization-plan.md # CPU/GPU 性能优化规划
 │   ├── first-frame-optimization-plan.md # 有损目标预设与首帧优化规划
 │   ├── lossy-tuning-interface-plan.md   # 有损精细参数接口规划
 │   └── user-guide.md             # 用户手册
@@ -235,6 +237,8 @@ crf-viewer/
 
 - [CRF 格式规范文档](docs/crf-format.md)
 - [项目开发、算法与构建标准](docs/project-standards.md)
+- [编解码器分层重构规划](docs/codec-architecture-refactor-plan.md)
+- [CPU/GPU 性能优化规划](docs/performance-optimization-plan.md)
 - [API 接口文档](docs/api.md)
 - [技术架构文档](docs/architecture.md)
 - [有损目标预设与首帧优化规划](docs/first-frame-optimization-plan.md)

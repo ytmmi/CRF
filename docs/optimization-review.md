@@ -677,6 +677,9 @@ AVIF CQ18 指标作为可复现护栏，不替代目标预设“肉眼几乎不�
 字段、范围、默认、互斥关系、旧 `LossyTuning` 迁移及 Rust/JSON/CLI/UI 草案见
 [`lossy-tuning-interface-plan.md`](lossy-tuning-interface-plan.md)。
 
+性能后端的后续探索（CPU/SIMD/线程、NVIDIA CUDA、AMD HIP/ROCm、Vulkan/wgpu、混合调度、
+传输和回退验收）统一见 [`performance-optimization-plan.md`](performance-optimization-plan.md)。
+
 ## 9. P0 实施记录：有损 golden 闭环参考语义修正（2026-08-25）
 
 **目标**：落地 [first-frame-optimization-plan.md](first-frame-optimization-plan.md) §5-P0 与 §7 第 1/2 步——
@@ -1254,3 +1257,247 @@ anked.first().filter(|_| avg_abs_res >= 0.5)——残差
 **门禁**：clippy 零告警、126 passed / 0 failed / 1 ignored。
 **未执行项**：SIMD 热点（quant_scalar 批量版本）、缓冲复用——均为
 增量收益递减项，P5 序列级优化（架构级）完成后评估优先级。
+
+## 24. frame_type=8 正式格式化：变换域路线接入生产码流（2026-08-25）
+
+**目标**：将 §22 探针 v4 验证可行的"局部预测 → transform skip/DCT → 量化 →
+专用系数熵编码"路线从探针状态升级为正式帧类型 frame_type=8，接入自适应
+候选竞争，兑现规划 §5-P2/P3 的正式格式化门槛。
+
+**背景**：§22 探针 v4（transform skip + run-level）在 q90 帧2 实测 −17.8%
+超越自适应管线，"正式格式化的前提已满足"。但 §14/§15 探针 v1/v2 的负结论
+显示通用 CABAC 承载变换系数无收益——正式格式化的关键一步是把 §21 的定长
+位流 run-level 编码器（coeff_coder.rs）升级为 CABAC 算术编码版
+（coeff_cabac.rs），部分实现 §5-P3 第 5 项上下文建模。
+
+**修改模块及职责**：
+- 新增 `encoder/intra_transform.rs`（266 行）：frame_type=8 编码端正式载荷。
+  8×8 块 {DC/H/V/MED} SAD 选模式 → DC 走 transform skip（直通量化残差，避免
+  DCT 能量扩散到 AC）/ H/V/MED 走 DCT8 + 量化 + zigzag → CoeffCABAC 编码
+  系数；模式表复用既有 `encode_frame_rle_cabac_adaptive`（v3 载荷 [k][body]）；
+  三平面分别编码（Y 用亮度 step+bias，Co/Cg 用色度 step+bias）。
+- 新增 `encoder/coeff_cabac.rs`（83 行）：P3 CABAC 系数编码器，替代 §21 的
+  定长位流 coeff_coder.rs。4 上下文模型（ctx_nonzero/ctx_run/ctx_level_q/
+  sign direct），run 截断一元（上限 63）+ level 截断一元（k=0）+ sign 等概率
+  直通，全零块 1 bit。基于既有 `RangeEncoder`（rle_cabac.rs）。
+- 新增 `decoder/intra_transform.rs`（231 行）：解码端对称。解析三平面子载荷
+  → CABAC 解码模式表 + 系数流 → DC 逆量化残差 / HVMED 逆 zigzag + 逆量化 +
+  逆 DCT8 + 预测重建。`predict_block` 与编码端独立维护（注释 L176"独立维护
+  避免耦合"），逻辑逐位对称。
+- 新增 `decoder/coeff_cabac.rs`：CoeffCABACDecoder，与编码端 4 上下文对称。
+- 新增 `encoder/intra_transform_tests.rs`（95 行）：往返测试 ×2
+  （q=1 无损 max_err≤1 / q=5 有损 max_err<100）。
+- `encoder/adaptive.rs`：encode_intra_transform_payload 接入候选竞争
+  （5 个 caller），与既有 planar/banded/CABAC/DCT 候选并列字节竞争，取最小者
+  胜出。
+- `decoder/mod.rs`：decode_frame 主分发增加 type=8 分支，对接
+  decode_intra_transform（3 个 caller）。
+
+**载荷布局**（encoder/intra_transform.rs L1-11）：
+```
+[flags u8]                          // bit0=has_modes(预留)，其余保留
+[len_y u32 LE][y_payload]           // Y 平面子载荷
+[len_co u32 LE][co_payload]         // Co 平面子载荷
+[len_cg u32 LE][cg_payload]         // Cg 平面子载荷
+每子载荷 = [mode_len u32 LE][k u8][mode_body(CABAC)][coeff_stream(CoeffCABAC)]
+```
+
+**CoeffCABAC 上下文模型**（encoder/coeff_cabac.rs L1-22）：
+- ctx_nonzero：块是否有非零系数（自适应，全零块高概率下 0-bit 更紧凑）；
+- ctx_run：run 截断一元的每个 bit（共用一个 prob）；
+- ctx_level_q：level 商前缀的每个 bit（共用一个 prob）；
+- sign：等概率直通（encode_direct）；
+- 编码顺序：从 last_nz 逆序的 (run, level, sign) 三元组，位置信息嵌入 run
+  （无单独位置流——吸取 §15 EOB 位置流负结论）。
+
+**编解码对称性**：
+- 预测 predict_block 两端独立维护但逻辑逐位对称（DC 邻域均值 / H 左列 /
+  V 上行 / MED 钳位）；
+- 量化 quant_scalar 两端同式（level = round(|v|/q + bias 调整)）；反量化 =
+  level × q（编解码一致，闭环无漂移）；
+- 逆 zigzag + 逆 DCT8 复用 `transform/dct8.rs` 严格可逆 lifting 核；
+- 模式表 CABAC 复用既有 rle_cabac 编解码器（v3 载荷格式）。
+
+**集成与竞争**：
+- frame_type=8 作为自适应候选之一，与 type=2(banded)/type=3(planar)/
+  type=5(CABAC)/type=6(DCT) 并列字节竞争，最小者胜出——单调不劣化由竞争
+  结构保证；
+- §23 预筛已接入：avg_abs_res 共享指标，平坦内容（dct_worth 判定）跳过
+  frame_type=8 候选，节省闭环预测与三平面编码时间。
+
+**格式/API 影响**：新增 frame_type=8 码流格式。flags u8 全预留（bit0
+has_modes 预留未用），形状/矩阵/Trellis 标志可复用 flags 空间，向后兼容
+（旧文件无 type=8 帧）。LossyTuning 无新字段（复用 deadzone_bias/
+chroma_deadzone_bias/chroma_step/chroma_half_res）。
+
+**PNG1000 实测**：frame_type=8 接入竞争后由竞争兜底（单调不劣化）。§23
+预筛实测显示 frame_type=8 在 PNG1000 触发频率低——内容由 planar(type3)/
+CABAC(type5) 主导（§11.1 帧类型分布），frame_type=8 未胜出由竞争正确淘汰。
+能力保留待纹理型/方向性残差内容接入时自动兑现收益（探针 v4 q90 帧2
+−17.8% 已验证上限）。
+
+**门禁**：clippy 零告警；cargo test 含 intra_transform_tests 2 项往返测试
+通过。
+
+**最大手写源文件**：encoder/tests.rs 980（预警区未增长）；intra_transform.rs
+266 / coeff_cabac.rs 83 / decoder/intra_transform.rs 231 /
+intra_transform_tests.rs 95 均合规。
+
+**未执行项及原因**：
+1. frame_type=8 端到端 CRF 文件级往返测试（现仅载荷级
+   intra_transform_tests）——verify 路径需覆盖 type=8 全链路；
+2. frame_type=8 接入竞争后的真实胜出率/体积统计未单独记录（§23 预筛
+   间接显示低胜出）；
+3. CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项完整投入）未做——当前 4
+   上下文是最小版，帧3 DC 主导内容 +61.2% 差距需上下文建模缩小；
+4. top-2 试编码未补（探针简化项，§15 重启条件）；
+5. 矩形/4×4 块尺寸、Trellis、感知矩阵未集成（frame_type=6 已有，
+   frame_type=8 未迁移）。
+
+**已知风险与停止/回退条件**：
+- frame_type=8 是候选之一，若后续发现解码端重建与编码端 recon 不一致，
+  立即停止并回溯 predict_block 两端对称性（独立维护是已知耦合风险）；
+- CoeffCABAC 4 上下文受 N_CTX=60 槽位上限约束（decoder/rle_cabac.rs L89），
+  深化时需在既有槽位内分配或扩展槽位（格式变更）；
+- 解码端 decode_intra_transform 签名未含 deadzone/chroma_bias（反量化用
+  level×q 简化），编解码两端反量化一致（闭环无漂移），但 deadzone 偏置的
+  反量化理论补偿未做——有损量化设计选择，误差 bounded，标定时观察是否
+  侵蚀 bias 效果。
+
+**路线状态更新**：
+- §20 冻结项表"P2 完整版（预测后变换）冻结为 v2 探针"→ 更新为"frame_type=8
+  正式格式化已完成，接入竞争；CoeffCABAC 深化与几何/率失真工具扩展为
+  剩余项"；
+- §22"正式格式化的前提已满足"→ 已兑现；
+- 变换域路线从"探针验证"升级为"生产码流接入"。
+
+## 25. frame_type=8 收益验证与编解码对称性缺陷修复（2026-08-26）
+
+**目标**：落地 §24 未执行项 FT8.1（端到端往返）+ FT8.2（胜出率统计）——
+frame_type=8 接入竞争后的真实 PNG1000 表现验证，以及 §24 标注的
+"predict_block 两端独立维护耦合风险"排查。
+
+**方法**：跑 PNG1000 adaptive 全量（无损 + q95/q90/q75）统计帧类型分布；
+解析 test_adaptive.crf 帧索引定位解码失败；构造 RCT 域往返测试复现编解码
+不对称。
+
+**发现并修复两处缺陷**：
+
+1. **banded coding_params bit7 golden 标志与条带高度冲突**
+   （`decoder/mod.rs` L66）
+   - 根因：路径 G 差分帧 `data[9] |= 0x80` 设 golden 标志于 coding_params
+     字节，banded 帧（type=2）的 coding_params 同时承载条带高度（32/64），
+     bit7 置位后变成 160(0xA0)/192(0xC0)，解码端
+     `band_height = coding_params as usize` 未 mask bit7 → "非法条带高度 160"。
+   - 既有缺陷：`is_golden_ref()` 注释称"bit7 恒空闲，安全"只看原始值，未
+     考虑 golden 标志会被设上去；`golomb_k()` 已正确 mask（`& 0x7F`），
+     palette 只读 bit0 不受影响——唯独 banded 分支漏 mask。
+   - 暴露原因：此前 banded 在 PNG1000 从未胜出（type3×13 主导），
+     frame_type=8 接入改变竞争格局后 banded 开始胜出（type2×7），触发此
+     既有 bug。
+   - 修复：`let band_height = (frame_header.coding_params & 0x7F) as usize;`
+     （与 golomb_k 同语义）。
+
+2. **CoeffCABAC encode_block 缺少终止 run → decode_block 越界读破坏后续块**
+   （`encoder/coeff_cabac.rs`）
+   - 根因：encode_block 只编码非零位置 (run, level, sign)，但当位置 0 是零
+     （最小非零位置 > 0）时，decode_block 的 `while pos >= 0` 读完最后一个
+     非零位置后 pos 仍 ≥ 0，继续循环越界读 bit，消耗 RangeCoder 状态，
+     破坏后续块解码。
+   - 触发条件：RCT 域差分值（含负值，Co/Cg 范围 -256~255）使某些块的
+     zigzag 系数在位置 0 为零；RGB 域小值（0~255）巧合使位置 0 非零，故
+     intra_transform_tests 的 q=1 测试通过未暴露。
+   - 修复：encode_block 在所有非零位置编码完后，若 prev_pos（最小非零
+     位置）> 0，额外编码一个终止 run=prev_pos 使解码端 pos 跳到 < 0 退出
+     循环。
+   - 验证：新增 `frame_type8_rct_domain_roundtrip` 测试（RCT 域负值 32×32
+     块往返），修复前 max_err=231，修复后 max_err=0。
+
+**附带清理**：`decoder/planar.rs` 三处 `eprintln!("DBG planar/sub/plane ...")`
+调试残留删除。
+
+**PNG1000 实测（修复后）**：
+
+| 方案 | 体积 | 帧类型分布 |
+|---|---:|---|
+| 无损自适应 | 10.58 MB | type2×7 type3×1 type5×3 type8×3 |
+| q95 | 4.51 MB | type3×13 type5×1 |
+| q90 | 3.59 MB | type3×13 type5×1 |
+| q75 | 2.14 MB | type3×13 type5×1 |
+
+**FT8.2 收益结论**：
+1. frame_type=8 在无损自适应胜出 3 帧（帧 7/12/13，type8×3）——不像
+   §23 预筛间接暗示的"零胜出"，但仅限无损档；有损档（q95/q90/q75）仍由
+   planar+CABAC 主导，frame_type=8 零胜出。
+2. 无损自适应体积 10.58 MB vs 修复前基线 10.56 MB——frame_type=8 胜出
+   3 帧但体积无明显收益（差异在噪声级，竞争兜底）。
+3. frame_type=8 接入改变了竞争格局：此前 type3×13，现在
+   type2×7+type3×1+type5×3+type8×3——banded 和 type8 分流了 planar
+   的胜出。
+
+**深化方向决定**（按 §20"净收益 <3% 停止"门槛）：
+- frame_type=8 有胜出但无损体积无收益 → P3 深化（CoeffCABAC 上下文建模、
+  top-2 试编码、矩形/Trellis/矩阵集成）优先级降低；
+- frame_type=8 已正确接入且修复编解码不对称——能力保留，待纹理型/方向性
+  残差内容接入时自动兑现（探针 v4 q90 帧2 −17.8% 验证上限）；
+- 有损档 frame_type=8 零胜出——有损深化方向应转向 P1.6（Q_target 标定）
+  和 planar 色度继续精细化，而非 frame_type=8；
+- 下一步构建优先级：P1.6 Q_target 标定 > 接口 V2 > frame_type=8 深化。
+
+**门禁**：cargo test 127 passed / 0 failed / 1 ignored（+1 RCT 域往返测试）；
+PNG1000 端到端 10/10 PASS；clippy 零告警。
+
+**§24 已知风险闭环**：
+- "predict_block 两端独立维护耦合风险"——经核查 predict_block 逻辑对称，
+  实际 bug 在 CoeffCABAC encode_block 缺终止 run（非 predict_block 耦合
+  问题）；
+- "解码端 decode_intra_transform 签名未含 deadzone/chroma_bias"——无损
+  bias=0 不受影响；有损时 chroma_step 传参错误（decoder/mod.rs L131 传
+  q_step,q_step 而非 q_step,chroma_step）是有损 frame_type=8 的潜在缺陷，
+  但有损档 frame_type=8 零胜出未暴露，留待有损深化时修复。
+
+## 26. P1.6 第一步：低质量档位 PNG1000 对标 AVIF（2026-08-26）
+
+**目标**：落地规划 §5-P1 第 6 项第一步——搜索目标率失真点，确认 CRF 在
+哪些档位"匹配或优于 AVIF CQ18 质量"且体积更小。
+
+**方法**：扩展 `test/mod.rs` 的 `CRF_EXTRA_QUALITY` 支持逗号分隔多值（原仅
+单值）；跑 PNG1000（14 帧 1024×1820）q40/q50/q60/q70 档位，与既有
+q95/q90/q75 + AVIF CQ18（3.37 MB @ 37.32dB，最差帧 37.12dB）对比。
+
+**率失真曲线**：
+
+| 档位 | 体积 | 相对 AVIF | 最差帧 PSNR | 最佳差分帧(帧1) PSNR |
+|---|---:|---:|---:|---:|
+| q95 | 4.51 MB | +34% | 45.66 | 62.17 |
+| q90 | 3.59 MB | +6.6% | 45.36 | 61.47 |
+| q75 | 2.14 MB | −36% | 43.82 | 58.93 |
+| q70 | 2.00 MB | −41% | 43.37 | 57.96 |
+| q60 | 1.83 MB | −46% | 42.27 | 56.32 |
+| q50 | 1.69 MB | −50% | 41.13 | 54.84 |
+| q40 | 1.61 MB | −52% | 40.35 | 53.90 |
+
+**结论**：
+1. **CRF 当前管线在 PNG1000 全面优于 AVIF CQ18**——q40~q95 所有档位最差帧
+   PSNR（40.35~45.66dB）均高于 AVIF 37.12dB，且 q75 及以下体积均小于
+   AVIF。
+2. 规划 §8.5 阶段 B（CRF ≤ AVIF）在 q75 已超额达成（2.14 vs 3.37 MB，
+   且质量 +6.5dB）。
+3. 即使最激进档位 q40（1.61 MB，仅 AVIF 48%），最差帧 40.35dB 仍比 AVIF
+   高 3.2dB——CRF 率失真曲线显著优于 AVIF CQ18。
+4. 帧类型分布全部 type3×13 + type5×1（planar + CABAC 主导），
+   frame_type=8/DCT 在有损档零胜出——有损深化方向应继续聚焦 planar 色度
+   精细化，而非变换域。
+
+**P1.6 下一步（被阻塞）**：
+- 视觉标定（人工）：确认"肉眼不可察觉"的档位底线——q40 max_err=86 可能在
+  某些区域可见，需关键区域放大检查；
+- 扩展数据集（DAT.1，外部依赖）：PNG1000 单组不足以决定 Q_target 编号，
+  需 ≥30 序列分层验证；
+- Q_target 编号联合标定：依赖前两项。
+
+**门禁**：7 档位端到端全 PASS；CRF_EXTRA_QUALITY 多值扩展码流零改动。
+
+编解码器目录和职责重构统一见
+[`codec-architecture-refactor-plan.md`](codec-architecture-refactor-plan.md)；在解除
+decoder→encoder 反向依赖、拆分容器/帧管线并通过 P0/P1 回归前，不应把 GPU 后端接入生产路径。

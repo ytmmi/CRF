@@ -375,13 +375,15 @@ fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
         }
     }
     if let Ok(q) = std::env::var("CRF_EXTRA_QUALITY") {
-        if let Ok(qv) = q.trim().parse::<u8>() {
-            schemes.push(Scheme {
-                file: Box::leak(format!("test_lossy_q{}.crf", qv).into_boxed_str()),
-                mode: crf::PredictionMode::Average,
-                adaptive: true,
-                quality: Some(qv),
-            });
+        for part in q.split(',') {
+            if let Ok(qv) = part.trim().parse::<u8>() {
+                schemes.push(Scheme {
+                    file: Box::leak(format!("test_lossy_q{}.crf", qv).into_boxed_str()),
+                    mode: crf::PredictionMode::Average,
+                    adaptive: true,
+                    quality: Some(qv),
+                });
+            }
         }
     }
 

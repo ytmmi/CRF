@@ -89,6 +89,22 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     // 对 3 分量格式在空间预测之前先去除 RGB 通道相关性，
     // 使残差能量集中于亮度通道；纯整数运算、严格可逆。
     let components = first.color_format.component_count();
+    // INF.1 内存预检：batch 接口全帧驻留（RCT 后全帧 + G_hat + 编码产物 +
+    // planar 中间量），大图组会触发 allocator fail-fast panic。返回结构化错误
+    // 引导用户用 streaming 路径（CRF_STREAMING=1，内存 O(golden+单帧+码流)）。
+    // §13 发现组10（8500×5816×4帧 ~2.4GB）batch panic；1000 组（~310MB）正常。
+    let per_frame_bytes = first.width as usize * first.height as usize * components * 4;
+    let estimated_bytes = per_frame_bytes
+        .checked_mul(frame_count as usize)
+        .unwrap_or(usize::MAX);
+    const BATCH_MEM_LIMIT: usize = 1_500_000_000; // 1.5 GB 保守阈值
+    if estimated_bytes > BATCH_MEM_LIMIT {
+        return Err(CrfError::InvalidCodingParams(format!(
+            "batch 接口预估内存 {:.2} GB 超过 {:.1} GB 限制；大图组请用 streaming 路径（CRF_STREAMING=1）",
+            estimated_bytes as f64 / 1_000_000_000.0,
+            BATCH_MEM_LIMIT as f64 / 1_000_000_000.0,
+        )));
+    }
     let use_rct = crate::crf::format::rct_applicable(components);
     let encode_frames: Vec<ImageData> = if use_rct {
         frames

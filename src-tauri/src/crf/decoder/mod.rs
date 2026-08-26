@@ -63,7 +63,12 @@ pub fn decode_frame(data: &[u8], header: &CrfHeader) -> CrfResult<ImageData> {
     if header.compression_type == CompressionType::GolombRice && frame_header.frame_type == 2 {
         const BAND_HEIGHT_DEFAULT: usize = 32;
         const BAND_HEIGHT_ALT: usize = 64;
-        let band_height = frame_header.coding_params as usize;
+        // mask golden 标志位（bit7）—— banded 条带高度占低 7 位（32/64），
+        // bit7 由 is_golden_ref() 独立读取，与 golomb_k() 的 & 0x7F 同语义。
+        // 既有缺陷：banded 帧此前从未在 PNG1000 胜出（type3×13 主导），
+        // golden 标志位与条带高度共存于 coding_params 字节未暴露；
+        // frame_type=8 接入改变竞争格局后 banded 胜出触发此 bug。
+        let band_height = (frame_header.coding_params & 0x7F) as usize;
         if band_height != BAND_HEIGHT_DEFAULT && band_height != BAND_HEIGHT_ALT {
             return Err(CrfError::InvalidCodingParams(format!(
                 "非法条带高度 {}（合法值 32/64）",

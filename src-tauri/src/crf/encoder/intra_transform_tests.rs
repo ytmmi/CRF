@@ -92,4 +92,56 @@ mod tests {
         // q_step=5 → 最大误差 ≤ 5*64=320 理论上限，实际远小于
         assert!(max_err < 100, "q=5 往返 max_err={} 应 <100", max_err);
     }
+
+    #[test]
+    fn frame_type8_rct_domain_roundtrip() {
+        // 复现路径 G 场景：RCT 域差分值（含负值，Co/Cg 范围 -256~255）
+        // PNG1000 帧类型分布显示 type8 在帧7/12/13 胜出且像素不一致，
+        // 首个差异固定在索引 419379（块 528,136）——疑似编解码不对称。
+        let w = 32u16;
+        let h = 32u16;
+        let mut px = Vec::with_capacity(w as usize * h as usize * 3);
+        let mut s = 0x1234_5678_9ABC_DEF0u64;
+        for _ in 0..(w as usize * h as usize) {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let y = ((s >> 33) as i32 % 256) - 128;
+            let co = ((s >> 40) as i32 % 512) - 256;
+            let cg = ((s >> 48) as i32 % 400) - 200;
+            px.push(y);
+            px.push(co);
+            px.push(cg);
+        }
+        let img = ImageData {
+            width: w,
+            height: h,
+            bit_depth: 8,
+            color_format: ColorFormat::Rgb,
+            pixels: px,
+        };
+        let payload = encode_intra_transform_payload(
+            &img,
+            CompressionType::GolombRice,
+            1,
+            0,
+            1,
+            0,
+        )
+        .expect("encode failed");
+        let decoded = crate::crf::decoder::intra_transform::decode_intra_transform(
+            &payload,
+            w as usize,
+            h as usize,
+            3,
+            1,
+            1,
+        )
+        .expect("decode failed");
+        let max_err = decoded
+            .iter()
+            .zip(&img.pixels)
+            .map(|(a, b)| (a - b).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert_eq!(max_err, 0, "RCT 域无损往返应有零误差，实际 max_err={}", max_err);
+    }
 }

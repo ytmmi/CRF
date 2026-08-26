@@ -5,8 +5,20 @@
 **状态**：接口与算法控制面规划，本轮不实现、不构建  
 **关联方案**：[目标高质量预设与首帧优化](first-frame-optimization-plan.md)
 
+> **进度同步（2026-08-26）**：V2 顶层模型（`LossyOptionsV2`/`ResolvedLossyReport`/
+> `resolve_without_encoding`/builder/`validate`）**均未实施**；`EncodeParams` 仍是 V1 结构
+> （`lossy_quality: Option<u8>` + `lossy_tuning: Option<LossyTuning>`）。已完成的仅是 V1
+> `LossyTuning` 的零散字段扩展：`chroma_deadzone_bias`（默认 Some(-4)）、`deadzone_bias`
+> （默认 4）、`chroma_half_res` 解耦（不再受 step>1 阻断）、`chroma_step` 升级（Q=1×130%
+> 截断升一级）。已完成项逐项清单见 [optimization-completed.md](optimization-completed.md)
+> 第三节。本文档保留 V2 未完成规划。
+
 后续实现必须遵守[《CRF 项目开发、算法与构建标准》](project-standards.md)，不得把配置
 解析、预设映射、像素算法、码流信令和 UI 逻辑重新杂交进同一模块。
+
+性能后端、CPU/GPU 选择、设备能力和传输阈值的专项路线见
+[《CRF 性能优化规划》](performance-optimization-plan.md)；本文只定义参数控制面，不在
+这里重复 GPU kernel 或厂商运行时设计。
 
 ## 1. 目标
 

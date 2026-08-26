@@ -70,12 +70,25 @@ impl CoeffCABAC {
                         self.rc.encode_bit(false, &mut self.ctx_level_q);
                         // sign：等概率直通
                         self.rc.encode_direct(v < 0);
-                        prev_pos = i;
-                    }
+                    prev_pos = i;
+                }
+            }
+            // 终止 run：使解码端 pos 跳到 < 0 退出 while 循环。
+            // 位置 0 非零时 prev_pos=0 无需终止（decode pos=-1 自然退出）。
+            // 修复：此前 decode while pos>=0 在尾部零处越界读，消耗
+            // RangeDecoder 状态破坏后续块——RCT 域负值触发，RGB 小值巧合通过。
+            if prev_pos > 0 {
+                let r = prev_pos.min(63);
+                for _ in 0..r {
+                    self.rc.encode_bit(true, &mut self.ctx_run);
+                }
+                if r < 63 {
+                    self.rc.encode_bit(false, &mut self.ctx_run);
                 }
             }
         }
     }
+}
 
     pub fn finish(self) -> Vec<u8> {
         self.rc.finish()

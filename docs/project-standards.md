@@ -13,6 +13,8 @@
 - [CRF 格式标准](../crf格式标准.md)：已实现码流的字段和解码语义；
 - [有损目标预设与首帧优化规划](first-frame-optimization-plan.md)：当前算法探索方向；
 - [有损精细参数接口规划](lossy-tuning-interface-plan.md)：未来有损控制面；
+- [CPU/GPU 性能优化规划](performance-optimization-plan.md)：性能后端与验收路线；
+- [编解码器分层重构规划](codec-architecture-refactor-plan.md)：编码器/解码器职责和迁移路线；
 - [优化评审记录](optimization-review.md)：历史实施与决策依据；
 - [开发文档](development.md)：环境和命令参考。
 
@@ -122,13 +124,15 @@ tests/
 
 ### 3.4 当前预警文件
 
-截至本文制定时：
+截至 2026-08-26 的源码规模检查：
 
-- `src-tauri/src/test/mod.rs`：约 921 行；
-- `src-tauri/src/crf/encoder/tests.rs`：约 897 行。
+- `src-tauri/src/test/mod.rs`：约 **1030 行，已超过 1000 行硬限制**；
+- `src-tauri/src/crf/encoder/tests.rs`：约 **980 行，处于拆分预警区**；
+- `src-tauri/src/crf/format/prediction.rs`：约 **801 行，处于拆分预警区**。
 
-两者已超过 800 行预警线。后续若需要增加实质测试功能，必须先按测试领域拆分，不得
-继续向原文件集中追加。构建产物中第三方生成的超长文件不属于手写源码检查范围。
+因此当前源码状态不满足本标准的构建准入：后续任何实质功能构建前，必须先按测试领域
+和预测职责拆分上述文件，并重新执行规模检查。不得继续向这些文件集中追加性能、算法
+或测试功能。构建产物中第三方生成的超长文件不属于手写源码检查范围。
 
 ## 4. 架构边界
 
