@@ -185,6 +185,7 @@ pub(crate) fn predict_at(
 /// 平均预测：residual[i] = pixel[i] - (left + top) / 2
 /// DC预测：residual[i] = pixel[i] - (left + top + top_left + top_right) / 4
 /// MED预测：JPEG-LS LOCO-I 边缘检测中值预测
+#[allow(dead_code)] // 公共兼容 API；生产编码路径使用 apply_prediction_into 复用缓冲
 pub fn apply_prediction(
     pixels: &[i32],
     width: usize,
@@ -195,6 +196,30 @@ pub fn apply_prediction(
     let mut out = vec![0i32; pixels.len()];
     apply_prediction_range_into(pixels, &mut out, width, height, components, mode, 0, height);
     out
+}
+
+/// 应用帧内预测并写入调用方提供的整帧缓冲区。
+///
+/// 供编码端 Scratch Buffer 复用；结果与 [`apply_prediction`] 逐位一致。
+pub(crate) fn apply_prediction_into(
+    pixels: &[i32],
+    residuals: &mut [i32],
+    width: usize,
+    height: usize,
+    components: usize,
+    mode: PredictionMode,
+) {
+    assert_eq!(pixels.len(), residuals.len(), "预测输入/输出长度必须一致");
+    apply_prediction_range_into(
+        pixels,
+        residuals,
+        width,
+        height,
+        components,
+        mode,
+        0,
+        height,
+    );
 }
 
 /// 应用帧内预测到指定行范围 [y_start, y_end)，返回整帧长度的残差向量
@@ -319,6 +344,7 @@ fn undo_prediction_range_into(
 ///
 /// 与 apply_prediction_range 的区别：只分配范围长度的缓冲，
 /// 供条带级编码并行处理时降低内存占用。
+#[allow(dead_code)] // 兼容分配式 API；生产条带路径改用 apply_prediction_band_into
 pub fn apply_prediction_band(
     pixels: &[i32],
     width: usize,
@@ -331,13 +357,36 @@ pub fn apply_prediction_band(
     let height = pixels.len() / stride.max(1);
     let y_end = y_end.min(height);
     let mut out = vec![0i32; (y_end.saturating_sub(y_start)) * stride];
-    if y_start >= y_end {
-        return out;
-    }
+    apply_prediction_band_into(
+        pixels, &mut out, width, components, mode, y_start, y_end,
+    );
+    out
+}
 
+/// 计算指定行范围的紧凑残差并写入调用方缓冲区。
+///
+/// `out.len()` 必须等于 `(y_end-y_start) * width * components`；该入口
+/// 供条带级 Rayon worker 复用候选缓冲，避免每条带重复分配 8 个向量。
+pub(crate) fn apply_prediction_band_into(
+    pixels: &[i32],
+    out: &mut [i32],
+    width: usize,
+    components: usize,
+    mode: PredictionMode,
+    y_start: usize,
+    y_end: usize,
+) {
+    let stride = width * components;
+    let height = pixels.len() / stride.max(1);
+    let y_end = y_end.min(height);
+    let expected = y_end.saturating_sub(y_start) * stride;
+    assert_eq!(out.len(), expected, "条带预测输出长度不匹配");
+    if y_start >= y_end {
+        return;
+    }
     if mode == PredictionMode::None {
         out.copy_from_slice(&pixels[y_start * stride..y_end * stride]);
-        return out;
+        return;
     }
 
     for (row, y) in (y_start..y_end).enumerate() {
@@ -351,7 +400,6 @@ pub fn apply_prediction_band(
             }
         }
     }
-    out
 }
 
 #[cfg(test)]

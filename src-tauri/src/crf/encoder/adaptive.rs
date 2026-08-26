@@ -16,13 +16,15 @@ use crate::crf::encoder::planar::encode_planar_payload;
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
 use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
-use crate::crf::core::prediction::intra::apply_prediction;
+use crate::crf::core::prediction::intra::apply_prediction_into;
+use crate::crf::format::closed_loop::closed_loop_predict_quant_banded_into;
 use crate::crf::format::cost::residual_activity_for_mode_sampled;
 use crate::crf::format::satd_for_mode_sampled;
 
 use super::frame::BandSteps;
 use super::rdoq::trellis_quantize_interleaved;
-use super::{assemble_frame, encode_frame_inner_limited, rle_cabac, FrameQuant};
+use super::scratch::FrameScratch;
+use super::{assemble_frame, rle_cabac, FrameQuant};
 
 /// 自适应编码结果：帧数据 + 帧级可识别的预测模式
 ///
@@ -127,6 +129,7 @@ pub fn encode_frame_adaptive(
     // v1.11 Fast-Fail：第二个候选用第一名的总字节数作上限短路编码——
     // 熵码流字节单调递增，超限即必败，产物不进入最终码流。
     let mut best: Option<(usize, Vec<u8>, Option<PredictionMode>)> = None;
+    let mut frame_scratch = FrameScratch::default();
     for (attempt, &(_, mode)) in ranked.iter().take(2).enumerate() {
         // 第二名候选的上限 = 第一名总长（含帧头）：熵码流字节单调递增，
         // 超限即必败，被淘汰候选的产物本就不会进入最终码流
@@ -135,7 +138,7 @@ pub fn encode_frame_adaptive(
         } else {
             best.as_ref().map_or(usize::MAX, |(sz, ..)| *sz)
         };
-        match encode_frame_inner_limited(
+        match super::frame::encode_frame_inner_limited_with_scratch(
             image,
             compression_type,
             block_size,
@@ -144,6 +147,7 @@ pub fn encode_frame_adaptive(
             fq,
             band_steps,
             limit,
+            &mut frame_scratch,
         )? {
             Some(data) => {
                 if best.as_ref().is_none_or(|(sz, ..)| data.len() < *sz) {
@@ -240,9 +244,13 @@ pub fn encode_frame_adaptive(
         if let Some(&(_, best_mode)) = ranked.first().filter(|_| avg_abs_res >= 0.5) {
             // CABAC 候选同样走闭环（有损）或开环（无损），与帧级路径一致。
             // v2 梯度分级上下文：空间域残差流传入 stride 启用因果梯度分级
-            let predicted = if fq.is_lossy() {
-                crate::crf::format::closed_loop_predict_quant_banded(
+            let predicted: &[i32] = if fq.is_lossy() {
+                let (residuals, reconstruction) =
+                    frame_scratch.closed_loop(image.pixels.len());
+                closed_loop_predict_quant_banded_into(
                     &image.pixels,
+                    residuals,
+                    reconstruction,
                     width,
                     height,
                     components,
@@ -250,10 +258,19 @@ pub fn encode_frame_adaptive(
                     fq.step,
                     fq.bias,
                     band_steps,
-                )
-                .0
+                );
+                residuals
             } else {
-                apply_prediction(&image.pixels, width, height, components, best_mode)
+                let residuals = frame_scratch.residuals(image.pixels.len());
+                apply_prediction_into(
+                    &image.pixels,
+                    residuals,
+                    width,
+                    height,
+                    components,
+                    best_mode,
+                );
+                residuals
             };
             let stride = width * components;
             // 载荷 v3：[k u8][flags][(ma_tree 头)][cabac 码流]

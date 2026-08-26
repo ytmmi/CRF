@@ -28,6 +28,7 @@ pub(crate) mod planar;
 pub mod rdoq;
 pub mod rle_cabac;
 pub mod rle_golomb;
+pub(crate) mod scratch;
 pub mod sequence;
 /// session：序列级 session 与辅助函数（P3 架构迁移）
 pub mod session;
@@ -51,4 +52,4 @@ mod tests;
 pub use frame::encode_frame;
 pub use sequence::encode_sequence;
 
-pub(crate) use frame::{assemble_frame, encode_frame_inner_limited, FrameQuant};
+pub(crate) use frame::{assemble_frame, FrameQuant};

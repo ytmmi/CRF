@@ -163,9 +163,9 @@
 | P6.6 | 线程级并行 | rayon `par_iter`（SAD/残差帧）| R5 | ✅ | SAD 决策 8 模式并行 |
 | P6.7 | SATD 预筛 | `format/cost.rs` 4×4 Hadamard SATD + 1/4 网格采样 | CPU 性能分支 | ✅ | 替代自适应与 IntraBC 的行采样 SAD 排序 |
 | P6.8 | quant_scalar 批量 SIMD | `backend/cpu/simd.rs` AVX2 4-lane f64 精确除法 + scalar 极值/尾部回退 | §23 未执行项 | ✅ | frame_type=8 skip/DCT 每块 64 系数批量量化 |
+| P6.9 | 帧/条带 Scratch Buffer | `encoder/scratch.rs` + `FrameScratch`/Rayon `map_init` 条带缓冲 | §23 未执行项 / 性能规划 §4.4 | ✅ | 帧候选复用整帧 residual/recon；条带任务复用 8 候选容量，无全局锁 |
 | — | SIMD 预测泛化 | — | §6.2 S3 | ❌ 中长期 | Med/Paeth 分支向量化复杂 |
 | — | 内存池零分配 | — | §6.2 S4 | ❌ 暂缓 | 待性能剖析后定向 |
-| — | 缓冲复用 | — | §23 未执行项 | ❌ 后置 | P5 完成后评估 |
 
 ---
 
@@ -299,7 +299,7 @@
 
 已完成项见本文件。未完成项仍保留在原规划文档：
 
-- **首帧优化未完成项**：[first-frame-optimization-plan.md](first-frame-optimization-plan.md) P1.4/P1.6、P3.2/P3.5~P3.7、P4.1~P4.4/P4.6/P4.7、P5 全部、P6 SATD/SIMD 泛化/内存池/缓冲复用
+- **首帧优化未完成项**：[first-frame-optimization-plan.md](first-frame-optimization-plan.md) P1.4/P1.6、P3.2/P3.5~P3.7、P4.1~P4.4/P4.6/P4.7、P5 全部、P6 预测 SIMD 泛化/全局内存池
 - **接口规划未完成项**：[lossy-tuning-interface-plan.md](lossy-tuning-interface-plan.md) V2 顶层模型、resolve_without_encoding、兼容适配器、实验工具命名空间、UI 专家面板
 - **变换域深化未完成项**：frame_type=8 收益验证、CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项）、top-2 试编码、矩形/4×4 块尺寸、Trellis/感知矩阵集成、端到端 CRF 文件级往返测试
 

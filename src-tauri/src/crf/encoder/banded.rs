@@ -13,10 +13,11 @@ use rayon::prelude::*;
 
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::domain::{ImageData, PredictionMode};
-use crate::crf::core::prediction::intra::{apply_prediction_band, predict_at};
+use crate::crf::core::prediction::intra::{apply_prediction_band_into, predict_at};
 
 use super::adaptive::ADAPTIVE_CANDIDATES;
 use super::rle_golomb;
+use super::scratch::BandScratch;
 
 /// 编码条带级自适应预测的载荷数据
 ///
@@ -41,16 +42,17 @@ pub(crate) fn encode_banded_payload(
     // 并行编码全部条带（rayon collect 保序）
     let encoded: Vec<CrfResult<Vec<u8>>> = (0..band_count)
         .into_par_iter()
-        .map(|b| {
+        .map_init(BandScratch::default, |scratch, b| {
             let y_start = b * band_height;
             let y_end = (y_start + band_height).min(height);
-            encode_one_band(
+            encode_one_band_with_scratch(
                 &image.pixels,
                 width,
                 components,
                 y_start,
                 y_end,
                 preferred_mode,
+                scratch,
             )
         })
         .collect();
@@ -64,34 +66,49 @@ pub(crate) fn encode_banded_payload(
 }
 
 /// 编码单个条带（内部使用精确 SAD 排序 + 紧凑残差缓存）
-fn encode_one_band(
+fn encode_one_band_with_scratch(
     pixels: &[i32],
     width: usize,
     components: usize,
     y_start: usize,
     y_end: usize,
     _preferred_mode: PredictionMode,
+    scratch: &mut BandScratch,
 ) -> CrfResult<Vec<u8>> {
-    // 缓存各候选模式的紧凑条带残差：一次计算，SAD 与试编码共用
-    let mut candidates: Vec<(u64, PredictionMode, Vec<i32>)> = ADAPTIVE_CANDIDATES
-        .iter()
-        .map(|&m| {
-            let res = apply_prediction_band(pixels, width, components, m, y_start, y_end);
-            // 条带内数据量小（≤96K 像素），SAD 直接精确统计
-            let sad: u64 = res.iter().map(|&v| v.unsigned_abs() as u64).sum();
-            (sad, m, res)
-        })
-        .collect();
+    // 每个 Rayon worker 保留 8 个候选缓冲并跨条带复用容量；本条带只覆盖
+    // 有效长度，不携带上一条带数据。SAD 与 top-2 试编码继续共用同一残差。
+    let sample_count = (y_end - y_start) * width * components;
+    let mut candidates: [(u64, PredictionMode, usize); 8] =
+        std::array::from_fn(|index| (0, ADAPTIVE_CANDIDATES[index], index));
+    for (index, &mode) in ADAPTIVE_CANDIDATES.iter().enumerate() {
+        let residuals = scratch.candidate(index, sample_count);
+        apply_prediction_band_into(
+            pixels,
+            residuals,
+            width,
+            components,
+            mode,
+            y_start,
+            y_end,
+        );
+        // 条带内数据量小（≤96K 像素），SAD 直接精确统计
+        let sad = residuals
+            .iter()
+            .map(|&value| value.unsigned_abs() as u64)
+            .sum();
+        candidates[index].0 = sad;
+    }
     // 排序键附加偏好位：preferred 模式在同等 SAD 下优先（稳定性保障：
     // SAD 严格更小的候选仍然胜出，绝不漏选更优模式）
     candidates.sort_by_key(|c| c.0);
 
     // top-2 试编码，取最小
     let mut best: Option<(usize, u8, u8, Vec<u8>)> = None; // (len, mode, k, data)
-    for (_, mode, res) in candidates.iter().take(2) {
-        let (data, k) = rle_golomb::encode_frame_rle_golomb_adaptive(res)?;
+    for &(_, mode, index) in candidates.iter().take(2) {
+        let (data, k) =
+            rle_golomb::encode_frame_rle_golomb_adaptive(scratch.candidate_ref(index))?;
         if best.as_ref().is_none_or(|(l, ..)| data.len() < *l) {
-            best = Some((data.len(), *mode as u8, k, data));
+            best = Some((data.len(), mode as u8, k, data));
         }
     }
 

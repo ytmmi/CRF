@@ -8,8 +8,10 @@
 use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::domain::{CompressionType, FrameHeader, ImageData, PredictionMode};
-use crate::crf::core::prediction::intra::apply_prediction;
-use crate::crf::format::closed_loop_predict_quant_banded;
+use crate::crf::core::prediction::intra::apply_prediction_into;
+use crate::crf::format::closed_loop::closed_loop_predict_quant_banded_into;
+
+use super::scratch::FrameScratch;
 
 /// 单帧量化配置（真有损）
 #[derive(Debug, Clone, Copy, Default)]
@@ -93,6 +95,36 @@ pub(crate) fn encode_frame_inner_limited(
     band_steps: BandSteps<'_>,
     byte_limit: usize,
 ) -> CrfResult<Option<Vec<u8>>> {
+    let mut scratch = FrameScratch::default();
+    encode_frame_inner_limited_with_scratch(
+        image,
+        compression_type,
+        block_size,
+        prediction_mode,
+        is_first_frame,
+        fq,
+        band_steps,
+        byte_limit,
+        &mut scratch,
+    )
+}
+
+/// [`encode_frame_inner_limited`] 的 Scratch Buffer 复用版本。
+///
+/// 自适应仲裁在同一帧的多个候选间传入同一个 `scratch`，从而避免每次
+/// 预测都重新申请整帧残差/重建缓冲；独立调用仍由兼容包装自动创建缓冲。
+#[allow(clippy::too_many_arguments)] // 编码器领域函数，参数为算法固有维度
+pub(crate) fn encode_frame_inner_limited_with_scratch(
+    image: &ImageData,
+    compression_type: CompressionType,
+    block_size: u16,
+    prediction_mode: PredictionMode,
+    is_first_frame: bool,
+    fq: FrameQuant,
+    band_steps: BandSteps<'_>,
+    byte_limit: usize,
+    scratch: &mut FrameScratch,
+) -> CrfResult<Option<Vec<u8>>> {
     let width = image.width as usize;
     let height = image.height as usize;
     let components = image.color_format.component_count();
@@ -100,11 +132,12 @@ pub(crate) fn encode_frame_inner_limited(
     // 应用帧内预测；真有损走闭环（预测邻居取自重建缓冲，杜绝误差漂移）。
     // band_steps 提供逐条带自适应步长（噪声归一化），闭环逐行查表生效；
     // 解码端无感（输出为各条带 Q_eff 倍数的自描述残差）。
-    #[allow(clippy::needless_late_init)] // 两分支分别产生移动值与借用，延迟初始化必要
-    let pixels_owned;
-    if fq.is_lossy() {
-        let (resq, _) = closed_loop_predict_quant_banded(
+    let pixels: &[i32] = if fq.is_lossy() {
+        let (residuals, reconstruction) = scratch.closed_loop(image.pixels.len());
+        closed_loop_predict_quant_banded_into(
             &image.pixels,
+            residuals,
+            reconstruction,
             width,
             height,
             components,
@@ -113,11 +146,19 @@ pub(crate) fn encode_frame_inner_limited(
             fq.bias,
             band_steps,
         );
-        pixels_owned = resq;
+        residuals
     } else {
-        pixels_owned = apply_prediction(&image.pixels, width, height, components, prediction_mode);
-    }
-    let pixels = &pixels_owned;
+        let residuals = scratch.residuals(image.pixels.len());
+        apply_prediction_into(
+            &image.pixels,
+            residuals,
+            width,
+            height,
+            components,
+            prediction_mode,
+        );
+        residuals
+    };
 
     // 熵编码可用预算 = 总上限 − 帧头
     let payload_limit = byte_limit.saturating_sub(FRAME_HEADER_SIZE);

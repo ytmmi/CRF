@@ -86,10 +86,44 @@ pub fn closed_loop_predict_quant_banded(
     deadzone_bias: i8,
     band_steps: Option<&[u8]>,
 ) -> (Vec<i32>, Vec<i32>) {
-    let stride = width * components;
     let n = pixels.len();
     let mut residuals = vec![0i32; n];
     let mut recon = vec![0i32; n];
+    closed_loop_predict_quant_banded_into(
+        pixels,
+        &mut residuals,
+        &mut recon,
+        width,
+        height,
+        components,
+        mode,
+        q_step,
+        deadzone_bias,
+        band_steps,
+    );
+    (residuals, recon)
+}
+
+/// 闭环预测量化到调用方提供的整帧 Scratch Buffer。
+///
+/// 与 [`closed_loop_predict_quant_banded`] 逐位一致，但不分配返回向量；
+/// 编码器可在多个候选之间复用 `residuals`/`recon` 的容量。
+#[allow(clippy::too_many_arguments)] // 编码器领域函数，参数为算法固有维度
+pub(crate) fn closed_loop_predict_quant_banded_into(
+    pixels: &[i32],
+    residuals: &mut [i32],
+    recon: &mut [i32],
+    width: usize,
+    height: usize,
+    components: usize,
+    mode: PredictionMode,
+    q_step: u8,
+    deadzone_bias: i8,
+    band_steps: Option<&[u8]>,
+) {
+    assert_eq!(pixels.len(), residuals.len(), "量化残差缓冲长度不匹配");
+    assert_eq!(pixels.len(), recon.len(), "闭环重建缓冲长度不匹配");
+    let stride = width * components;
 
     // 行 → 条带有效步长的快速查表；None 时全帧统一
     let band_h = crate::crf::core::bitstream::constants::BAND_HEIGHT;
@@ -113,7 +147,7 @@ pub fn closed_loop_predict_quant_banded(
                 }
             }
         }
-        return (residuals, recon);
+        return;
     }
 
     for y in 0..height {
@@ -129,5 +163,4 @@ pub fn closed_loop_predict_quant_banded(
             }
         }
     }
-    (residuals, recon)
 }
