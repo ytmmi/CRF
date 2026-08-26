@@ -1,8 +1,6 @@
 //! 有损模式误差边界、golden 还原、噪声感知 A/B 测试
 
-use crate::crf::format::{
-    ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode,
-};
+use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
 
 use super::super::encode_sequence;
 use super::create_test_frames;
@@ -41,7 +39,7 @@ fn test_lossy_mode_error_bound_and_size() {
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
         lossy_quality: q,
-        lossy_tuning: Some(crate::crf::format::LossyTuning {
+        lossy_tuning: Some(crate::crf::core::config::lossy::LossyTuning {
             chroma_half_res: half_res,
             ..Default::default()
         }),
@@ -88,49 +86,10 @@ fn test_lossy_mode_error_bound_and_size() {
         lossless.len()
     );
 
-    // 时间维还原辅助：按 frame_golden_refs 将差分流重建为原始帧流
+    // 时间维还原：生产恢复逻辑收敛于 DecodeSession::restore_temporal
+    //（规划文档 §8.2），测试不复制恢复公式
     let restore_all = |dec: &crate::crf::DecodeResult| -> Vec<ImageData> {
-        let base = &dec.frames[0];
-        let mut restored: Vec<ImageData> = Vec::with_capacity(dec.frames.len());
-        for (i, d) in dec.frames.iter().enumerate() {
-            let golden = i > 0 && dec.frame_golden_refs.get(i).copied().unwrap_or(false);
-            if i == 0 {
-                // 首帧：解码数据即原始帧重建
-                restored.push(d.clone());
-            } else if golden {
-                // golden 帧：首帧 + 差分
-                let pixels: Vec<i32> = base
-                    .pixels
-                    .iter()
-                    .zip(d.pixels.iter())
-                    .map(|(a, b)| a + b)
-                    .collect();
-                restored.push(ImageData {
-                    width: d.width,
-                    height: d.height,
-                    bit_depth: d.bit_depth,
-                    color_format: d.color_format,
-                    pixels,
-                });
-            } else {
-                // 链式帧：前一还原帧 + 差分
-                let prev = restored.last().unwrap();
-                let pixels: Vec<i32> = prev
-                    .pixels
-                    .iter()
-                    .zip(d.pixels.iter())
-                    .map(|(a, b)| a + b)
-                    .collect();
-                restored.push(ImageData {
-                    width: d.width,
-                    height: d.height,
-                    bit_depth: d.bit_depth,
-                    color_format: d.color_format,
-                    pixels,
-                });
-            }
-        }
-        restored
+        crate::crf::decoder::session::DecodeSession::restore_temporal(dec)
     };
 
     // 无损基准必须逐位一致
@@ -321,7 +280,7 @@ fn test_noise_adaptive_lossy_ab() {
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
         lossy_quality: q,
-        lossy_tuning: Some(crate::crf::format::LossyTuning {
+        lossy_tuning: Some(crate::crf::core::config::lossy::LossyTuning {
             noise_adaptive: noise_on,
             ..Default::default()
         }),

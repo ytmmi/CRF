@@ -4,7 +4,7 @@
 //! 生产级 RGB 导出走 test 模块的 save_frame_lossless（image-rs）。
 
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::format::ImageData;
+use crate::crf::core::domain::ImageData;
 
 /// 将解码后的帧保存为图像文件
 #[allow(dead_code)] // 调试落盘工具：生产导出走 test 模块 save_frame_lossless

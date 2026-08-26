@@ -1,7 +1,13 @@
+//! 文件头结构（原 format/header.rs，P4 架构迁移）
+//!
+//! 规划文档 §3.3 / §6.3。CRF 文件头（magic/version/frame_count/尺寸/位深/
+//! 色彩格式/压缩类型/标志/块大小/预测模式/量化步长/用户数据）的读写与校验。
+//! 容器层契约：只负责字节和边界，不负责预测、DCT、量化或参考恢复。
+
 use std::io::Write;
 
 use crate::crf::core::bitstream::constants::*;
-use super::types::{ColorFormat, CompressionType, Flags, PredictionMode};
+use crate::crf::core::domain::{ColorFormat, CompressionType, Flags, PredictionMode};
 use crate::crf::error::{CrfError, CrfResult};
 
 /// 文件头结构

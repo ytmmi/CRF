@@ -1,4 +1,4 @@
-//! frame_type=8 正式格式：三平面预测后变换 + CABAC 系数编码
+﻿//! frame_type=8 正式格式：三平面预测后变换 + CABAC 系数编码
 //!
 //! 载荷布局（v1.14）：
 //! ```text
@@ -18,8 +18,9 @@
 
 use crate::crf::encoder::coeff_cabac::CoeffCABAC;
 use crate::crf::error::CrfResult;
-use crate::crf::format::{CompressionType, ImageData};
-use crate::crf::transform::{dct8x8_forward, dct8x8_inverse};
+use crate::crf::core::domain::{CompressionType, ImageData};
+use crate::crf::core::prediction::intra::{apply_prediction, undo_prediction};
+use crate::crf::core::transform::{dct8x8_forward, dct8x8_inverse};
 
 const BLK: usize = 8;
 const MODE_DC: i32 = 0;

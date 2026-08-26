@@ -39,6 +39,8 @@ mod chroma_tests;
 #[cfg(test)]
 mod closed_loop_tests;
 #[cfg(test)]
+mod integration_test;
+#[cfg(test)]
 mod intra_transform_tests;
 #[cfg(test)]
 mod streaming_tests;

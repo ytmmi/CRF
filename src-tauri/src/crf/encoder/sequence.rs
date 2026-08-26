@@ -14,9 +14,8 @@ use rayon::prelude::*;
 
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
-use crate::crf::format::{
-    CompressionType, CrfHeader, EncodeParams, Flags, ImageData,
-};
+use crate::crf::core::bitstream::header::CrfHeader;
+use crate::crf::core::domain::{CompressionType, EncodeParams, Flags, ImageData};
 
 use super::adaptive::encode_frame_adaptive;
 use super::frame::{encode_frame, FrameQuant};
@@ -135,14 +134,14 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     // 真有损：质量档位映射为量化步长，写入文件头（flags.bit2 + byte21）
     let lossy_quant_step = params
         .lossy_quality
-        .map(crate::crf::format::quant_step_from_quality);
+        .map(crate::crf::core::config::lossy::quant_step_from_quality);
     if let Some(q) = lossy_quant_step {
         header.lossy_quant = q;
         header.flags.set_has_lossy_quant(true);
     }
 
     // 真有损精细调参（None → 默认：色度×130%、关键帧间隔 10、无死区偏置）
-    let tuning = crate::crf::format::LossyTuning::resolve(params.lossy_tuning.as_ref());
+    let tuning = crate::crf::core::config::lossy::LossyTuning::resolve(params.lossy_tuning.as_ref());
     let interval = tuning.keyframe_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;
 
@@ -164,7 +163,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     // golden 首帧默认强制无损，golden_lossless=false 时按锚点档位量化。
     let q95 = params
         .lossy_quality
-        .map(crate::crf::format::quant::is_q95_perceptual)
+        .map(crate::crf::core::config::lossy::is_q95_perceptual)
         .unwrap_or(false);
     // 使用 session::batch::fq_for_index（P3 架构迁移）
     let fq_for_index = |i: usize| -> FrameQuant {
@@ -286,10 +285,11 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         let first_result: (Vec<u8>, Option<u8>, bool) = (data_first.clone(), None, false);
 
         // ===== 阶段 1c：本地闭环重建 G_hat =====
-        // 复用解码端同一 decode_frame 入口与最终文件头上下文（flags 含
-        // has_rct / first_frame_no_rct / lossy_quant），保证编码端本地
-        // 重建与文件自包含解码逐位一致——这是闭环语义的定义本身。
-        let mut g_hat_img = crate::crf::decoder::decode_frame(&data_first, &header)?;
+        // 复用公共重建层（decoder/reconstruct，规划文档 §5.4）同一入口与
+        // 最终文件头上下文（flags 含 has_rct / first_frame_no_rct /
+        // lossy_quant），保证编码端本地重建与文件自包含解码逐位一致——
+        // 这是闭环语义的定义本身。不直接调用 decoder 容器/session 层。
+        let mut g_hat_img = crate::crf::decoder::reconstruct::reconstruct_frame(&data_first, &header)?;
         if header.flags.has_rct() && !header.flags.first_frame_no_rct() {
             g_hat_img.pixels = crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
         }
@@ -306,7 +306,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 // 无损 golden 时 G_hat == frames[0]（decode 精确还原），产物
                 // 与旧实现逐字节一致；有损 golden 时误差不再向后续帧传导。
                 let mut diff_rgb = vec![0i32; frame.pixels.len()];
-                crate::crf::backend::cpu::simd::sub_i32(&frame.pixels, &g_hat, &mut diff_rgb);
+                crate::crf::backend::ops::sub_i32(&frame.pixels, &g_hat, &mut diff_rgb);
                 if q95_soft {
                     soft1(&mut diff_rgb);
                 }
@@ -450,7 +450,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 header.flags.set_first_frame_no_rct(true);
             }
         }
-        let preferred = first_pm.map(crate::crf::format::PredictionMode::from_u8);
+        let preferred = first_pm.map(crate::crf::core::domain::PredictionMode::from_u8);
 
         let mut rest: Vec<(Vec<u8>, Option<u8>)> = Vec::new();
         if params.adaptive_prediction {
@@ -459,7 +459,12 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 .enumerate()
                 .skip(1)
                 .map(|(i, frame)| {
-                    let fq = fq_for_chain_index(i, lossy_quant_step, &tuning, base_bias);
+                    let fq = super::session::batch::fq_for_chain_index(
+                        i,
+                        lossy_quant_step,
+                        &tuning,
+                        base_bias,
+                    );
                     encode_frame_adaptive(
                         frame,
                         compression_type,
@@ -481,7 +486,12 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 .enumerate()
                 .skip(1)
                 .map(|(i, frame)| {
-                    let fq = fq_for_chain_index(i, lossy_quant_step, &tuning, base_bias);
+                    let fq = super::session::batch::fq_for_chain_index(
+                        i,
+                        lossy_quant_step,
+                        &tuning,
+                        base_bias,
+                    );
                     encode_frame(
                         frame,
                         compression_type,
@@ -517,24 +527,4 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     )?;
 
     Ok(output)
-}
-
-/// 路径 C（链式差分）的逐帧量化配置
-///
-/// 已迁移到 `session::batch::fq_for_chain_index`（P3 架构迁移）。
-/// 保留转发以维持旧路径兼容。
-fn fq_for_chain_index(
-    i: usize,
-    lossy_quant_step: Option<u8>,
-    tuning: &crate::crf::format::LossyTuning,
-    base_bias: i8,
-) -> FrameQuant {
-    super::session::batch::fq_for_chain_index(i, lossy_quant_step, tuning, base_bias)
-}
-
-/// 由步长反推质量档位
-///
-/// 已迁移到 `session::batch::quality_of_step`（P3 架构迁移）。
-fn quality_of_step(step: u8) -> u8 {
-    super::session::batch::quality_of_step(step)
 }

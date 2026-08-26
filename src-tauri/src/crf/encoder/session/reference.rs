@@ -7,7 +7,7 @@
 //! **迁移状态（P3）**：定义类型，当前 `sequence.rs` 内联管理参考状态。
 //! P3.b 阶段将 `encode_sequence` 中的 G_hat 管理迁移到本模块。
 
-use crate::crf::format::ImageData;
+use crate::crf::core::domain::ImageData;
 
 /// 编码器参考状态
 ///

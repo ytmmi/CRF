@@ -1,9 +1,7 @@
 //! 基础编解码往返测试（golomb / banded / palette / planar）
 
 use crate::crf::core::color::rct::rct_forward;
-use crate::crf::format::{
-    ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode,
-};
+use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
 
 use super::super::adaptive::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
 use super::super::banded::encode_banded_payload;
@@ -346,7 +344,7 @@ fn test_planar_roundtrip_flat_chroma() {
     );
 
     // 载荷级往返：解三平面 + interleave 后必须与 RCT 域输入一致
-    let header_stub = crate::crf::format::CrfHeader::new(
+    let header_stub = crate::crf::core::bitstream::header::CrfHeader::new(
         2,
         image.width,
         image.height,

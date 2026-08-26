@@ -7,10 +7,9 @@
 
 use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
-use crate::crf::format::{
-    apply_prediction, closed_loop_predict_quant_banded, CompressionType, FrameHeader, ImageData,
-    PredictionMode,
-};
+use crate::crf::core::domain::{CompressionType, FrameHeader, ImageData, PredictionMode};
+use crate::crf::core::prediction::intra::apply_prediction;
+use crate::crf::format::closed_loop_predict_quant_banded;
 
 /// 单帧量化配置（真有损）
 #[derive(Debug, Clone, Copy, Default)]

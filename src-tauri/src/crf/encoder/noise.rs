@@ -201,7 +201,7 @@ pub fn soft_threshold_interleaved(
             }
         };
         match uniform_t {
-            Some(t) => crate::crf::backend::cpu::simd::soft_threshold_plane(row, t),
+            Some(t) => crate::crf::backend::ops::soft_threshold_plane(row, t),
             None => {
                 for (chunk_idx, chunk) in row.chunks_exact_mut(components).enumerate() {
                     for (c, v) in chunk.iter_mut().enumerate() {

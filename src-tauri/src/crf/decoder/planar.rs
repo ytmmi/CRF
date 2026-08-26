@@ -1,9 +1,10 @@
 //! 三平面打包解码（frame_type=3）：子帧解码 + CfL 还原 + 色度上采样
 
+use crate::crf::core::bitstream::header::CrfHeader;
+use crate::crf::core::domain::ColorFormat;
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::format::{ColorFormat, CrfHeader};
 
-use super::decode_frame;
+use super::reconstruct::reconstruct_frame;
 
 /// 双线性 2× 上采样（色度半分辨率还原）
 ///
@@ -105,7 +106,7 @@ pub(crate) fn decode_planar(data: &[u8], header: &CrfHeader) -> CrfResult<Vec<i3
             sub_header.width = cw as u16;
             sub_header.height = ch as u16;
         }
-        let sub_frame = decode_frame(&data[offset..offset + sub_len], &sub_header)?;
+        let sub_frame = reconstruct_frame(&data[offset..offset + sub_len], &sub_header)?;
         planes.push(sub_frame.pixels);
         offset += sub_len;
     }

@@ -37,7 +37,7 @@ fn synthetic_sequence(frames: usize, w: u16, h: u16) -> Vec<ImageData> {
             width: w,
             height: h,
             bit_depth: 8,
-            color_format: crate::crf::format::ColorFormat::Rgb,
+            color_format: crate::crf::core::domain::ColorFormat::Rgb,
             pixels,
         });
     }
@@ -58,32 +58,11 @@ fn base_params() -> EncodeParams {
 }
 
 /// 按解码器契约还原完整序列：chain 帧 = prev + residual；
-/// golden 帧 = 固定基准（解码首帧 G_hat）+ residual。返回逐帧 RGB 像素。
-fn restore_sequence(result: &crf::DecodeResult) -> Vec<(Vec<i32>, bool)> {
-    let mut out: Vec<(Vec<i32>, bool)> = Vec::with_capacity(result.frames.len());
-    let mut prev: Option<Vec<i32>> = None;
-    // 全 golden 架构的固定差分基准 = 文件自身解码出的 frame0
-    let decoded_golden = result.frames[0].pixels.clone();
-    for (i, dec) in result.frames.iter().enumerate() {
-        let is_golden = result.frame_golden_refs.get(i).copied().unwrap_or(false);
-        let restored = if i == 0 {
-            dec.pixels.clone()
-        } else if is_golden {
-            decoded_golden
-                .iter()
-                .zip(&dec.pixels)
-                .map(|(a, b)| a + b)
-                .collect()
-        } else {
-            match &prev {
-                Some(p) => p.iter().zip(&dec.pixels).map(|(a, b)| a + b).collect(),
-                None => dec.pixels.clone(),
-            }
-        };
-        prev = Some(restored.clone());
-        out.push((restored, is_golden));
-    }
-    out
+/// golden 帧 = 固定基准（解码首帧 G_hat）+ residual。
+/// 生产恢复逻辑收敛于 [`crate::crf::decoder::session::DecodeSession::restore_temporal`]
+/// （规划文档 §8.2），测试不复制恢复公式。
+fn restore_sequence(result: &crf::DecodeResult) -> Vec<crf::ImageData> {
+    crate::crf::decoder::session::DecodeSession::restore_temporal(result)
 }
 
 /// 逐分量误差均值：参考失配（编码用原帧、解码用 G_hat）会表现为
@@ -107,9 +86,9 @@ fn p0_lossless_golden_pixel_exact_roundtrip() {
 
     assert_eq!(result.frames.len(), originals.len());
     let restored = restore_sequence(&result);
-    for (i, (px, _)) in restored.iter().enumerate() {
+    for (i, frame) in restored.iter().enumerate() {
         assert_eq!(
-            px, &originals[i].pixels,
+            &frame.pixels, &originals[i].pixels,
             "无损 golden 第 {} 帧必须逐像素一致",
             i
         );
@@ -122,7 +101,7 @@ fn p0_lossy_golden_no_reference_drift() {
     // 后续帧残差必须相对本地重建 G_hat 生成。若存在参考失配，
     // 每帧还原误差都会包含完整的首帧误差场（系统性偏移不衰减）。
     let originals = synthetic_sequence(5, 48, 40);
-    let tuning = crate::crf::format::LossyTuning {
+    let tuning = crate::crf::core::config::lossy::LossyTuning {
         golden_lossless: false,
         ..Default::default()
     };
@@ -143,7 +122,7 @@ fn p0_lossy_golden_no_reference_drift() {
     let restored = restore_sequence(&result);
 
     // 首帧误差基线：golden 参与量化必然产生非零误差（否则本测试无区分度）
-    let first_err = mean_abs_error(&restored[0].0, &originals[0].pixels);
+    let first_err = mean_abs_error(&restored[0].pixels, &originals[0].pixels);
     assert!(
         first_err > 0.0,
         "q75 + golden_lossless=false 下首帧应有量化误差"
@@ -153,7 +132,7 @@ fn p0_lossy_golden_no_reference_drift() {
     // 有界倍数。参考失配时误差 ≈ 首帧误差场的整体平移 + 本帧噪声，
     // 其均值会持续处于高位；闭环时仅剩各帧自身的量化噪声。
     for i in 1..originals.len() {
-        let err = mean_abs_error(&restored[i].0, &originals[i].pixels);
+        let err = mean_abs_error(&restored[i].pixels, &originals[i].pixels);
         assert!(
             err < first_err * 3.0 + 0.5,
             "第 {} 帧平均误差 {:.4} 异常偏高（首帧基线 {:.4}）——疑似参考失配",
@@ -196,7 +175,7 @@ fn p0_q95_soft_first_frame_structural_closure() {
 #[test]
 fn preset_explicit_equivalence() {
     // 规划 §7 第 10 步：预设(None→default)与显式配置(Some(default))逐字节一致
-    use crate::crf::format::LossyTuning;
+    use crate::crf::core::config::lossy::LossyTuning;
     let originals = synthetic_sequence(4, 48, 40);
     let base = base_params();
     let preset_params = EncodeParams {

@@ -23,6 +23,9 @@ pub mod cpu;
 /// GPU 后端（CUDA/HIP/Vulkan/wgpu，可选 feature）
 pub mod gpu;
 
+/// ops：后端统一运算入口（算法层的唯一后端依赖边界）
+pub mod ops;
+
 /// BackendKernel 输入
 #[derive(Debug, Clone)]
 pub struct KernelInput {

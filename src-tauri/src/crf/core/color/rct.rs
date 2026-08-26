@@ -34,8 +34,9 @@ pub fn rct_forward(pixels: &[i32], components: usize) -> CrfResult<Vec<i32>> {
     }
 
     let mut out = pixels.to_vec();
-    // SIMD 分派：AVX2 可用时核心算术向量化（逐位一致，见 backend/cpu/simd.rs）
-    crate::crf::backend::cpu::simd::rct_forward_interleaved(&mut out);
+    // 后端统一入口（backend::ops）：AVX2 可用时核心算术向量化
+    // （逐位一致，见 backend/cpu/simd.rs；scalar/GPU 接入时仅改 ops 内部）
+    crate::crf::backend::ops::rct_forward(&mut out);
     Ok(out)
 }
 
@@ -53,8 +54,8 @@ pub fn rct_inverse(pixels: &[i32], components: usize) -> CrfResult<Vec<i32>> {
     }
 
     let mut out = pixels.to_vec();
-    // SIMD 分派：AVX2 可用时核心算术向量化（逐位一致）
-    crate::crf::backend::cpu::simd::rct_inverse_interleaved(&mut out);
+    // 后端统一入口（backend::ops）：AVX2 可用时核心算术向量化
+    crate::crf::backend::ops::rct_inverse(&mut out);
     Ok(out)
 }
 

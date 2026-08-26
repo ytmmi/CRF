@@ -17,9 +17,8 @@
 use crate::crf::checksum::crc32;
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE};
-use crate::crf::format::{
-    CompressionType, CrfHeader, EncodeParams, ImageData,
-};
+use crate::crf::core::bitstream::header::CrfHeader;
+use crate::crf::core::domain::{CompressionType, EncodeParams, ImageData};
 
 use super::adaptive::encode_frame_adaptive;
 use super::noise::estimate_band_quant_steps;
@@ -41,7 +40,7 @@ pub struct StreamingEncoder {
     params: EncodeParams,
     compression_type: CompressionType,
     header: CrfHeader,
-    tuning: crate::crf::format::LossyTuning,
+    tuning: crate::crf::core::config::lossy::LossyTuning,
     lossy_quant_step: Option<u8>,
     /// 原始质量档位（q95 判定用）
     lossy_quality_raw: Option<u8>,
@@ -82,11 +81,11 @@ impl StreamingEncoder {
         header.block_size = params.block_size.unwrap_or(8) as u16;
         header.prediction_mode = params.prediction_mode;
 
-        let tuning = crate::crf::format::LossyTuning::resolve(params.lossy_tuning.as_ref());
+        let tuning = crate::crf::core::config::lossy::LossyTuning::resolve(params.lossy_tuning.as_ref());
         let interval = tuning.keyframe_interval.max(1) as usize;
         let lossy_quant_step = params
             .lossy_quality
-            .map(crate::crf::format::quant_step_from_quality);
+            .map(crate::crf::core::config::lossy::quant_step_from_quality);
         let lossy_quality_raw = params.lossy_quality;
 
         Ok(StreamingEncoder {
@@ -134,7 +133,7 @@ impl StreamingEncoder {
                 // RCT 标志与批量路径对齐（3 分量即启用 YCoCg-R）
                 let use_rct = components == 3;
                 if use_rct {
-                    let mut f = crate::crf::format::Flags::new();
+                    let mut f = crate::crf::core::domain::Flags::new();
                     f.set_has_index(true);
                     f.set_has_rct(true);
                     self.header.flags = f;
@@ -193,7 +192,7 @@ impl StreamingEncoder {
                     });
                 }
                 let mut diff = vec![0i32; frame.pixels.len()];
-                crate::crf::backend::cpu::simd::sub_i32(&frame.pixels, &golden.pixels, &mut diff);
+                crate::crf::backend::ops::sub_i32(&frame.pixels, &golden.pixels, &mut diff);
                 let eff_pixels = crate::crf::core::color::rct::rct_forward(&diff, components)?;
 
                 let fq_band: Vec<u8> = if self.noise_on() && components == 3 {
@@ -321,46 +320,44 @@ impl StreamingEncoder {
     }
 
     fn frame_quant(&self, i: usize) -> FrameQuant {
-        let global_q = self.lossy_quant_step.unwrap_or(0);
-        if global_q == 0 || i == 0 {
-            return FrameQuant::lossless();
-        }
-        FrameQuant {
-            step: global_q,
-            bias: self.tuning.deadzone_bias,
-            chroma_step: self.tuning.chroma_step(global_q),
-            // P1 色度精细化：独立死区通道（None → 继承全局偏置）
-            chroma_bias: self
-                .tuning
-                .chroma_deadzone_bias
-                .unwrap_or(self.tuning.deadzone_bias),
-            // P1 4:2:0 解耦：与批量路径 fq_for_index 对齐，半分辨率由
-            // 参数独立决定（planar 内 is_lossy() 双保险）
-            chroma_half_res: self.tuning.chroma_half_res,
-            // v1.12：流式路径 q95 矩阵缩放（Q=1 且原始质量档为 95）
-            q1_matrix_scale: global_q == 1
-                && self
-                    .lossy_quality_raw
-                    .map(crate::crf::format::quant::is_q95_perceptual)
-                    == Some(true),
-        }
+        // 与批量路径共用同一逐帧量化配置（规划文档 §3.2：batch/streaming
+        // 不得分别解析）。修复历史语义分叉：
+        //  - 旧实现 `i == 0 → lossless()` 恒强制首帧无损，忽略
+        //    golden_lossless=false（批量路径允许有损首帧）；
+        //  - 旧实现无锚点帧间隔（keyframe_interval）步长折算。
+        // 现统一委托 session::batch::fq_for_index，语义与 batch 完全一致。
+        let q95 = self
+            .lossy_quality_raw
+            .map(crate::crf::core::config::lossy::is_q95_perceptual)
+            .unwrap_or(false);
+        super::session::batch::fq_for_index(
+            i,
+            self.lossy_quant_step,
+            &self.tuning,
+            self.tuning.deadzone_bias,
+            self.interval,
+            q95,
+        )
     }
 }
 
-fn params_color(_p: &EncodeParams) -> crate::crf::format::ColorFormat {
-    crate::crf::format::ColorFormat::Rgb
+fn params_color(_p: &EncodeParams) -> crate::crf::core::domain::ColorFormat {
+    crate::crf::core::domain::ColorFormat::Rgb
 }
 
-/// 首帧编码统一入口（流式路径）：自适应/固定模式分流，
-/// golden 首帧恒无损。供 RCT 双路竞争的两条路复用。
+/// 首帧编码统一入口（流式路径）：自适应/固定模式分流。
+/// 首帧量化档位由 `frame_quant(0)` 决定（golden_lossless=true 时恒无损，
+/// 与批量路径 fq_for_index 语义一致；false 时按锚点档位量化）。
+/// 供 RCT 双路竞争的两条路复用。
 fn encode_first_frame_bytes(img: &ImageData, enc: &StreamingEncoder) -> CrfResult<Vec<u8>> {
+    let fq = enc.frame_quant(0);
     if enc.params.adaptive_prediction {
         Ok(encode_frame_adaptive(
             img,
             enc.compression_type,
             enc.header.block_size,
             true,
-            FrameQuant::lossless(),
+            fq,
             None,
             None,
         )?
@@ -372,7 +369,7 @@ fn encode_first_frame_bytes(img: &ImageData, enc: &StreamingEncoder) -> CrfResul
             enc.header.block_size,
             enc.header.prediction_mode,
             true,
-            FrameQuant::lossless(),
+            fq,
             None,
         )
     }
@@ -389,7 +386,7 @@ fn fq_band_steps(
     width: usize,
     height: usize,
     components: usize,
-    tuning: &crate::crf::format::LossyTuning,
+    tuning: &crate::crf::core::config::lossy::LossyTuning,
 ) -> Vec<u8> {
     estimate_band_quant_steps(
         eff_pixels,

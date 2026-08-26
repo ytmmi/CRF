@@ -9,7 +9,7 @@ mod lossy;
 mod rct_bypass;
 mod roundtrip;
 
-use crate::crf::format::{ColorFormat, ImageData};
+use crate::crf::core::domain::{ColorFormat, ImageData};
 
 /// 测试用 64 行条带高度常量（与 encoder/adaptive.rs 的 BAND_HEIGHT_ALT 同值）
 pub(super) const BAND_HEIGHT_ALT_TEST: usize = 64;

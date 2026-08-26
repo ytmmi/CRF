@@ -1,4 +1,4 @@
-//! 逆变换与块重建（原 encoder/dct_path 的公共逆变换部分）
+﻿//! 逆变换与块重建（原 encoder/dct_path 的公共逆变换部分）
 //!
 //! 规划文档 §3.6。包含：
 //! - 逆 DCT 平面变换（`dct_plane_inverse_bs`）；
@@ -15,9 +15,9 @@
 //! 改为 `pub use` 转发到本模块。`is_valid_rect` 来自已有的 `crate::crf::transform`
 //! 顶层模块（P0 前即独立）。
 
-use crate::crf::transform::dct4x4_inverse;
-use crate::crf::transform::dct8x8_inverse;
-use crate::crf::transform::{dct_rect_inverse, is_valid_rect};
+use crate::crf::core::transform::dct4x4_inverse;
+use crate::crf::core::transform::dct8x8_inverse;
+use crate::crf::core::transform::{dct_rect_inverse, is_valid_rect};
 
 /// 从 `src` 抽取 (bx,by) 处的完整矩形块 → `transform` → 写回 `dst` 同位置
 #[allow(clippy::too_many_arguments)] // 编码器领域函数，参数为算法固有维度

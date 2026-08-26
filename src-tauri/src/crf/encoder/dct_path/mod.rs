@@ -1,4 +1,4 @@
-//! DCT 变换域量化编码路径（frame_type=6）
+﻿//! DCT 变换域量化编码路径（frame_type=6）
 //!
 //! 对标 JPEG/AVIF 的变换编码管线：
 //! 平面数据 → 分块 lifting DCT（4×4 / 8×8，v1.10 起可变）→ 死区量化
@@ -11,24 +11,16 @@
 //! **迁移说明（P1）**：逆变换函数（`dct_plane_inverse_bs`、
 //! `dct_dequantize_inverse_interleaved_bs` 等）已迁移到
 //! [`crate::crf::core::transform::reconstruct`]，解除 decoder → encoder
-//! 反向依赖。本文件保留正变换和量化函数（编码端专用），逆变换通过
-//! `pub use` 转发到公共模块。
+//! 反向依赖。本文件保留正变换和量化函数（编码端专用），逆变换在
+//! `core::transform::reconstruct`（测试模块经公共路径直接访问）。
 
 pub mod qm;
 
 use crate::crf::format::quantize_residuals;
-use crate::crf::transform::dct4x4_forward;
-use crate::crf::transform::dct8x8_forward;
-use crate::crf::transform::{dct_rect_forward, is_valid_rect};
+use crate::crf::core::transform::dct4x4_forward;
+use crate::crf::core::transform::dct8x8_forward;
+use crate::crf::core::transform::{dct_rect_forward, is_valid_rect};
 use qm::{quantize_coeffs_with_matrix, DCT_PERCEPTUAL_QM, DCT_PERCEPTUAL_QM8};
-
-// 逆变换函数已迁移到 core::transform::reconstruct（P1 解除反向依赖）
-// 保留 re-export 维持旧路径兼容（encoder 内部测试仍引用）
-#[allow(unused_imports)]
-pub use crate::crf::core::transform::reconstruct::{
-    dct_dequantize_inverse, dct_dequantize_inverse_interleaved,
-    dct_dequantize_inverse_interleaved_bs, dct_plane_inverse, dct_plane_inverse_bs,
-};
 
 /// 块形状合法集（v1.12：{bw, bh} 对，bw/bh ∈ {4, 8}）
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
@@ -213,6 +205,11 @@ pub fn dct_quantize_interleaved(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 逆变换经公共路径访问（规划 §3.6：不保留 dct_path 转发层）
+    use crate::crf::core::transform::reconstruct::{
+        dct_dequantize_inverse, dct_dequantize_inverse_interleaved,
+        dct_dequantize_inverse_interleaved_bs, dct_plane_inverse, dct_plane_inverse_bs,
+    };
 
     #[test]
     fn test_dct_quant_roundtrip_q1() {

@@ -1,7 +1,7 @@
 //! 流式编码器测试
 
 use crate::crf::encoder::streaming::StreamingEncoder;
-use crate::crf::format::{ColorFormat, EncodeParams, ImageData, PredictionMode};
+use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
 
 fn make_frame(shift: i32, width: u16, height: u16) -> ImageData {
     let mut px = Vec::with_capacity(width as usize * height as usize * 3);

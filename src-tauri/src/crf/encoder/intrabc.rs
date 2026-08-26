@@ -27,7 +27,9 @@
 use std::collections::HashMap;
 
 use crate::crf::error::CrfResult;
-use crate::crf::format::{predict_at, sad_for_mode_sampled, PredictionMode};
+use crate::crf::core::domain::PredictionMode;
+use crate::crf::core::prediction::intra::predict_at;
+use crate::crf::format::sad_for_mode_sampled;
 
 /// 块边长（像素）
 const BS: usize = 8;
@@ -381,7 +383,7 @@ pub(crate) fn encode_intrabc_payload(
 mod tests {
     use super::*;
     use crate::crf::encoder::encode_sequence;
-    use crate::crf::format::{ColorFormat, EncodeParams, PredictionMode};
+    use crate::crf::core::domain::{ColorFormat, EncodeParams, PredictionMode};
     use crate::crf::ImageData;
 
     /// 安全取像素（越界返回 -9，仅诊断用）

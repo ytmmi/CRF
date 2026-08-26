@@ -11,7 +11,7 @@
 //! **迁移状态（P0）**：仅定义请求/报告类型。生产路径仍为
 //! `crate::crf::encoder::encode_sequence`。P3 完成后将在此文件实现 facade 转发。
 
-use crate::crf::format::{EncodeParams, ImageData};
+use crate::crf::core::domain::{EncodeParams, ImageData};
 
 /// 编码请求
 ///
@@ -38,24 +38,38 @@ pub struct EncodeReport {
     pub warnings: Vec<String>,
 }
 
-/// 编码 facade 入口（P0 占位）
+/// 编码 facade 入口
 ///
-/// **当前未实现**。生产路径请使用 `crate::crf::encoder::encode_sequence`。
-/// P3 阶段 session 拆分完成后，本函数将转为正式入口，旧函数转发到此处。
-#[allow(dead_code)]
+/// 转发到 `crate::crf::encoder::encode_sequence`（迁移期旧入口保持生产）。
+/// P3 之后旧入口将反转为转发到本函数。
 pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError> {
-    // P0：仅声明签名，不接入生产路径。
-    // P3 实现：resolve config → create EncodeSession → 编排帧管线 → 组装码流。
-    Err(super::CodecError::NotImplemented("codec::encode facade (P3)"))
+    // 解析并冻结不可变配置（批量和 streaming 共用同一解析逻辑）
+    let resolved = crate::crf::core::contract::ResolvedConfig::resolve(&request.params, &request.frames)
+        .map_err(super::CodecError::from)?;
+
+    // 通过 EncodeSession 编排（规划文档 §4.2）
+    let bytes =
+        crate::crf::encoder::session::session::EncodeSession::encode_sequence(&request.frames, &request.params)
+            .map_err(super::CodecError::from)?;
+
+    Ok(EncodeReport {
+        bytes,
+        resolved,
+        warnings: Vec::new(),
+    })
 }
 
-/// 流式编码 facade 入口（P0 占位）
+/// 流式编码 facade 入口
 ///
 /// 写入指定 writer。streaming 路径内存占用 O(golden + 单帧 + 码流)。
-#[allow(dead_code)]
+/// 当前转发到批量路径（streaming 语义统一为整改第 6 条，暂未拆分）。
 pub fn encode_to_writer(
-    _request: EncodeRequest,
-    _writer: &mut impl std::io::Write,
+    request: EncodeRequest,
+    writer: &mut impl std::io::Write,
 ) -> Result<EncodeReport, super::CodecError> {
-    Err(super::CodecError::NotImplemented("codec::encode_to_writer facade (P3)"))
+    let report = encode(request)?;
+    writer
+        .write_all(&report.bytes)
+        .map_err(|e| super::CodecError::InvalidInput(e.to_string()))?;
+    Ok(report)
 }

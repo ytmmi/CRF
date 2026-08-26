@@ -12,7 +12,10 @@
 //! **P0 约束**：本文件只定义类型，不实现逻辑。字段类型引用现有 `format` 类型，
 //! 避免引入未实现的依赖。所有类型标注 `#[allow(dead_code)]`——P1 起逐步接入。
 
-use crate::crf::format::{CrfHeader, EncodeParams, FrameHeader, FrameIndexEntry, ImageData};
+use crate::crf::core::bitstream::header::CrfHeader;
+use crate::crf::core::domain::{
+    EncodeParams, FrameHeader, FrameIndexEntry, ImageData,
+};
 
 // ============================================================================
 // §7.2 FramePacket —— 统一内部帧包
@@ -69,6 +72,20 @@ pub struct FramePacket<'a> {
     pub range: ByteRange,
     /// 特性位
     pub feature_set: FeatureSet,
+}
+
+impl<'a> FramePacket<'a> {
+    /// 创建新的帧包（`file_offset` 为帧头在文件中的起始偏移）
+    pub fn new(header: FrameHeader, payload: &'a [u8], file_offset: usize) -> Self {
+        let total_len =
+            crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE + payload.len();
+        FramePacket {
+            header,
+            payload,
+            range: ByteRange::new(file_offset, total_len),
+            feature_set: FeatureSet::default(),
+        }
+    }
 }
 
 // ============================================================================
@@ -139,6 +156,77 @@ pub struct ResolvedConfig {
     pub use_rct: bool,
     /// 量化步长（0=无损；>0 为有损死区量化步长）
     pub quant_step: u8,
+}
+
+impl ResolvedConfig {
+    /// 从 `EncodeParams` 与首帧信息解析不可变有效配置（规划文档 §3.2）
+    ///
+    /// 只做配置解析与冲突仲裁，不执行像素循环、不分配编码 buffer：
+    /// - 压缩类型字符串 → [`CompressionType`]（非法值返回错误）；
+    /// - 文件头模板：帧数、尺寸、位深、色彩格式、block_size、预测模式、索引标志；
+    /// - `use_rct`：由分量数经 [`rct_applicable`] 解析；
+    /// - `quant_step`：由 `lossy_quality` 经 [`quant_step_from_quality`] 映射（None=0 无损）。
+    ///
+    /// 批量和 streaming 都必须共用同一份解析结果（不得分别解析）。
+    pub fn resolve(
+        params: &EncodeParams,
+        frames: &[ImageData],
+    ) -> crate::crf::error::CrfResult<Self> {
+        use crate::crf::core::color::rct::rct_applicable;
+        use crate::crf::core::config::lossy::quant_step_from_quality;
+        use crate::crf::core::domain::{CompressionType, Flags};
+        use crate::crf::error::CrfError;
+
+        let first = &frames[0];
+        let frame_count = frames.len() as u16;
+
+        // 压缩类型解析（与 encoder/sequence.rs 保持同一映射）
+        let compression_type = match params.compression_type.as_str() {
+            "golomb-rice" | "golomb" => CompressionType::GolombRice,
+            "exp-golomb" | "exp_golomb" | "egc" => CompressionType::ExpGolomb,
+            "transform" | "dct" => CompressionType::Transform,
+            _ => {
+                return Err(CrfError::InvalidCodingParams(
+                    params.compression_type.clone(),
+                ))
+            }
+        };
+
+        // 文件头模板
+        let mut header = CrfHeader::new(
+            frame_count,
+            first.width,
+            first.height,
+            first.bit_depth,
+            first.color_format,
+            compression_type,
+        );
+        header.block_size = params.block_size.unwrap_or(8) as u16;
+        header.prediction_mode = params.prediction_mode;
+        let mut flags = Flags::new();
+        flags.set_has_index(true);
+        header.flags = flags;
+        if let Some(ref user_data) = params.user_metadata {
+            header.user_data = user_data.clone();
+        }
+
+        // RCT 适用性（分量数判定）
+        let components = first.color_format.component_count();
+        let use_rct = rct_applicable(components);
+
+        // 有损量化步长（None=无损）
+        let quant_step = params
+            .lossy_quality
+            .map(quant_step_from_quality)
+            .unwrap_or(0);
+
+        Ok(ResolvedConfig {
+            params: params.clone(),
+            header_template: header,
+            use_rct,
+            quant_step,
+        })
+    }
 }
 
 // ============================================================================

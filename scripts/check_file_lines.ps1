@@ -30,7 +30,9 @@ $hasViolation = $false
 $hasWarning = $false
 
 foreach ($file in $files) {
-    $lineCount = (Get-Content $file.FullName | Measure-Object -Line).Lines
+    # 物理行数（含空行）：Get-Content 按行分割，空行也计入。
+    # 此前用 Measure-Object -Line 会漏计空行（prediction.rs 实际 868 行被误计为约 820）。
+    $lineCount = (Get-Content -Encoding UTF8 $file.FullName).Count
     $relPath = $file.FullName.Replace($repoRoot + '\', '')
 
     if ($lineCount -gt $hardLimit) {

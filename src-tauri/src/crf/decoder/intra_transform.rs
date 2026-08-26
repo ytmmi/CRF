@@ -1,4 +1,4 @@
-//! frame_type=8 解码：三平面预测后变换 + CABAC 系数解码
+﻿//! frame_type=8 解码：三平面预测后变换 + CABAC 系数解码
 //!
 //! 与 encoder/intra_transform.rs 对称：
 //! 1. 解析子载荷 [len][mode_stream][coeff_stream]
@@ -7,7 +7,7 @@
 //! 4. HVMED 模式：逆 zigzag → 逆量化 → 逆 DCT + 预测重建
 
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::transform::dct8x8_inverse;
+use crate::crf::core::transform::dct8x8_inverse;
 
 const BLK: usize = 8;
 const MODE_DC: i32 = 0;

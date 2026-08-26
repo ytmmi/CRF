@@ -16,19 +16,23 @@ pub mod decoder;
 pub mod encoder;
 pub mod error;
 pub mod format;
-pub mod transform;
 
-// 重新导出常用类型
-// （部分项在非 test 编译单元中无直接调用者，属公共 API 面，供集成与测试路径使用）
+// 重新导出常用类型（公共 API 面，供集成与测试路径使用）
+// P4 后类型统一自 core::domain / core::bitstream / core::config 提供
 #[allow(unused_imports)]
 pub use decoder::{decode_from_bytes, decode_from_file};
 #[allow(unused_imports)]
 pub use encoder::{encode_frame, encode_sequence};
 pub use error::CrfResult;
 #[allow(unused_imports)]
-pub use format::{
-    apply_prediction, ColorFormat, DecodeResult, EncodeParams, ImageData, LossyTuning,
-    PredictionMode,
+pub use core::prediction::intra::apply_prediction;
+#[allow(unused_imports)]
+pub use format::{closed_loop_predict_quant_banded, sad_for_mode_sampled};
+#[allow(unused_imports)]
+pub use core::config::lossy::LossyTuning;
+#[allow(unused_imports)]
+pub use core::domain::{
+    ColorFormat, DecodeResult, EncodeParams, ImageData, PredictionMode,
 };
 
 /// CRF 格式版本信息
@@ -43,7 +47,8 @@ pub fn version() -> &'static str {
 
 /// 快捷编码函数
 ///
-/// 将图像序列编码为 CRF 格式
+/// 将图像序列编码为 CRF 格式。经 codec facade 转发（规划文档 §2：
+/// 应用层只能依赖 facade）。
 #[allow(dead_code)] // 公共快捷入口，仅测试路径调用
 pub fn encode(
     frames: &[ImageData],
@@ -60,15 +65,39 @@ pub fn encode(
         input_original_frames: false,
         user_metadata: user_metadata.map(|s| s.to_string()),
     };
-    encode_sequence(frames, &params)
+    codec::encode(codec::EncodeRequest {
+        frames: frames.to_vec(),
+        params,
+    })
+    .map(|report| report.bytes)
+    .map_err(|e| match e {
+        codec::CodecError::Internal(inner) => inner,
+        codec::CodecError::NotImplemented(what) => {
+            crate::crf::error::CrfError::InvalidCodingParams(what.to_string())
+        }
+        codec::CodecError::InvalidInput(msg) => {
+            crate::crf::error::CrfError::InvalidCodingParams(msg)
+        }
+    })
 }
 
 /// 快捷解码函数
 ///
-/// 将 CRF 数据解码为图像序列
+/// 将 CRF 数据解码为图像序列。经 codec facade 转发。
 #[allow(dead_code)] // 公共快捷入口，仅测试路径调用
 pub fn decode(data: &[u8]) -> CrfResult<DecodeResult> {
-    decode_from_bytes(data)
+    codec::decode_from_bytes(codec::DecodeRequest {
+        bytes: data.to_vec(),
+    })
+    .map_err(|e| match e {
+        codec::CodecError::Internal(inner) => inner,
+        codec::CodecError::NotImplemented(what) => {
+            crate::crf::error::CrfError::InvalidCodingParams(what.to_string())
+        }
+        codec::CodecError::InvalidInput(msg) => {
+            crate::crf::error::CrfError::InvalidCodingParams(msg)
+        }
+    })
 }
 
 #[cfg(test)]

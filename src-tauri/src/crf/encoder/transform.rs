@@ -1,12 +1,10 @@
-use crate::crf::error::{CrfError, CrfResult};
+﻿use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::format::adaptive_k;
 use crate::crf::core::entropy::scan::{zigzag_encode, zigzag_scan};
 
 use super::rle_golomb::RleGolombEncoder;
 
-pub use crate::crf::transform::dct4x4_forward as hadamard_forward;
-#[allow(unused_imports)] // 测试路径使用（Hadamard 对拍）
-pub use crate::crf::transform::dct4x4_inverse as hadamard_inverse;
+pub use crate::crf::core::transform::dct4x4_forward as hadamard_forward;
 /// 变换核：lifting 可逆整数 DCT 4×4（共享实现见 crf/transform_core.rs）。
 /// 相比原 Hadamard 核，频域能量集中性对自然/插画图像更优，
 /// 且 lifting 构造保证严格可逆。
@@ -119,6 +117,7 @@ pub fn encode_frame_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crf::core::transform::dct4x4_inverse as hadamard_inverse;
 
     #[test]
     fn test_hadamard_roundtrip() {

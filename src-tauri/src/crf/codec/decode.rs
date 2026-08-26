@@ -11,7 +11,7 @@
 /// `crate::crf::decoder::decode_from_bytes` / `decode_from_file`。
 /// P2 完成后将在此文件实现 facade 转发。
 
-use crate::crf::format::DecodeResult;
+use crate::crf::core::domain::DecodeResult;
 
 /// 解码请求
 #[derive(Debug, Clone)]
@@ -20,19 +20,22 @@ pub struct DecodeRequest {
     pub bytes: Vec<u8>,
 }
 
-/// 解码 facade 入口（P0 占位）
+/// 解码 facade 入口
 ///
-/// **当前未实现**。生产路径请使用 `crate::crf::decoder::decode_from_bytes`。
-/// P2 阶段容器层拆分完成后，本函数将转为正式入口。
-#[allow(dead_code)]
-pub fn decode_from_bytes(_request: DecodeRequest) -> Result<DecodeResult, super::CodecError> {
-    Err(super::CodecError::NotImplemented("codec::decode_from_bytes facade (P2)"))
+/// 转发到 `crate::crf::decoder::decode_from_bytes`（迁移期旧入口保持生产）。
+/// P2 之后旧入口将反转为转发到本函数。
+pub fn decode_from_bytes(request: DecodeRequest) -> Result<DecodeResult, super::CodecError> {
+    crate::crf::decoder::decode_from_bytes(&request.bytes).map_err(super::CodecError::from)
 }
 
-/// 从 reader 解码（P0 占位）
-#[allow(dead_code)]
+/// 从 reader 解码：读出全部字节后走内存解码路径。
+/// 迁移期实现；P2 容器层完成后将支持真正的流式 bounded reader。
 pub fn decode_from_reader<R: std::io::Read + std::io::Seek>(
-    _reader: &mut R,
+    reader: &mut R,
 ) -> Result<DecodeResult, super::CodecError> {
-    Err(super::CodecError::NotImplemented("codec::decode_from_reader facade (P2)"))
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|e| super::CodecError::InvalidInput(e.to_string()))?;
+    decode_from_bytes(DecodeRequest { bytes })
 }

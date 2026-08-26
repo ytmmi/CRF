@@ -1,8 +1,8 @@
 //! decoder 集成测试（自原 mod.rs 迁移）
 
+use crate::crf::core::domain::{ColorFormat, ImageData};
 use crate::crf::decoder::decode_from_bytes;
 use crate::crf::encoder;
-use crate::crf::format::{ColorFormat, ImageData};
 
 fn create_test_frames(count: usize, width: u16, height: u16) -> Vec<ImageData> {
     (0..count)
@@ -24,10 +24,10 @@ fn create_test_frames(count: usize, width: u16, height: u16) -> Vec<ImageData> {
 #[test]
 fn test_decode_golomb_roundtrip() {
     let frames = create_test_frames(3, 8, 8);
-    let params = crate::crf::format::EncodeParams {
+    let params = crate::crf::core::domain::EncodeParams {
         compression_type: "golomb-rice".to_string(),
         block_size: None,
-        prediction_mode: crate::crf::format::PredictionMode::None,
+        prediction_mode: crate::crf::core::domain::PredictionMode::None,
         adaptive_prediction: false,
         lossy_quality: None,
         lossy_tuning: None,
@@ -47,10 +47,10 @@ fn test_decode_golomb_roundtrip() {
 #[test]
 fn test_decode_exp_golomb_roundtrip() {
     let frames = create_test_frames(3, 8, 8);
-    let params = crate::crf::format::EncodeParams {
+    let params = crate::crf::core::domain::EncodeParams {
         compression_type: "exp-golomb".to_string(),
         block_size: None,
-        prediction_mode: crate::crf::format::PredictionMode::None,
+        prediction_mode: crate::crf::core::domain::PredictionMode::None,
         adaptive_prediction: false,
         lossy_quality: None,
         lossy_tuning: None,
@@ -75,7 +75,8 @@ fn test_decode_exp_golomb_roundtrip() {
 /// 任一缺陷存在时本测试必然失败。
 #[test]
 fn test_lossy_dct_frame6_symmetry() {
-    use crate::crf::format::{CompressionType, CrfHeader, PredictionMode};
+    use crate::crf::core::bitstream::header::CrfHeader;
+    use crate::crf::core::domain::{CompressionType, PredictionMode};
 
     let w = 32usize;
     let h = 32usize;
@@ -99,7 +100,7 @@ fn test_lossy_dct_frame6_symmetry() {
     full_payload.extend_from_slice(&payload);
     let frame_buf = crate::crf::encoder::assemble_frame(
         &full_payload,
-        &crate::crf::format::ImageData {
+        &crate::crf::core::domain::ImageData {
             width: w as u16,
             height: h as u16,
             bit_depth: 8,
@@ -122,7 +123,7 @@ fn test_lossy_dct_frame6_symmetry() {
     );
     header.prediction_mode = PredictionMode::Average;
 
-    let decoded = super::decode_frame(&frame_buf, &header).unwrap();
+    let decoded = super::reconstruct::reconstruct_frame(&frame_buf, &header).unwrap();
     assert_eq!(decoded.pixels.len(), px.len());
 
     let mut max_err: i32 = 0;
@@ -175,10 +176,10 @@ fn test_lossy_golden_sequence_roundtrip() {
     };
     let frames: Vec<ImageData> = (0..4).map(make_frame).collect();
 
-    let params = crate::crf::format::EncodeParams {
+    let params = crate::crf::core::domain::EncodeParams {
         compression_type: "golomb-rice".to_string(),
         block_size: None,
-        prediction_mode: crate::crf::format::PredictionMode::Average,
+        prediction_mode: crate::crf::core::domain::PredictionMode::Average,
         adaptive_prediction: true,
         lossy_quality: Some(75),
         lossy_tuning: None,
@@ -190,43 +191,11 @@ fn test_lossy_golden_sequence_roundtrip() {
     let result = decode_from_bytes(&encoded).unwrap();
     assert_eq!(result.frames.len(), frames.len());
 
-    // golden 链还原（与集成测试 verify_crf_against_pngs 同逻辑）
-    let golden_refs = result.frame_golden_refs.clone();
-    let mut restored_prev: Option<ImageData> = None;
+    // golden 链还原（生产恢复逻辑收敛于 DecodeSession::restore_temporal，规划 §8.2）
+    let restored_all =
+        crate::crf::decoder::session::DecodeSession::restore_temporal(&result);
     let mut max_err_all: i32 = 0;
-    for (i, (orig, dec)) in frames.iter().zip(result.frames.iter()).enumerate() {
-        let is_golden = golden_refs.get(i).copied().unwrap_or(false);
-        let restored = match (&restored_prev, is_golden) {
-            (None, _) => dec.clone(),
-            (Some(_), true) => {
-                // golden 帧：以首帧（无损基准）相加还原
-                let first = &result.frames[0];
-                ImageData {
-                    width: dec.width,
-                    height: dec.height,
-                    bit_depth: dec.bit_depth,
-                    color_format: dec.color_format,
-                    pixels: first
-                        .pixels
-                        .iter()
-                        .zip(dec.pixels.iter())
-                        .map(|(a, b)| a + b)
-                        .collect(),
-                }
-            }
-            (Some(prev), false) => ImageData {
-                width: dec.width,
-                height: dec.height,
-                bit_depth: dec.bit_depth,
-                color_format: dec.color_format,
-                pixels: prev
-                    .pixels
-                    .iter()
-                    .zip(dec.pixels.iter())
-                    .map(|(a, b)| a + b)
-                    .collect(),
-            },
-        };
+    for (i, (orig, restored)) in frames.iter().zip(restored_all.iter()).enumerate() {
         if i == 0 {
             // 契约①：首帧逐位一致（golden 基准强制无损）
             assert_eq!(
@@ -244,7 +213,6 @@ fn test_lossy_golden_sequence_roundtrip() {
                 .unwrap_or(0);
             max_err_all = max_err_all.max(frame_max);
         }
-        restored_prev = Some(restored);
     }
     assert!(
         max_err_all <= 24,

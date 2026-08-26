@@ -1,8 +1,6 @@
 //! v1.13 RCT 首帧自适应（首帧 YCoCg-R vs RGB 直通双路竞争）
 
-use crate::crf::format::{
-    ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode,
-};
+use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
 
 use super::super::encode_sequence;
 

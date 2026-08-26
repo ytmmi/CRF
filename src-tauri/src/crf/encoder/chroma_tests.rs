@@ -8,7 +8,8 @@
 //!    （单元边界见 format/quant.rs::tests），本模块验证其经完整管线
 //!    （planar 三平面候选参与竞争）的端到端自洽。
 
-use crate::crf::format::{ColorFormat, LossyTuning};
+use crate::crf::core::config::lossy::LossyTuning;
+use crate::crf::core::domain::ColorFormat;
 use crate::crf::{self, EncodeParams, ImageData, PredictionMode};
 
 fn synthetic_sequence(frames: usize, w: u16, h: u16) -> Vec<ImageData> {
@@ -54,26 +55,12 @@ fn base_params() -> EncodeParams {
 }
 
 /// 还原序列（golden 固定基准 + chain 累加），返回逐帧像素
+/// 生产恢复逻辑收敛于 DecodeSession::restore_temporal（规划 §8.2）
 fn restore_sequence(result: &crf::DecodeResult) -> Vec<Vec<i32>> {
-    let mut out = Vec::with_capacity(result.frames.len());
-    let mut prev: Option<Vec<i32>> = None;
-    let golden = result.frames[0].pixels.clone();
-    for (i, dec) in result.frames.iter().enumerate() {
-        let is_golden = result.frame_golden_refs.get(i).copied().unwrap_or(false);
-        let restored = if i == 0 {
-            dec.pixels.clone()
-        } else if is_golden {
-            golden.iter().zip(&dec.pixels).map(|(a, b)| a + b).collect()
-        } else {
-            match &prev {
-                Some(p) => p.iter().zip(&dec.pixels).map(|(a, b)| a + b).collect(),
-                None => dec.pixels.clone(),
-            }
-        };
-        prev = Some(restored.clone());
-        out.push(restored);
-    }
-    out
+    crate::crf::decoder::session::DecodeSession::restore_temporal(result)
+        .into_iter()
+        .map(|f| f.pixels)
+        .collect()
 }
 
 #[test]

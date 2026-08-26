@@ -6,7 +6,7 @@
 //! 上色下大面积恒定，独立编码使 RLE 零行程成倍增长。
 
 use crate::crf::error::CrfResult;
-use crate::crf::format::{ColorFormat, CompressionType, ImageData};
+use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
 
 use super::adaptive::encode_frame_adaptive;
 use super::frame::BandSteps;
@@ -174,7 +174,7 @@ pub(crate) fn encode_planar_payload(
         }
     };
 
-    let mut preferred_sub: Option<crate::crf::format::PredictionMode> = None;
+    let mut preferred_sub: Option<crate::crf::core::domain::PredictionMode> = None;
     // (平面数据, 平面宽, 平面高)：Y 全分辨率；Co/Cg 视 half_res 而定
     let plane_refs: [(&Vec<i32>, usize, usize); 3] = [
         (&planes[0], image.width as usize, image.height as usize),

@@ -15,9 +15,9 @@ use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 use crate::crf::encoder::planar::encode_planar_payload;
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
-use crate::crf::format::{
-    apply_prediction, sad_for_mode_sampled, CompressionType, ImageData, PredictionMode,
-};
+use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
+use crate::crf::core::prediction::intra::apply_prediction;
+use crate::crf::format::sad_for_mode_sampled;
 
 use super::frame::BandSteps;
 use super::rdoq::trellis_quantize_interleaved;

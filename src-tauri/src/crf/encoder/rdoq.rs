@@ -1,4 +1,4 @@
-//! 率失真优化量化（RDOQ / Trellis，v1.10 新增）
+﻿//! 率失真优化量化（RDOQ / Trellis，v1.10 新增）
 //!
 //! ## 定位
 //!
@@ -21,7 +21,7 @@
 
 use crate::crf::encoder::dct_path::qm::quantize_coeffs_with_matrix;
 use crate::crf::encoder::dct_path::quant_scalar;
-use crate::crf::transform::is_valid_rect;
+use crate::crf::core::transform::is_valid_rect;
 
 /// λ 系数分子/分母（λ = 850/100 · Q_pos² = 8.5Q²）
 ///

@@ -202,10 +202,14 @@ fn main() {
         )),
     };
 
-    match crf::encode_sequence(&residuals, &params) {
-        Ok(encoded) => {
+    match crf::codec::encode(crf::codec::EncodeRequest {
+        frames: residuals.clone(),
+        params: params.clone(),
+    }) {
+        Ok(report) => {
+            let encoded = &report.bytes;
             let output_path = format!("{}/test_residual.crf", output_dir);
-            fs::write(&output_path, &encoded).expect("Failed to write");
+            fs::write(&output_path, encoded).expect("Failed to write");
 
             let ratio = encoded.len() as f64 / original_png_size as f64 * 100.0;
             println!("  Output: {}", output_path);
@@ -217,7 +221,9 @@ fn main() {
             println!("  vs original PNG: {:.2}%", ratio);
 
             // 验证解码
-            match crf::decode_from_bytes(&encoded) {
+            match crf::codec::decode_from_bytes(crf::codec::DecodeRequest {
+                bytes: encoded.clone(),
+            }) {
                 Ok(result) => {
                     println!("  Decoded {} residual frames", result.frames.len());
                     let mut all_match = true;

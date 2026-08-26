@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
-    use crate::crf::format::{ColorFormat, CompressionType, ImageData};
+    use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
 
     fn make_frame(w: u16, h: u16, seed: u64) -> ImageData {
         let mut s = seed;

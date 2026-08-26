@@ -1,3 +1,13 @@
+//! domain —— 公共领域类型（原 format/types.rs，P4 架构迁移）
+//!
+//! 规划文档 §3.1 / §6.3。编解码器共享的数据模型与不变量：
+//! 图像、色彩格式、压缩类型、预测模式、文件标志、帧头、索引项、
+//! 解码结果与编码参数。
+//!
+//! **迁移说明（P4）**：本模块原位于 `format/types.rs`，现迁入 `core/domain`。
+//! 打破 core → format 反向依赖（format 依赖 core 常量，core 又依赖 format
+//! 类型形成的逻辑循环）。旧 `format/types.rs` 不再保留。
+
 use crate::crf::error::{CrfError, CrfResult};
 
 /// 色彩格式枚举
@@ -368,7 +378,7 @@ impl ImageData {
 #[derive(Debug)]
 pub struct DecodeResult {
     /// 文件头
-    pub header: super::header::CrfHeader,
+    pub header: crate::crf::core::bitstream::header::CrfHeader,
     /// 帧索引（如果有）
     #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
     pub frame_index: Vec<FrameIndexEntry>,
@@ -405,7 +415,7 @@ pub struct EncodeParams {
     /// 有损模式下条带/三平面/调色板候选被跳过，仅保留帧级 top-2 与 CABAC。
     pub lossy_quality: Option<u8>,
     /// 真有损精细调参（None → 全默认：色度×130%、关键帧间隔 10、无死区偏置）
-    pub lossy_tuning: Option<crate::crf::format::quant::LossyTuning>,
+    pub lossy_tuning: Option<crate::crf::core::config::lossy::LossyTuning>,
     /// 用户自定义元数据
     pub user_metadata: Option<String>,
     /// 输入序列语义（默认 false = 兼容旧约定：frames[0] 为首帧原图、frames[1..] 为预差分残差帧）

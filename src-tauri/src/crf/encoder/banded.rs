@@ -12,7 +12,8 @@
 use rayon::prelude::*;
 
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::format::{apply_prediction_band, predict_at, ImageData, PredictionMode};
+use crate::crf::core::domain::{ImageData, PredictionMode};
+use crate::crf::core::prediction::intra::{apply_prediction_band, predict_at};
 
 use super::adaptive::ADAPTIVE_CANDIDATES;
 use super::rle_golomb;

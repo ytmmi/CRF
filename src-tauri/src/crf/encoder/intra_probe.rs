@@ -13,8 +13,8 @@
 //! - 预测一律引用本地重建像素（编码/解码闭环一致，§5-P2 关键约束）。
 
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::transform::dct8x8_forward;
-use crate::crf::transform::dct8x8_inverse;
+use crate::crf::core::transform::dct8x8_forward;
+use crate::crf::core::transform::dct8x8_inverse;
 
 /// 变换块尺寸（v1 固定 8×8）
 const BLK: usize = 8;
@@ -292,7 +292,7 @@ mod tests {
 
         let components = 3usize;
         for qi in [95u8, 90, 75] {
-            let q_step = crate::crf::format::quant::quant_step_from_quality(qi);
+            let q_step = crate::crf::core::config::lossy::quant_step_from_quality(qi);
             println!("=== q{} (step={}) ===", qi, q_step);
             for (fi, frame) in frames.iter().enumerate().skip(1).take(3) {
                 let diff: Vec<i32> = frame
@@ -310,7 +310,7 @@ mod tests {
                     width: frame.width,
                     height: frame.height,
                     bit_depth: 8,
-                    color_format: crate::crf::format::ColorFormat::Gray,
+                    color_format: crate::crf::core::domain::ColorFormat::Gray,
                     pixels: y_plane.clone(),
                 };
                 let fq = super::super::frame::FrameQuant {
@@ -323,7 +323,7 @@ mod tests {
                 };
                 let out_a = super::super::adaptive::encode_frame_adaptive(
                     &img,
-                    crate::crf::format::CompressionType::GolombRice,
+                    crate::crf::core::domain::CompressionType::GolombRice,
                     8,
                     false,
                     fq,

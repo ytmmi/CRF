@@ -6,10 +6,11 @@
 //! - [`assemble_crf_output`]：文件头/帧索引/帧数据/CRC 组装。
 
 use crate::crf::checksum::crc32;
-use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, HEADER_SIZE};
-use crate::crf::format::{CrfHeader, LossyTuning};
+use crate::crf::core::bitstream::header::CrfHeader;
+use crate::crf::core::config::lossy::LossyTuning;
 use crate::crf::encoder::frame::FrameQuant;
+use crate::crf::error::CrfResult;
 
 /// 路径 G 的逐帧量化配置
 ///
@@ -68,11 +69,6 @@ pub fn fq_for_chain_index(
         chroma_half_res: gq > 1 && tuning.chroma_half_res,
         q1_matrix_scale: false,
     }
-}
-
-/// 由步长反推质量档位（仅用于 q95 判定）
-pub fn quality_of_step(_step: u8) -> u8 {
-    0
 }
 
 /// 组装 CRF 输出文件
