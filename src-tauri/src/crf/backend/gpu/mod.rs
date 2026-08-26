@@ -1,9 +1,15 @@
-//! GPU 后端 —— CUDA/HIP/Vulkan/wgpu（可选 feature）
+//! GPU 后端入口。
 //!
-//! GPU 只能通过 [`crate::crf::backend::BackendKernel`] trait 进入，
-//! 不能修改 sequence/decoder 容器层（规划文档 §2 依赖方向）。
-//! 新增 GPU 后端必须独立文件/feature，不得把厂商 API 写入公共层。
-//!
-//! **P0 状态**：空骨架。P5 阶段按性能优化规划接入。
-
+//! NVIDIA 的首期实现只负责能力发现、后端决策和失败回退。CUDA driver
+//! API/kernel 尚未进入默认构建，因此 CPU-only 构建不需要 CUDA SDK。后续
+//! kernel 必须通过 [`crate::crf::backend::BackendKernel`] 接入，不能把厂商
+//! API 泄漏到 encoder/decoder。
 #![allow(dead_code)]
+
+pub mod capability;
+pub mod cuda;
+pub mod memory;
+
+pub use capability::{probe_nvidia, NvidiaDeviceInfo};
+pub use cuda::{resolve_backend, BackendRequest, BackendSelection, NvidiaCudaBackend};
+pub use memory::{estimate_i32_batch, GpuMemoryEstimate, TransferMode};
