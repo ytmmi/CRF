@@ -220,7 +220,7 @@ pub fn encode_intra_probe(
                             dequant[by * BLK + bx] + best_pred[by][bx];
                     }
                 }
-                crate::crf::format::zigzag_scan(&qres, BLK)
+                crate::crf::core::entropy::scan::zigzag_scan(&qres, BLK)
             } else {
                 // DCT 路径
                 let freq = dct8x8_forward(&block);
@@ -238,7 +238,7 @@ pub fn encode_intra_probe(
                             spatial[by * BLK + bx] + best_pred[by][bx];
                     }
                 }
-                crate::crf::format::zigzag_scan(&qcoeffs, BLK)
+                crate::crf::core::entropy::scan::zigzag_scan(&qcoeffs, BLK)
             };
             coeff_enc.encode_block(&scanned);
         }
@@ -301,7 +301,7 @@ mod tests {
                     .zip(frames[0].pixels.iter())
                     .map(|(a, b)| a - b)
                     .collect();
-                let eff = crf::format::rct_forward(&diff, components).unwrap();
+                let eff = crate::crf::core::color::rct::rct_forward(&diff, components).unwrap();
                 let mut y_plane = Vec::with_capacity(eff.len() / 3);
                 for px in eff.chunks_exact(3) {
                     y_plane.push(px[0]);

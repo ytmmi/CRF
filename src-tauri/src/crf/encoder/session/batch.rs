@@ -7,7 +7,8 @@
 
 use crate::crf::checksum::crc32;
 use crate::crf::error::CrfResult;
-use crate::crf::format::{CrfHeader, LossyTuning, FOOTER_MAGIC, FOOTER_SIZE, HEADER_SIZE};
+use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, HEADER_SIZE};
+use crate::crf::format::{CrfHeader, LossyTuning};
 use crate::crf::encoder::frame::FrameQuant;
 
 /// 路径 G 的逐帧量化配置

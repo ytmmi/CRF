@@ -23,7 +23,7 @@ pub struct FramePacket<'a> {
 impl<'a> FramePacket<'a> {
     /// 创建新的帧包
     pub fn new(header: FrameHeader, payload: &'a [u8], file_offset: usize) -> Self {
-        let total_len = crate::crf::format::FRAME_HEADER_SIZE + payload.len();
+        let total_len = crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE + payload.len();
         FramePacket {
             header,
             payload,

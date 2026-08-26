@@ -1,5 +1,6 @@
 use crate::crf::error::CrfResult;
-use crate::crf::format::{adaptive_k, zigzag_encode};
+use crate::crf::format::adaptive_k;
+use crate::crf::core::entropy::scan::zigzag_encode;
 
 /// RLE+Golomb 混合编码器
 ///

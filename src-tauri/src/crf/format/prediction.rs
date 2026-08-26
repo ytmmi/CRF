@@ -438,7 +438,7 @@ pub fn closed_loop_predict_quant_banded(
     let mut recon = vec![0i32; n];
 
     // 行 → 条带有效步长的快速查表；None 时全帧统一
-    let band_h = crate::crf::format::BAND_HEIGHT;
+    let band_h = crate::crf::core::bitstream::constants::BAND_HEIGHT;
     let step_of_band = |y: usize| -> u8 {
         match band_steps {
             Some(t) if !t.is_empty() => t[(y / band_h).min(t.len() - 1)].max(1),

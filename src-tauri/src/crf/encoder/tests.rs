@@ -1,7 +1,8 @@
 //! encoder 集成与路径竞争测试（自原 mod.rs 迁移）
 
+use crate::crf::core::color::rct::rct_forward;
 use crate::crf::format::{
-    rct_forward, ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode,
+    ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode,
 };
 
 use super::adaptive::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
@@ -130,7 +131,7 @@ fn test_banded_payload_roundtrip() {
 /// 且大图平坦场景下编码器竞争可产出 coding_params=64 的帧。
 #[test]
 fn test_banded_payload_roundtrip_height64() {
-    use crate::crf::format::BAND_HEIGHT;
+    use crate::crf::core::bitstream::constants::BAND_HEIGHT;
     let width = 48usize;
     let height = 128usize; // 恰好 2 个 64 行条带
     let mut pixels = vec![0i32; width * height];
@@ -365,7 +366,7 @@ fn test_lossy_mode_error_bound_and_size() {
 
     // 诊断：逐帧解析帧头（frame_type / coding_params）
     {
-        let mut off = crate::crf::format::HEADER_SIZE + 3 * 8;
+        let mut off = crate::crf::core::bitstream::constants::HEADER_SIZE + 3 * 8;
         for fi in 0..3 {
             if off + 11 > lossy.len() {
                 break;
@@ -559,7 +560,7 @@ fn test_first_frame_dual_path_competition() {
     let encoded = encode_sequence(&frames, &params).unwrap();
 
     // 第一帧帧头位于 文件头64B + 索引(3帧×8B) 之后；frame_type 在偏移 8
-    let first_frame_off = crate::crf::format::HEADER_SIZE + 3 * 8;
+    let first_frame_off = crate::crf::core::bitstream::constants::HEADER_SIZE + 3 * 8;
     let frame_type = encoded[first_frame_off + 8];
     assert!(
         frame_type == 0 || frame_type == 1,

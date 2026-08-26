@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use super::constants::*;
+use crate::crf::core::bitstream::constants::*;
 use super::types::{ColorFormat, CompressionType, Flags, PredictionMode};
 use crate::crf::error::{CrfError, CrfResult};
 

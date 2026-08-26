@@ -23,7 +23,6 @@ pub mod golomb;
 pub(crate) mod intra_probe;
 pub mod intra_transform;
 pub(crate) mod intrabc;
-pub mod ma_tree;
 pub(crate) mod noise;
 pub(crate) mod planar;
 pub mod rdoq;

@@ -1,5 +1,5 @@
 use crate::crf::error::CrfResult;
-use crate::crf::format::zigzag_encode;
+use crate::crf::core::entropy::scan::zigzag_encode;
 
 /// 指数哥伦布编码器
 ///

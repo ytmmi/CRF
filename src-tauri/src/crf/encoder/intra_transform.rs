@@ -89,7 +89,7 @@ fn encode_plane(
                         recon[(y0 + by) * width + x0 + bx] = dq[by * BLK + bx] + best_pred[by][bx];
                     }
                 }
-                crate::crf::format::zigzag_scan(&qres, BLK)
+                crate::crf::core::entropy::scan::zigzag_scan(&qres, BLK)
             } else {
                 // DCT 路径
                 let freq = dct8x8_forward(&block);
@@ -107,7 +107,7 @@ fn encode_plane(
                             spatial[by * BLK + bx] + best_pred[by][bx];
                     }
                 }
-                crate::crf::format::zigzag_scan(&qc, BLK)
+                crate::crf::core::entropy::scan::zigzag_scan(&qc, BLK)
             };
             coeff_enc.encode_block(&scanned);
         }

@@ -507,7 +507,7 @@ mod tests {
     /// 数据构造，dump 帧头类型与失配位置。
     #[test]
     fn debug_itbc_diff_frame_e2e() {
-        use crate::crf::format::HEADER_SIZE;
+        use crate::crf::core::bitstream::constants::HEADER_SIZE;
         let frames: Vec<ImageData> = (0..3)
             .map(|fi| {
                 let pixels: Vec<i32> = (0..64 * 64 * 3)
@@ -568,7 +568,7 @@ mod tests {
         // ===== 载荷级隔离复现：对 frame1 的 YCoCg 差分直接往返 =====
         {
             let diff = diff_rgb(1);
-            let ycocg = crate::crf::format::rct_forward(&diff, 3).unwrap();
+            let ycocg = crate::crf::core::color::rct::rct_forward(&diff, 3).unwrap();
             let itbc_payload = encode_intrabc_payload(&ycocg, 64, 64, 3).unwrap();
             // 诊断：解析决策与向量
             {

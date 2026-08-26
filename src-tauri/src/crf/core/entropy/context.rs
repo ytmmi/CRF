@@ -21,7 +21,7 @@
 //! encoder 与 decoder 均通过公共契约访问。`encoder/ma_tree.rs` 保留为
 //! `pub use` 转发层，迁移完成后删除。
 
-use crate::crf::format::BAND_HEIGHT;
+use crate::crf::core::bitstream::constants::BAND_HEIGHT;
 
 /// 最大树深（根为 0）：≤ 2^3 = 8 叶子
 pub const MA_MAX_DEPTH: usize = 3;

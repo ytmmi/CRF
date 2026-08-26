@@ -280,9 +280,9 @@ impl FrameHeader {
 
     /// 从字节缓冲区解析
     pub fn from_bytes(data: &[u8]) -> CrfResult<Self> {
-        if data.len() < super::constants::FRAME_HEADER_SIZE {
+        if data.len() < crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE {
             return Err(CrfError::InsufficientData {
-                expected: super::constants::FRAME_HEADER_SIZE,
+                expected: crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE,
                 actual: data.len(),
             });
         }

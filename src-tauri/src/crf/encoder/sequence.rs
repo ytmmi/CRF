@@ -13,8 +13,9 @@
 use rayon::prelude::*;
 
 use crate::crf::error::{CrfError, CrfResult};
+use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
 use crate::crf::format::{
-    CompressionType, CrfHeader, EncodeParams, Flags, ImageData, FRAME_HEADER_SIZE, HEADER_SIZE,
+    CompressionType, CrfHeader, EncodeParams, Flags, ImageData,
 };
 
 use super::adaptive::encode_frame_adaptive;
@@ -103,12 +104,12 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             BATCH_MEM_LIMIT as f64 / 1_000_000_000.0,
         )));
     }
-    let use_rct = crate::crf::format::rct_applicable(components);
+    let use_rct = crate::crf::core::color::rct::rct_applicable(components);
     let encode_frames: Vec<ImageData> = if use_rct {
         frames
             .iter()
             .map(|f| {
-                let transformed = crate::crf::format::rct_forward(&f.pixels, components)?;
+                let transformed = crate::crf::core::color::rct::rct_forward(&f.pixels, components)?;
                 Ok(ImageData {
                     width: f.width,
                     height: f.height,
@@ -208,7 +209,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         } else {
             None
         };
-        let first_eff_pixels = crate::crf::format::rct_forward(&first_diff_rgb, components)?;
+        let first_eff_pixels = crate::crf::core::color::rct::rct_forward(&first_diff_rgb, components)?;
         let first_eff_frame = ImageData {
             width: frames[0].width,
             height: frames[0].height,
@@ -290,7 +291,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         // 重建与文件自包含解码逐位一致——这是闭环语义的定义本身。
         let mut g_hat_img = crate::crf::decoder::decode_frame(&data_first, &header)?;
         if header.flags.has_rct() && !header.flags.first_frame_no_rct() {
-            g_hat_img.pixels = crate::crf::format::rct_inverse(&g_hat_img.pixels, components)?;
+            g_hat_img.pixels = crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
         }
         let g_hat = g_hat_img.pixels; // RGB 域重建首帧
 
@@ -305,7 +306,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 // 无损 golden 时 G_hat == frames[0]（decode 精确还原），产物
                 // 与旧实现逐字节一致；有损 golden 时误差不再向后续帧传导。
                 let mut diff_rgb = vec![0i32; frame.pixels.len()];
-                crate::crf::format::simd::sub_i32(&frame.pixels, &g_hat, &mut diff_rgb);
+                crate::crf::backend::cpu::simd::sub_i32(&frame.pixels, &g_hat, &mut diff_rgb);
                 if q95_soft {
                     soft1(&mut diff_rgb);
                 }
@@ -329,7 +330,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                         &thresholds,
                     );
                 }
-                let eff_pixels = crate::crf::format::rct_forward(&diff_rgb, components)?;
+                let eff_pixels = crate::crf::core::color::rct::rct_forward(&diff_rgb, components)?;
                 let eff_frame = ImageData {
                     width: frame.width,
                     height: frame.height,

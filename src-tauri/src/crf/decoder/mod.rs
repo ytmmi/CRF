@@ -36,9 +36,10 @@ mod tests;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::crf::error::{CrfError, CrfResult};
+use crate::crf::core::bitstream::constants::{FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE};
 use crate::crf::format::{
     undo_prediction, CompressionType, CrfHeader, DecodeResult, FrameHeader, FrameIndexEntry,
-    ImageData, PredictionMode, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE,
+    ImageData, PredictionMode,
 };
 
 pub(crate) use banded::decode_banded_with_undo;
@@ -364,7 +365,7 @@ pub fn decode_from_bytes(data: &[u8]) -> CrfResult<DecodeResult> {
             if skip_first && i == 0 {
                 continue;
             }
-            frame.pixels = crate::crf::format::rct_inverse(&frame.pixels, components)?;
+            frame.pixels = crate::crf::core::color::rct::rct_inverse(&frame.pixels, components)?;
         }
     }
 
@@ -447,7 +448,7 @@ pub fn decode_from_file(reader: &mut (impl Read + Seek)) -> CrfResult<DecodeResu
             if skip_first && i == 0 {
                 continue;
             }
-            frame.pixels = crate::crf::format::rct_inverse(&frame.pixels, components)?;
+            frame.pixels = crate::crf::core::color::rct::rct_inverse(&frame.pixels, components)?;
         }
     }
 

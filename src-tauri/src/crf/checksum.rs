@@ -1,7 +1,7 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use super::error::{CrfError, CrfResult};
-use super::format::FOOTER_SIZE;
+use crate::crf::core::bitstream::constants::FOOTER_SIZE;
 
 /// CRC32 查找表
 #[allow(dead_code)] // 标量查表参考实现：与 crc32fast 硬件路径逐位对拍用
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_zigzag_encode_decode() {
-        use super::super::format::{zigzag_decode, zigzag_encode};
+        use crate::crf::core::entropy::scan::{zigzag_decode, zigzag_encode};
 
         let test_cases = [0, 1, -1, 2, -2, 100, -100, 1000, -1000];
         for &val in &test_cases {

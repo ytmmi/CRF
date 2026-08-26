@@ -1,4 +1,4 @@
-use crate::crf::format::zigzag_decode;
+use crate::crf::core::entropy::scan::zigzag_decode;
 
 /// RLE+Golomb 混合解码器
 pub struct RleGolombDecoder<'a> {

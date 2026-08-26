@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 use crate::crf::checksum::{crc32, verify_crc32};
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::format::FOOTER_SIZE;
+use crate::crf::core::bitstream::constants::FOOTER_SIZE;
 
 /// 验证文件 CRC32 校验和，失败时返回详细的错误信息
 ///

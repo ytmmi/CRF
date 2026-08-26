@@ -23,7 +23,7 @@
 //! 作用点位于 golden 差分之后 / RCT 变换之前；仅作用于有损模式的
 //! 差分帧（golden 首帧与无损模式绝不触碰）；解码端无需感知，格式零改动。
 
-use crate::crf::format::BAND_HEIGHT;
+use crate::crf::core::bitstream::constants::BAND_HEIGHT;
 
 /// 自动阈值的绝对上限：超过它的残差属于明确的结构信号，
 /// 不允许被任何自动策略抹除。
@@ -201,7 +201,7 @@ pub fn soft_threshold_interleaved(
             }
         };
         match uniform_t {
-            Some(t) => crate::crf::format::simd::soft_threshold_plane(row, t),
+            Some(t) => crate::crf::backend::cpu::simd::soft_threshold_plane(row, t),
             None => {
                 for (chunk_idx, chunk) in row.chunks_exact_mut(components).enumerate() {
                     for (c, v) in chunk.iter_mut().enumerate() {

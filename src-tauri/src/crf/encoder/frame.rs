@@ -6,9 +6,10 @@
 //! - [`FrameQuant`]：单帧量化配置（步长/死区偏置/色度参数）。
 
 use crate::crf::error::CrfResult;
+use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::format::{
     apply_prediction, closed_loop_predict_quant_banded, CompressionType, FrameHeader, ImageData,
-    PredictionMode, FRAME_HEADER_SIZE,
+    PredictionMode,
 };
 
 /// 单帧量化配置（真有损）

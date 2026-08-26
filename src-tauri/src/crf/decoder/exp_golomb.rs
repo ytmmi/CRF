@@ -1,4 +1,4 @@
-use crate::crf::format::zigzag_decode;
+use crate::crf::core::entropy::scan::zigzag_decode;
 
 /// 指数哥伦布解码器
 pub struct ExpGolombDecoder<'a> {

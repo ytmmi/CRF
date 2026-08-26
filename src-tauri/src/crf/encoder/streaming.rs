@@ -16,9 +16,9 @@
 
 use crate::crf::checksum::crc32;
 use crate::crf::error::{CrfError, CrfResult};
+use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE};
 use crate::crf::format::{
-    CompressionType, CrfHeader, EncodeParams, ImageData, FOOTER_MAGIC, FOOTER_SIZE,
-    FRAME_HEADER_SIZE, HEADER_SIZE,
+    CompressionType, CrfHeader, EncodeParams, ImageData,
 };
 
 use super::adaptive::encode_frame_adaptive;
@@ -151,7 +151,7 @@ impl StreamingEncoder {
                         height: frame.height,
                         bit_depth: frame.bit_depth,
                         color_format: frame.color_format,
-                        pixels: crate::crf::format::rct_forward(&frame.pixels, components)?,
+                        pixels: crate::crf::core::color::rct::rct_forward(&frame.pixels, components)?,
                     }
                 } else {
                     ImageData {
@@ -193,8 +193,8 @@ impl StreamingEncoder {
                     });
                 }
                 let mut diff = vec![0i32; frame.pixels.len()];
-                crate::crf::format::simd::sub_i32(&frame.pixels, &golden.pixels, &mut diff);
-                let eff_pixels = crate::crf::format::rct_forward(&diff, components)?;
+                crate::crf::backend::cpu::simd::sub_i32(&frame.pixels, &golden.pixels, &mut diff);
+                let eff_pixels = crate::crf::core::color::rct::rct_forward(&diff, components)?;
 
                 let fq_band: Vec<u8> = if self.noise_on() && components == 3 {
                     fq_band_steps(

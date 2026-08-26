@@ -1,4 +1,4 @@
-use crate::crf::format::zigzag_inverse;
+use crate::crf::core::entropy::scan::zigzag_inverse;
 use crate::crf::transform::dct4x4_inverse as hadamard_inverse;
 
 use super::rle_golomb::RleGolombDecoder;

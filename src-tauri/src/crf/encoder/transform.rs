@@ -1,5 +1,6 @@
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::format::{adaptive_k, zigzag_encode, zigzag_scan};
+use crate::crf::format::adaptive_k;
+use crate::crf::core::entropy::scan::{zigzag_encode, zigzag_scan};
 
 use super::rle_golomb::RleGolombEncoder;
 

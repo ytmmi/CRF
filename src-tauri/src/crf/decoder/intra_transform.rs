@@ -121,7 +121,7 @@ fn decode_plane(data: &[u8], width: usize, height: usize, q: i32) -> CrfResult<V
             let qz = coeff_dec.decode_block();
 
             // 逆 zigzag → 行优先
-            let spatial_coeffs = crate::crf::format::zigzag_inverse(&qz, BLK);
+            let spatial_coeffs = crate::crf::core::entropy::scan::zigzag_inverse(&qz, BLK);
 
             if mode == MODE_DC {
                 // transform skip：逆量化残差

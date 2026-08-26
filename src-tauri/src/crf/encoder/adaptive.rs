@@ -14,9 +14,9 @@ use crate::crf::encoder::banded::encode_banded_payload;
 use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 use crate::crf::encoder::planar::encode_planar_payload;
 use crate::crf::error::{CrfError, CrfResult};
+use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
 use crate::crf::format::{
     apply_prediction, sad_for_mode_sampled, CompressionType, ImageData, PredictionMode,
-    BAND_HEIGHT, FRAME_HEADER_SIZE,
 };
 
 use super::frame::BandSteps;

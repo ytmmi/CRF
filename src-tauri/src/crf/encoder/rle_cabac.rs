@@ -9,7 +9,7 @@
 //! Meta-Adaptive 同款，数据驱动决策树）/ 固定梯度 4 档 / 全帧统一单档，
 //! 取码流最小者，flags 编码所选模式。保证相对任何单一模式单调不劣化。
 
-use crate::crf::encoder::ma_tree::{CtxModel, N_CTX};
+use crate::crf::core::entropy::context::{CtxModel, N_CTX};
 
 // ===== Range Coder（32 位区间 + 64 位低位累积）=====
 
@@ -169,12 +169,12 @@ impl CabacEncoder {
         let v = run + 1;
         let m = 31 - v.leading_zeros();
         if m < 15 {
-            self.bit(false, super::ma_tree::ctx_run_lead_pub(0));
+            self.bit(false, crate::crf::core::entropy::context::ctx_run_lead_pub(0));
             for i in (0..4).rev() {
                 self.direct_bit((m >> i) & 1 == 1);
             }
         } else {
-            self.bit(true, super::ma_tree::ctx_run_lead_pub(0));
+            self.bit(true, crate::crf::core::entropy::context::ctx_run_lead_pub(0));
             let mm = m - 15;
             for i in (0..5).rev() {
                 self.direct_bit((mm >> i) & 1 == 1);
@@ -329,7 +329,7 @@ pub fn encode_frame_rle_cabac_adaptive_limited(
     stride: Option<usize>,
     byte_limit: usize,
 ) -> crate::crf::error::CrfResult<Option<(Vec<u8>, u8)>> {
-    use super::ma_tree::{build_ma_tree, CtxModel};
+    use crate::crf::core::entropy::context::{build_ma_tree, CtxModel};
 
     // 共用 k（同像素集直方图竞争结果一致）
     let probe = CabacEncoder::adaptive(pixels);
