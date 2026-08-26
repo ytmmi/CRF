@@ -31,6 +31,7 @@ struct Driver {
     device_get: unsafe extern "system" fn(*mut Dev, i32) -> R,
     ctx_create: unsafe extern "system" fn(*mut Handle, u32, Dev) -> R,
     ctx_destroy: unsafe extern "system" fn(Handle) -> R,
+    ctx_set_current: unsafe extern "system" fn(Handle) -> R,
     module_load: unsafe extern "system" fn(*mut Handle, *const c_void) -> R,
     module_unload: unsafe extern "system" fn(Handle) -> R,
     function_get: unsafe extern "system" fn(*mut Handle, Handle, *const c_char) -> R,
@@ -76,22 +77,32 @@ impl Driver {
                 "nvcuda.dll could not be loaded".into(),
             ));
         }
-        Ok(Self {
-            lib,
-            init: sym(lib, "cuInit")?,
-            device_get: sym(lib, "cuDeviceGet")?,
-            ctx_create: sym(lib, "cuCtxCreate_v2")?,
-            ctx_destroy: sym(lib, "cuCtxDestroy_v2")?,
-            module_load: sym(lib, "cuModuleLoadData")?,
-            module_unload: sym(lib, "cuModuleUnload")?,
-            function_get: sym(lib, "cuModuleGetFunction")?,
-            alloc: sym(lib, "cuMemAlloc_v2")?,
-            free: sym(lib, "cuMemFree_v2")?,
-            hto_d: sym(lib, "cuMemcpyHtoD_v2")?,
-            dto_h: sym(lib, "cuMemcpyDtoH_v2")?,
-            launch: sym(lib, "cuLaunchKernel")?,
-            sync: sym(lib, "cuCtxSynchronize")?,
-        })
+        let loaded = (|| {
+            Ok(Self {
+                lib,
+                init: sym(lib, "cuInit")?,
+                device_get: sym(lib, "cuDeviceGet")?,
+                ctx_create: sym(lib, "cuCtxCreate_v2")?,
+                ctx_destroy: sym(lib, "cuCtxDestroy_v2")?,
+                ctx_set_current: sym(lib, "cuCtxSetCurrent")?,
+                module_load: sym(lib, "cuModuleLoadData")?,
+                module_unload: sym(lib, "cuModuleUnload")?,
+                function_get: sym(lib, "cuModuleGetFunction")?,
+                alloc: sym(lib, "cuMemAlloc_v2")?,
+                free: sym(lib, "cuMemFree_v2")?,
+                hto_d: sym(lib, "cuMemcpyHtoD_v2")?,
+                dto_h: sym(lib, "cuMemcpyDtoH_v2")?,
+                launch: sym(lib, "cuLaunchKernel")?,
+                sync: sym(lib, "cuCtxSynchronize")?,
+            })
+        })();
+        match loaded {
+            Ok(driver) => Ok(driver),
+            Err(error) => {
+                FreeLibrary(lib);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -116,88 +127,157 @@ fn check(code: R, op: &str) -> Result<(), BackendError> {
 }
 
 #[cfg(windows)]
+struct Session {
+    driver: Driver,
+    context: Handle,
+    module: Handle,
+    function: Handle,
+}
+
+// CUDA handles are process-owned opaque values. Access to the cached session
+// is serialized by the mutex below, so moving it between worker threads is
+// safe as long as each call makes its context current first.
+#[cfg(windows)]
+unsafe impl Send for Driver {}
+
+#[cfg(windows)]
+unsafe impl Send for Session {}
+
+#[cfg(windows)]
+impl Session {
+    unsafe fn new(device_id: u32) -> Result<Self, BackendError> {
+        let driver = Driver::load()?;
+        let mut session = Self {
+            driver,
+            context: ptr::null_mut(),
+            module: ptr::null_mut(),
+            function: ptr::null_mut(),
+        };
+        check((session.driver.init)(0), "cuInit")?;
+        let mut device = 0;
+        check(
+            (session.driver.device_get)(&mut device, device_id as i32),
+            "cuDeviceGet",
+        )?;
+        check(
+            (session.driver.ctx_create)(&mut session.context, 0, device),
+            "cuCtxCreate",
+        )?;
+        let mut ptx = PTX.to_vec();
+        ptx.push(0);
+        check(
+            (session.driver.module_load)(&mut session.module, ptx.as_ptr().cast()),
+            "cuModuleLoadData",
+        )?;
+        let name = CString::new("diff_i32").unwrap();
+        check(
+            (session.driver.function_get)(&mut session.function, session.module, name.as_ptr()),
+            "cuModuleGetFunction",
+        )?;
+        Ok(session)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Session {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.module.is_null() {
+                let _ = (self.driver.module_unload)(self.module);
+                self.module = ptr::null_mut();
+            }
+            if !self.context.is_null() {
+                let _ = (self.driver.ctx_destroy)(self.context);
+                self.context = ptr::null_mut();
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
 pub fn run_diff_i32(device_id: u32, a: &[i32], b: &[i32]) -> Result<Vec<i32>, BackendError> {
     if a.is_empty() {
         return Ok(Vec::new());
     }
-    let d = unsafe { Driver::load()? };
-    let mut dev = 0;
-    let mut ctx = ptr::null_mut();
-    let mut module = ptr::null_mut();
-    let mut fun = ptr::null_mut();
+    use std::sync::{Mutex, OnceLock};
+    static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
+    let lock = SESSION.get_or_init(|| Mutex::new(None));
+    let mut guard = lock
+        .lock()
+        .map_err(|_| BackendError::DeviceError("CUDA session lock poisoned".into()))?;
+    if guard.is_none() {
+        *guard = Some(unsafe { Session::new(device_id)? });
+    }
+    let session = guard.as_mut().expect("CUDA session initialized");
+    unsafe {
+        check(
+            (session.driver.ctx_set_current)(session.context),
+            "cuCtxSetCurrent",
+        )?;
+    }
+    unsafe { execute_diff(&session.driver, session.function, a, b) }
+}
+
+#[cfg(windows)]
+unsafe fn execute_diff(
+    d: &Driver,
+    fun: Handle,
+    a: &[i32],
+    b: &[i32],
+) -> Result<Vec<i32>, BackendError> {
+    let bytes = a.len().checked_mul(4).ok_or(BackendError::AllocFailed)?;
     let mut da = 0;
     let mut db = 0;
     let mut out = 0;
-    let bytes = a.len().checked_mul(4).ok_or(BackendError::AllocFailed)?;
-    unsafe {
-        check((d.init)(0), "cuInit")?;
-        check((d.device_get)(&mut dev, device_id as i32), "cuDeviceGet")?;
-        check((d.ctx_create)(&mut ctx, 0, dev), "cuCtxCreate")?;
-        let result = (|| {
-            let mut ptx = PTX.to_vec();
-            ptx.push(0);
-            check(
-                (d.module_load)(&mut module, ptx.as_ptr().cast()),
-                "cuModuleLoadData",
-            )?;
-            let n = CString::new("diff_i32").unwrap();
-            check(
-                (d.function_get)(&mut fun, module, n.as_ptr()),
-                "cuModuleGetFunction",
-            )?;
-            check((d.alloc)(&mut da, bytes), "cuMemAlloc(a)")?;
-            check((d.alloc)(&mut db, bytes), "cuMemAlloc(b)")?;
-            check((d.alloc)(&mut out, bytes), "cuMemAlloc(out)")?;
-            check((d.hto_d)(da, a.as_ptr().cast(), bytes), "cuMemcpyHtoD(a)")?;
-            check((d.hto_d)(db, b.as_ptr().cast(), bytes), "cuMemcpyHtoD(b)")?;
-            let mut len = a.len() as u32;
-            let mut args: [*mut c_void; 4] = [
-                (&mut da as *mut DevPtr).cast::<c_void>(),
-                (&mut db as *mut DevPtr).cast::<c_void>(),
-                (&mut out as *mut DevPtr).cast::<c_void>(),
-                (&mut len as *mut u32).cast::<c_void>(),
-            ];
-            let block = 256u32;
-            let grid = ((len + block - 1) / block).max(1);
-            check(
-                (d.launch)(
-                    fun,
-                    grid,
-                    1,
-                    1,
-                    block,
-                    1,
-                    1,
-                    0,
-                    ptr::null_mut(),
-                    args.as_mut_ptr(),
-                    ptr::null_mut(),
-                ),
-                "cuLaunchKernel",
-            )?;
-            check((d.sync)(), "cuCtxSynchronize")?;
-            let mut result = vec![0i32; a.len()];
-            check(
-                (d.dto_h)(result.as_mut_ptr().cast(), out, bytes),
-                "cuMemcpyDtoH",
-            )?;
-            Ok(result)
-        })();
-        if da != 0 {
-            let _ = (d.free)(da);
-        }
-        if db != 0 {
-            let _ = (d.free)(db);
-        }
-        if out != 0 {
-            let _ = (d.free)(out);
-        }
-        if !module.is_null() {
-            let _ = (d.module_unload)(module);
-        }
-        let _ = (d.ctx_destroy)(ctx);
-        result
+    let result = (|| {
+        check((d.alloc)(&mut da, bytes), "cuMemAlloc(a)")?;
+        check((d.alloc)(&mut db, bytes), "cuMemAlloc(b)")?;
+        check((d.alloc)(&mut out, bytes), "cuMemAlloc(out)")?;
+        check((d.hto_d)(da, a.as_ptr().cast(), bytes), "cuMemcpyHtoD(a)")?;
+        check((d.hto_d)(db, b.as_ptr().cast(), bytes), "cuMemcpyHtoD(b)")?;
+        let mut len = a.len() as u32;
+        let mut args: [*mut c_void; 4] = [
+            (&mut da as *mut DevPtr).cast(),
+            (&mut db as *mut DevPtr).cast(),
+            (&mut out as *mut DevPtr).cast(),
+            (&mut len as *mut u32).cast(),
+        ];
+        let block = 256u32;
+        let grid = ((len + block - 1) / block).max(1);
+        check(
+            (d.launch)(
+                fun,
+                grid,
+                1,
+                1,
+                block,
+                1,
+                1,
+                0,
+                ptr::null_mut(),
+                args.as_mut_ptr(),
+                ptr::null_mut(),
+            ),
+            "cuLaunchKernel",
+        )?;
+        check((d.sync)(), "cuCtxSynchronize")?;
+        let mut result = vec![0i32; a.len()];
+        check(
+            (d.dto_h)(result.as_mut_ptr().cast(), out, bytes),
+            "cuMemcpyDtoH",
+        )?;
+        Ok(result)
+    })();
+    if da != 0 {
+        let _ = (d.free)(da);
     }
+    if db != 0 {
+        let _ = (d.free)(db);
+    }
+    if out != 0 {
+        let _ = (d.free)(out);
+    }
+    result
 }
 
 #[cfg(not(windows))]
