@@ -1,15 +1,25 @@
 //! CRF 解码器
 //!
-//! 模块布局：
-//! - 本文件：帧解码分流（frame_type 1-6）与序列/文件级解码入口
+//! 模块布局（P2 架构迁移）：
+//! - [`container`]：容器层（bytes/file reader、CRC、header/index/footer）
+//! - [`frame`]：帧分派层（frame_type 路由、FramePacket）
+//! - 本文件：帧解码分流（frame_type 1-8）与序列/文件级解码入口
 //! - `image_export`：解码帧落盘（PNG/BMP 轻量导出）
 //! - `banded` / `planar` / `palette`：条带(2)/三平面(3)/调色板(4) 路径
 //! - 熵解码器族：golomb / rle_golomb / exp_golomb / rle_cabac / transform
+//!
+//! **迁移状态**：`container` 和 `frame` 为 P2 新增分层骨架。
+//! `decode_from_bytes` 和 `decode_from_file` 保持 facade 兼容，
+//! 内部逐步委托到新模块。`decode_frame` 仍为帧分派+重建混合函数，
+//! P4 拆分为纯分派+独立重建层。
 
 pub(crate) mod banded;
-#[allow(dead_code)] // P3 CABAC 解码器：frame_type=8 接入后激活
 pub mod coeff_cabac;
+/// container：容器层（P2 架构迁移，bounded reader/CRC/footer 验证）
+pub mod container;
 pub mod exp_golomb;
+/// frame：帧分派层（P2 架构迁移，frame_type 路由/FramePacket）
+pub mod frame;
 pub mod golomb;
 pub(crate) mod image_export;
 pub mod intra_transform;
@@ -25,7 +35,6 @@ mod tests;
 
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::crf::checksum::{crc32, verify_crc32};
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::format::{
     undo_prediction, CompressionType, CrfHeader, DecodeResult, FrameHeader, FrameIndexEntry,
@@ -389,23 +398,9 @@ pub fn decode_from_file(reader: &mut (impl Read + Seek)) -> CrfResult<DecodeResu
 
     // 验证 CRC32（如果存在文件尾）
     if file_size >= (HEADER_SIZE + FOOTER_SIZE) as u64 {
-        let crc_valid = verify_crc32(reader)?;
-        if !crc_valid {
-            // 读取期望的 CRC 值
-            reader.seek(SeekFrom::End(-(FOOTER_SIZE as i64)))?;
-            let mut crc_buf = [0u8; 4];
-            reader.read_exact(&mut crc_buf)?;
-            let expected_crc = u32::from_le_bytes(crc_buf);
-
-            reader.seek(SeekFrom::Start(0))?;
-            let mut file_data = vec![0u8; (file_size - FOOTER_SIZE as u64) as usize];
-            reader.read_exact(&mut file_data)?;
-            let actual_crc = crc32(&file_data);
-
-            return Err(CrfError::CrcChecksumFailed {
-                expected: expected_crc,
-                actual: actual_crc,
-            });
+        // 使用 container::footer 的验证函数（P2 容器层拆分）
+        if let Err(e) = container::footer::verify_file_crc(reader) {
+            return Err(e);
         }
     }
 
