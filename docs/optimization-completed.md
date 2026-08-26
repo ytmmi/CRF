@@ -161,7 +161,7 @@
 | P6.4 | SIMD（差分/YCoCg-R/软阈值） | `format/simd.rs` AVX2 运行时分派 | R1（§一.1）| ✅ | CRC32 走 crc32fast PCLMULQDQ |
 | P6.5 | 熵编码批量位写入 | `encoder/golomb.rs` L70 `write_bits_msb` + `rle_golomb.rs` + `exp_golomb.rs` | §8 R14/S6 | ✅ | 码流逐字节一致 |
 | P6.6 | 线程级并行 | rayon `par_iter`（SAD/残差帧）| R5 | ✅ | SAD 决策 8 模式并行 |
-| — | SATD 预筛 | — | — | ❌ 未完成 |
+| P6.7 | SATD 预筛 | `format/cost.rs` 4×4 Hadamard SATD + 1/4 网格采样 | CPU 性能分支 | ✅ | 替代自适应与 IntraBC 的行采样 SAD 排序 |
 | — | SIMD 预测/量化泛化 | — | §6.2 S3 | ❌ 中长期 | Med/Paeth 分支向量化复杂 |
 | — | 内存池零分配 | — | §6.2 S4 | ❌ 暂缓 | 待性能剖析后定向 |
 | — | 缓冲复用 | — | §23 未执行项 | ❌ 后置 | P5 完成后评估 |

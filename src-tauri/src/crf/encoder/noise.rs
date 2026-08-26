@@ -206,7 +206,9 @@ pub fn soft_threshold_interleaved(
                 for (chunk_idx, chunk) in row.chunks_exact_mut(components).enumerate() {
                     for (c, v) in chunk.iter_mut().enumerate() {
                         let t = t_row[c];
-                        if t > 0 && v.abs() <= t {
+                        // unsigned_abs keeps the i32::MIN edge case defined,
+                        // matching the SIMD threshold kernel semantics.
+                        if t > 0 && v.unsigned_abs() <= t as u32 {
                             *v = 0;
                         }
                     }

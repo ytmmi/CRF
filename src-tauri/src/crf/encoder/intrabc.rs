@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use crate::crf::error::CrfResult;
 use crate::crf::core::domain::PredictionMode;
 use crate::crf::core::prediction::intra::predict_at;
-use crate::crf::format::sad_for_mode_sampled;
+use crate::crf::format::satd_for_mode_sampled;
 
 /// 块边长（像素）
 const BS: usize = 8;
@@ -187,7 +187,7 @@ fn find_match(
     None
 }
 
-/// PRED 块的空间预测模式：行采样 SAD 选取（一次性评估）
+/// PRED 块的空间预测模式：4×4 Hadamard SATD 预筛（一次性评估）
 ///
 /// 候选**必须排除跨块右引用的模式**：DC 与 TopRight 的 top_right=
 /// `(x+1, y−1)` 在 IntraBC 块级光栅序下，当 x 位于块最右列时会落入
@@ -211,7 +211,7 @@ fn pick_pred_mode(
     CANDIDATES
         .iter()
         .copied()
-        .min_by_key(|&m| sad_for_mode_sampled(pixels, width, height, components, m))
+        .min_by_key(|&m| satd_for_mode_sampled(pixels, width, height, components, m))
         .unwrap_or(PredictionMode::Paeth)
 }
 

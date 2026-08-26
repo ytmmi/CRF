@@ -27,7 +27,7 @@ pub use error::CrfResult;
 #[allow(unused_imports)]
 pub use core::prediction::intra::apply_prediction;
 #[allow(unused_imports)]
-pub use format::{closed_loop_predict_quant_banded, sad_for_mode_sampled};
+pub use format::{closed_loop_predict_quant_banded, satd_for_mode_sampled};
 #[allow(unused_imports)]
 pub use core::config::lossy::LossyTuning;
 #[allow(unused_imports)]

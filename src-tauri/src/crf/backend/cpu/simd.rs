@@ -59,8 +59,8 @@ unsafe fn sub_i32_avx2(a: &[i32], b: &[i32], out: &mut [i32]) {
 pub fn rct_forward_interleaved(pixels: &mut [i32]) {
     #[cfg(target_arch = "x86_64")]
     {
-        if pixels.len().is_multiple_of(24) && has_avx2() {
-            // SAFETY: avx2 已检测；24 i32 对齐切分（8 像素/批）
+        if pixels.len() >= 24 && has_avx2() {
+            // SAFETY: avx2 已检测；kernel 对尾部使用标量处理。
             unsafe { rct_fwd_avx2(pixels) };
             return;
         }
@@ -131,6 +131,14 @@ unsafe fn rct_fwd_avx2(pixels: &mut [i32]) {
 
 /// t=Y-(Cg>>1), G=Cg+t, B=t-(Co>>1), R=Co+B；与 rct_inverse 逐位一致
 pub fn rct_inverse_interleaved(pixels: &mut [i32]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if pixels.len() >= 24 && has_avx2() {
+            // SAFETY: avx2 已检测；kernel 对尾部使用标量处理。
+            unsafe { rct_inv_avx2(pixels) };
+            return;
+        }
+    }
     for px in pixels.chunks_exact_mut(3) {
         let (y, co, cg) = (px[0], px[1], px[2]);
         let t = y - (cg >> 1);
@@ -158,7 +166,8 @@ pub fn soft_threshold_plane(pixels: &mut [i32], t: i32) {
         }
     }
     for v in pixels.iter_mut() {
-        if v.abs() <= t {
+        // unsigned_abs keeps i32::MIN well-defined (debug builds must not panic).
+        if v.unsigned_abs() <= t as u32 {
             *v = 0;
         }
     }
@@ -175,6 +184,11 @@ unsafe fn soft_thr_avx2(pixels: &mut [i32], t: i32) {
         let v = _mm256_loadu_si256(pixels.as_ptr().add(i).cast::<__m256i>());
         let sign_bits = _mm256_srai_epi32(v, 31);
         let abs_v = _mm256_sub_epi32(_mm256_xor_si256(v, sign_bits), sign_bits);
+        // VPABSD/two's-complement abs leaves INT_MIN negative. Clamp that
+        // one value to INT_MAX so it follows the scalar unsigned_abs rule
+        // instead of being incorrectly classified as within the threshold.
+        let is_min = _mm256_cmpeq_epi32(abs_v, _mm256_set1_epi32(i32::MIN));
+        let abs_v = _mm256_blendv_epi8(abs_v, _mm256_set1_epi32(i32::MAX), is_min);
         // |v| > t → 掩码全 1（保留）；否则清零
         let keep = _mm256_cmpgt_epi32(abs_v, vt);
         let kept = _mm256_and_si256(v, keep);
@@ -182,7 +196,7 @@ unsafe fn soft_thr_avx2(pixels: &mut [i32], t: i32) {
         i += 8;
     }
     while i < pixels.len() {
-        if pixels[i].abs() <= t {
+        if pixels[i].unsigned_abs() <= t as u32 {
             pixels[i] = 0;
         }
         i += 1;
@@ -230,5 +244,76 @@ mod tests {
         // 尾部不足 3 的样本不参与变换（原样保留）
         let n = (orig.len() / 3) * 3;
         assert_eq!(orig[..n], px[..n], "YCoCg-R 往返失败");
+    }
+
+    #[test]
+    fn test_rct_roundtrip_non_aligned_batch() {
+        // 11 像素会经过一个 AVX2 批次并留下标量尾部。
+        let original: Vec<i32> = (0..33).map(|i| (i as i32 * 17) - 240).collect();
+        let mut transformed = original.clone();
+        rct_forward_interleaved(&mut transformed);
+        let expected_forward: Vec<i32> = original
+            .chunks_exact(3)
+            .flat_map(|px| {
+                let co = px[0] - px[2];
+                let t = px[2] + (co >> 1);
+                let cg = px[1] - t;
+                [t + (cg >> 1), co, cg]
+            })
+            .collect();
+        assert_eq!(transformed, expected_forward);
+        rct_inverse_interleaved(&mut transformed);
+        assert_eq!(transformed, original);
+    }
+
+    #[test]
+    fn test_soft_threshold_i32_min_is_safe() {
+        let mut values = [i32::MIN, -3, 3, 9];
+        soft_threshold_plane(&mut values, 3);
+        assert_eq!(values, [i32::MIN, 0, 0, 9]);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn rct_inv_avx2(pixels: &mut [i32]) {
+    use std::arch::x86_64::*;
+    let mut off = 0;
+    while off + 24 <= pixels.len() {
+        let p = pixels.as_ptr().add(off);
+        let mut y = [0i32; 8];
+        let mut co = [0i32; 8];
+        let mut cg = [0i32; 8];
+        for k in 0..8 {
+            y[k] = *p.add(k * 3);
+            co[k] = *p.add(k * 3 + 1);
+            cg[k] = *p.add(k * 3 + 2);
+        }
+        let vy = _mm256_loadu_si256(y.as_ptr().cast::<__m256i>());
+        let vco = _mm256_loadu_si256(co.as_ptr().cast::<__m256i>());
+        let vcg = _mm256_loadu_si256(cg.as_ptr().cast::<__m256i>());
+        let vt = _mm256_sub_epi32(vy, _mm256_srai_epi32(vcg, 1));
+        let vg = _mm256_add_epi32(vcg, vt);
+        let vb = _mm256_sub_epi32(vt, _mm256_srai_epi32(vco, 1));
+        let vr = _mm256_add_epi32(vco, vb);
+        let rv: [i32; 8] = std::mem::transmute(vr);
+        let gv: [i32; 8] = std::mem::transmute(vg);
+        let bv: [i32; 8] = std::mem::transmute(vb);
+        for k in 0..8 {
+            let q = pixels.as_mut_ptr().add(off).add(k * 3);
+            *q = rv[k];
+            *q.add(1) = gv[k];
+            *q.add(2) = bv[k];
+        }
+        off += 24;
+    }
+    for px in pixels[off..].chunks_exact_mut(3) {
+        let (y, co, cg) = (px[0], px[1], px[2]);
+        let t = y - (cg >> 1);
+        let g = cg + t;
+        let b = t - (co >> 1);
+        px[0] = co + b;
+        px[1] = g;
+        px[2] = b;
     }
 }

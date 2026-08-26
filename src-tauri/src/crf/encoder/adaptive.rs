@@ -1,7 +1,7 @@
 //! 逐帧自适应预测模式决策与候选竞争（frame_type 多路仲裁核心）
 //!
 //! 决策流水线：
-//! 1. 行采样 SAD 排序全部候选模式；
+//! 1. 4×4 Hadamard SATD 排序全部候选模式；
 //! 2. top-2 候选真实熵编码取最小（帧级路径）；
 //! 3. 无损模式下与条带(2)/三平面(3)/调色板(4)竞争；
 //! 4. CABAC 算术编码候选(5)对最优模式重新编码。
@@ -17,7 +17,8 @@ use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
 use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
 use crate::crf::core::prediction::intra::apply_prediction;
-use crate::crf::format::sad_for_mode_sampled;
+use crate::crf::format::cost::residual_activity_for_mode_sampled;
+use crate::crf::format::satd_for_mode_sampled;
 
 use super::frame::BandSteps;
 use super::rdoq::trellis_quantize_interleaved;
@@ -37,7 +38,7 @@ pub struct AdaptiveOutput {
 /// 排除 None：差分/残差数据上无预测几乎不可能最优，
 /// 且省去一次完整编码可显著降低决策开销。
 /// v1.9 新增 TopRight(45°)/Diagonal(135°) 斜向模式（AV1 D45/D135 因果简化版），
-/// 覆盖二次元插画高频出现的 ±45° 线条走向；SAD 排序自动纳入竞争。
+/// 覆盖二次元插画高频出现的 ±45° 线条走向；SATD 排序自动纳入竞争。
 pub(crate) const ADAPTIVE_CANDIDATES: [PredictionMode; 8] = [
     PredictionMode::Horizontal,
     PredictionMode::Vertical,
@@ -49,30 +50,13 @@ pub(crate) const ADAPTIVE_CANDIDATES: [PredictionMode; 8] = [
     PredictionMode::Diagonal,
 ];
 
-/// 计算指定预测模式下残差的 SAD（绝对值和）
-///
-/// 作为编码比特数的快速代理指标：残差能量越小，Golomb/RLE 编码输出越短。
-#[allow(dead_code)]
-fn sad_for_mode(
-    pixels: &[i32],
-    width: usize,
-    height: usize,
-    components: usize,
-    mode: PredictionMode,
-) -> u64 {
-    apply_prediction(pixels, width, height, components, mode)
-        .iter()
-        .map(|&v| v.unsigned_abs() as u64)
-        .sum()
-}
-
 /// 编码单帧（逐帧自适应预测模式选择）
 ///
 /// 两阶段决策：
-/// 1. 对全部候选模式计算残差 SAD（O(N) 纯整数运算），按代价排序；
-/// 2. 仅对 SAD 最小的 2 个候选执行真实熵编码，采用字节数最小者。
+/// 1. 对全部候选模式计算采样 4×4 Hadamard SATD，按代价排序；
+/// 2. 仅对 SATD 最小的 2 个候选执行真实熵编码，采用字节数最小者。
 ///
-/// 相比全候选试编码（5 次完整编码），开销约为 5 次 SAD + 2 次编码，
+/// 相比全候选试编码，开销约为 8 次采样 SATD + 2 次编码，
 /// 而决策质量接近穷举。帧头记录实际选用的预测模式。
 ///
 /// GolombRice 类型下额外与"条带级自适应"（frame_type=2）竞争，取更小者：
@@ -89,7 +73,7 @@ pub fn encode_frame_adaptive(
     preferred_mode: Option<PredictionMode>,
     band_steps: BandSteps<'_>,
 ) -> CrfResult<AdaptiveOutput> {
-    // 第一阶段：行采样 SAD 快速评估（约 1/4 开销，仅用于排序）
+    // 第一阶段：4×4 Hadamard SATD 预筛（仅用于排序）。
     // v1.11：8 候选模式 rayon 并行求值（纯函数无共享状态），
     // 多核下决策耗时近似减半以上。
     let width = image.width as usize;
@@ -100,12 +84,12 @@ pub fn encode_frame_adaptive(
         .par_iter()
         .map(|&m| {
             (
-                sad_for_mode_sampled(&image.pixels, width, height, components, m),
+                satd_for_mode_sampled(&image.pixels, width, height, components, m),
                 m,
             )
         })
         .collect();
-    ranked.sort_by_key(|&(sad, _)| sad);
+    ranked.sort_by_key(|&(satd, _)| satd);
 
     // 历史引导：前一帧胜出的预测模式优先进入试编码集
     if let Some(pm) = preferred_mode {
@@ -115,11 +99,19 @@ pub fn encode_frame_adaptive(
         }
     }
 
-    // P6 预筛指标：残差平均绝对值（用于 CABAC/DCT 候选的快速跳过判定）
-    let pixel_count = width * height * components;
+    // SATD 只负责排序；候选启用阈值继续使用像素域平均绝对残差，
+    // 避免把 Hadamard 频域增益误当成像素幅度。
     let avg_abs_res = ranked
         .first()
-        .map(|&(sad, _)| sad as f64 / pixel_count as f64)
+        .map(|&(_, mode)| {
+            residual_activity_for_mode_sampled(
+                &image.pixels,
+                width,
+                height,
+                components,
+                mode,
+            )
+        })
         .unwrap_or(0.0);
     let dct_threshold = (fq.step.max(1) as f64) * 0.1;
     let dct_worth = avg_abs_res >= dct_threshold;
@@ -180,7 +172,7 @@ pub fn encode_frame_adaptive(
         // 64 行条带竞争——平坦插画可摊薄条带头开销并增长共享行程。
         // 胜出高度写入帧头 coding_params（32/64 均 <0x80，不触碰 golden 位）。
         const BAND_HEIGHT_ALT: usize = 64;
-        // v1.11：帧级 SAD 最优模式作为条带试编码顺序偏好（Fast-Fail 协同）
+        // 帧级 SATD 最优模式作为条带试编码顺序偏好（Fast-Fail 协同）
         let band_preferred = ranked
             .first()
             .map(|&(_, m)| m)
@@ -240,7 +232,7 @@ pub fn encode_frame_adaptive(
 
     // 第六阶段：CABAC 熵编码候选（frame_type=5）
     //
-    // 取采样 SAD 最优的预测模式，残差位流改由自适应算术编码承载。
+    // 取采样 SATD 最优的预测模式，残差位流改由自适应算术编码承载。
     // escape/商前缀等偏斜分布通常再省 5%~10%。
     // P6 预筛（§5-P6）：残差能量极低时 CABAC 无法改善平面化候选
     //（RLE 对零行程已最优），跳过闭环预测以节省时间。
