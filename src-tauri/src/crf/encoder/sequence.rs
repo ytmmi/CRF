@@ -12,11 +12,9 @@
 
 use rayon::prelude::*;
 
-use crate::crf::checksum::crc32;
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::format::{
-    CompressionType, CrfHeader, EncodeParams, Flags, ImageData, FOOTER_MAGIC, FOOTER_SIZE,
-    FRAME_HEADER_SIZE, HEADER_SIZE,
+    CompressionType, CrfHeader, EncodeParams, Flags, ImageData, FRAME_HEADER_SIZE, HEADER_SIZE,
 };
 
 use super::adaptive::encode_frame_adaptive;
@@ -167,32 +165,9 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         .lossy_quality
         .map(crate::crf::format::quant::is_q95_perceptual)
         .unwrap_or(false);
+    // 使用 session::batch::fq_for_index（P3 架构迁移）
     let fq_for_index = |i: usize| -> FrameQuant {
-        let global_q = lossy_quant_step.unwrap_or(0);
-        if global_q == 0 {
-            return FrameQuant::lossless();
-        }
-        if i == 0 && tuning.golden_lossless {
-            return FrameQuant::lossless();
-        }
-        let is_anchor = i.is_multiple_of(interval);
-        let step = if is_anchor {
-            tuning.anchor_step(global_q)
-        } else {
-            global_q
-        };
-        FrameQuant {
-            step,
-            bias: base_bias,
-            chroma_step: tuning.chroma_step(step),
-            // P1 色度精细化：色度死区偏置独立通道（None → 继承全局偏置）
-            chroma_bias: tuning.chroma_deadzone_bias.unwrap_or(base_bias),
-            // P1 4:2:0 解耦（规划 §4.1）：色度半分辨率不再受 step>1 阻断，
-            // 由 chroma_half_res 参数独立决定；planar 载荷内 ss_flags.bit0
-            // 携带该标志，解码对称不受影响；无损锚点经 is_lossy() 自动关闭。
-            chroma_half_res: tuning.chroma_half_res,
-            q1_matrix_scale: q95,
-        }
+        super::session::batch::fq_for_index(i, lossy_quant_step, &tuning, base_bias, interval, q95)
     };
     let all_results: Vec<(Vec<u8>, Option<u8>, bool)> = if params.input_original_frames {
         // ===== 路径 G（P0 两阶段闭环编码）=====
@@ -533,65 +508,32 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         current_offset += frame_size;
     }
 
-    // 组装文件
-    let total_size = frames_start
-        + encoded_frames
-            .iter()
-            .map(|(_, _, size, _)| *size as usize)
-            .sum::<usize>()
-        + FOOTER_SIZE;
-    let mut output = Vec::with_capacity(total_size);
-
-    // 写入文件头
-    header.write_bytes(&mut output)?;
-
-    // 写入帧索引
-    for (_, offset, size, _) in &encoded_frames {
-        output.extend_from_slice(&offset.to_le_bytes());
-        output.extend_from_slice(&size.to_le_bytes());
-    }
-
-    // 写入编码后的帧数据
-    for (frame_data, _, _, _) in &encoded_frames {
-        output.extend_from_slice(frame_data);
-    }
-
-    // 计算 CRC32（不含文件尾）
-    let crc = crc32(&output);
-
-    // 写入文件尾
-    output.extend_from_slice(&crc.to_le_bytes());
-    output.extend_from_slice(&FOOTER_MAGIC);
+    // 组装文件（使用 session::batch::assemble_crf_output，P3 架构迁移）
+    let output = super::session::batch::assemble_crf_output(
+        &header,
+        frames_start,
+        &encoded_frames,
+    )?;
 
     Ok(output)
 }
 
-/// 路径 C（链式差分）的逐帧量化配置：
-/// 关键帧间隔边界走无损刷新（阻断误差累积），其余帧用全局档位。
+/// 路径 C（链式差分）的逐帧量化配置
+///
+/// 已迁移到 `session::batch::fq_for_chain_index`（P3 架构迁移）。
+/// 保留转发以维持旧路径兼容。
 fn fq_for_chain_index(
     i: usize,
     lossy_quant_step: Option<u8>,
     tuning: &crate::crf::format::LossyTuning,
     base_bias: i8,
 ) -> FrameQuant {
-    let gq = lossy_quant_step.unwrap_or(0);
-    if gq == 0 || i.is_multiple_of(tuning.keyframe_interval.max(1) as usize) {
-        return FrameQuant::lossless();
-    }
-    let _q95 = crate::crf::format::quant::is_q95_perceptual(quality_of_step(gq));
-    FrameQuant {
-        step: gq,
-        bias: base_bias,
-        chroma_step: tuning.chroma_step(gq),
-        chroma_bias: tuning.chroma_deadzone_bias.unwrap_or(base_bias),
-        chroma_half_res: gq > 1 && tuning.chroma_half_res,
-        // v1.12：显式路径为兼容保留，q95 矩阵缩放仅支撑推荐路径 G
-        q1_matrix_scale: false,
-    }
+    super::session::batch::fq_for_chain_index(i, lossy_quant_step, tuning, base_bias)
 }
 
-/// 由步长反推质量档位（仅用于 q95 判定；Q=1 时无法区分 q95 与 q96+，
-/// 链式路径按保守语义不启用矩阵缩放——恒返回 None 档）
-fn quality_of_step(_step: u8) -> u8 {
-    0
+/// 由步长反推质量档位
+///
+/// 已迁移到 `session::batch::quality_of_step`（P3 架构迁移）。
+fn quality_of_step(step: u8) -> u8 {
+    super::session::batch::quality_of_step(step)
 }

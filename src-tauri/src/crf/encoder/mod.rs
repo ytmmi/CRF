@@ -1,6 +1,7 @@
 //! CRF 编码器
 //!
 //! 模块布局：
+//! - [`session`]：序列级主流程与辅助函数（P3 架构迁移，提取自 sequence.rs）
 //! - [`frame`]：单帧编码层（固定预测模式编码、帧头装配、量化配置）
 //! - [`sequence`]：序列级主流程（encode_sequence：头构建/RCT/golden 差分/文件组装）
 //! - [`adaptive`]：逐帧自适应多路竞争决策（frame_type 仲裁核心）
@@ -29,6 +30,8 @@ pub mod rdoq;
 pub mod rle_cabac;
 pub mod rle_golomb;
 pub mod sequence;
+/// session：序列级 session 与辅助函数（P3 架构迁移）
+pub mod session;
 pub mod streaming;
 pub mod transform;
 
