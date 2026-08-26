@@ -87,6 +87,17 @@ impl NvidiaCudaBackend {
             device: probe_nvidia(device_id)?,
         })
     }
+
+    /// 在启用 `nvidia-cuda` feature 时执行批量 i32 差分 kernel。
+    #[cfg(feature = "nvidia-cuda")]
+    pub fn diff_i32(&self, a: &[i32], b: &[i32]) -> Result<Vec<i32>, BackendError> {
+        if a.len() != b.len() {
+            return Err(BackendError::Unsupported(
+                "diff inputs have different lengths",
+            ));
+        }
+        super::runtime::run_diff_i32(self.device.device_id, a, b)
+    }
 }
 
 impl BackendKernel for NvidiaCudaBackend {
@@ -119,5 +130,18 @@ mod tests {
             resolve_backend(BackendRequest::Auto, 64, 64, None),
             BackendSelection::Cpu { .. }
         ));
+    }
+
+    #[cfg(feature = "nvidia-cuda")]
+    #[test]
+    fn cuda_diff_matches_scalar_when_driver_is_available() {
+        let Some(backend) = NvidiaCudaBackend::new(0) else {
+            return;
+        };
+        let a: Vec<i32> = (0..4096).map(|v| v * 3 - 700).collect();
+        let b: Vec<i32> = (0..4096).map(|v| v * 2 + 11).collect();
+        let actual = backend.diff_i32(&a, &b).expect("CUDA diff kernel failed");
+        let expected: Vec<i32> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
+        assert_eq!(actual, expected);
     }
 }
