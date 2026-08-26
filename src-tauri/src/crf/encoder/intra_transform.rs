@@ -37,7 +37,6 @@ fn encode_plane(
     deadzone: i8,
 ) -> CrfResult<(Vec<u8>, Vec<i32>)> {
     let q = (q_step.max(1)) as i32;
-    let bias = deadzone as i32;
     let mut recon = vec![0i32; plane.len()];
     let mut coeff_enc = CoeffCABAC::new();
     let mut modes: Vec<i32> = Vec::new();
@@ -80,10 +79,14 @@ fn encode_plane(
                 // transform skip：直通量化
                 let mut qres = [0i32; 64];
                 let mut dq = [0i32; 64];
-                for (i, &r) in block.iter().enumerate() {
-                    let lv = quant_scalar(r, q, bias);
-                    qres[i] = lv;
-                    dq[i] = lv * q;
+                crate::crf::backend::ops::quantize_levels_biased(
+                    &block,
+                    &mut qres,
+                    q_step,
+                    deadzone,
+                );
+                for (dequantized, &level) in dq.iter_mut().zip(qres.iter()) {
+                    *dequantized = level * q;
                 }
                 for by in 0..bh {
                     for bx in 0..bw {
@@ -96,10 +99,14 @@ fn encode_plane(
                 let freq = dct8x8_forward(&block);
                 let mut qc = [0i32; 64];
                 let mut dq = [0i32; 64];
-                for (i, &f) in freq.iter().enumerate() {
-                    let lv = quant_scalar(f, q, bias);
-                    qc[i] = lv;
-                    dq[i] = lv * q;
+                crate::crf::backend::ops::quantize_levels_biased(
+                    &freq,
+                    &mut qc,
+                    q_step,
+                    deadzone,
+                );
+                for (dequantized, &level) in dq.iter_mut().zip(qc.iter()) {
+                    *dequantized = level * q;
                 }
                 let spatial = dct8x8_inverse(&dq);
                 for by in 0..bh {
@@ -255,13 +262,4 @@ fn predict_block(
         }
     }
     out
-}
-
-fn quant_scalar(v: i32, q: i32, bias: i32) -> i32 {
-    let denom = q * 64;
-    let half = denom / 2;
-    let b = if v >= 0 { bias } else { -bias };
-    let level = (v.wrapping_abs() * 64 + half + b) / denom;
-    let sign = if v < 0 { -1 } else { 1 };
-    sign * level
 }

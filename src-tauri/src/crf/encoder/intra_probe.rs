@@ -125,17 +125,6 @@ fn predict_block(
     out
 }
 
-/// 带偏置的单点量化（与闭环 quant_scalar_biased 同式：正 bias 单侧加宽负残差死区）
-#[inline]
-fn quant_scalar(v: i32, q: i32, bias: i32) -> i32 {
-    let denom = q * 64;
-    let half = denom / 2;
-    let b = if v >= 0 { bias } else { -bias };
-    let level = (v.wrapping_abs() * 64 + half + b) / denom;
-    let sign = if v < 0 { -1 } else { 1 };
-    sign * level
-}
-
 /// P2 探针入口：单平面"预测后变换"编码的字节量级与本地重建
 ///
 /// * `plane` — 输入平面（残差域或原域均可；边界外推值为 0）
@@ -157,7 +146,6 @@ pub fn encode_intra_probe(
         )));
     }
     let q = (q_step.max(1)) as i32;
-    let bias = deadzone as i32;
 
     let mut recon = vec![0i32; plane.len()];
     // P3 CABAC 系数编码器：概率自适应上下文 + RangeEncoder
@@ -208,10 +196,14 @@ pub fn encode_intra_probe(
                 // 但 CoeffEncoder 不关心物理位置——只编码 run-level）
                 let mut qres = [0i32; 64];
                 let mut dequant = [0i32; 64];
-                for (i, &r) in block.iter().enumerate() {
-                    let lv = quant_scalar(r, q, bias);
-                    qres[i] = lv;
-                    dequant[i] = lv * q;
+                crate::crf::backend::ops::quantize_levels_biased(
+                    &block,
+                    &mut qres,
+                    q_step,
+                    deadzone,
+                );
+                for (dequantized, &level) in dequant.iter_mut().zip(qres.iter()) {
+                    *dequantized = level * q;
                 }
                 // 重建：dequant + pred（无逆 DCT）
                 for by in 0..bh {
@@ -226,10 +218,14 @@ pub fn encode_intra_probe(
                 let freq = dct8x8_forward(&block);
                 let mut qcoeffs = [0i32; 64];
                 let mut dequant = [0i32; 64];
-                for (i, &f) in freq.iter().enumerate() {
-                    let lv = quant_scalar(f, q, bias);
-                    qcoeffs[i] = lv;
-                    dequant[i] = lv * q;
+                crate::crf::backend::ops::quantize_levels_biased(
+                    &freq,
+                    &mut qcoeffs,
+                    q_step,
+                    deadzone,
+                );
+                for (dequantized, &level) in dequant.iter_mut().zip(qcoeffs.iter()) {
+                    *dequantized = level * q;
                 }
                 let spatial = dct8x8_inverse(&dequant);
                 for by in 0..bh {

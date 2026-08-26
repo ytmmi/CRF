@@ -74,6 +74,22 @@ pub fn soft_threshold_plane(pixels: &mut [i32], t: i32) {
     crate::crf::backend::cpu::simd::soft_threshold_plane(pixels, t)
 }
 
+/// 固定步长/偏置的批量死区量化，输出有符号 level。
+#[inline]
+pub fn quantize_levels_biased(
+    values: &[i32],
+    out: &mut [i32],
+    q_step: u8,
+    deadzone_bias: i8,
+) {
+    crate::crf::backend::cpu::simd::quantize_levels_biased(
+        values,
+        out,
+        q_step,
+        deadzone_bias,
+    )
+}
+
 #[cfg(all(test, feature = "nvidia-cuda"))]
 mod tests {
     use super::*;

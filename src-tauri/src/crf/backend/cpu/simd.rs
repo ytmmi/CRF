@@ -1,9 +1,10 @@
 //! CPU SIMD 向量化 kernel（原 format/simd.rs，P5 架构迁移）
 //!
-//! 运行时特性检测选择最优路径；SIMD 与标量回退逐位一致
-//! （纯整数加减/比较/移位，无浮点），由单元测试保证。
-//! 目标为无跨元素依赖的逐元素运算：差分、YCoCg-R 变换、软阈值。
-//! 空间预测（递推依赖）与死区量化（变量除法）保持标量。
+//! 运行时特性检测选择最优路径；SIMD 与标量回退逐位一致。
+//! 量化使用可精确承载 i32×64 分子的 f64，其余 kernel 为纯整数运算，
+//! 均由单元测试对拍保证。
+//! 目标为无跨元素依赖的逐元素运算：差分、YCoCg-R 变换、软阈值、
+//! 固定步长死区量化。空间预测因递推依赖保持标量。
 //!
 //! **迁移说明（P5）**：本模块原位于 `format/simd.rs`，现迁移到
 //! `backend/cpu/simd`。`format/simd.rs` 保留为 `pub use` 转发层。
@@ -203,6 +204,93 @@ unsafe fn soft_thr_avx2(pixels: &mut [i32], t: i32) {
     }
 }
 
+// ===== 死区量化（有符号 level 输出） =====
+
+/// 固定步长/偏置的批量死区量化，输出有符号 level。
+///
+/// AVX2 没有整数除法指令，因此用 4-lane f64 向量除法实现。i32 绝对值
+/// 乘 64 后仍可被 f64 精确表示；除法后向零转换与 Rust 整数除法一致。
+/// `i32::{MIN,MAX}` 单独走标量参考，避免转换结果越出 i32 level 范围。
+pub fn quantize_levels_biased(
+    values: &[i32],
+    out: &mut [i32],
+    q_step: u8,
+    deadzone_bias: i8,
+) {
+    assert_eq!(values.len(), out.len(), "量化输入/输出长度必须一致");
+    #[cfg(target_arch = "x86_64")]
+    {
+        if values.len() >= 4 && has_avx2() {
+            // SAFETY: AVX2 已检测；kernel 仅访问等长切片范围。
+            unsafe { quantize_levels_biased_avx2(values, out, q_step, deadzone_bias) };
+            return;
+        }
+    }
+    crate::crf::backend::scalar::quantize_levels_biased(
+        values,
+        out,
+        q_step,
+        deadzone_bias,
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn quantize_levels_biased_avx2(
+    values: &[i32],
+    out: &mut [i32],
+    q_step: u8,
+    deadzone_bias: i8,
+) {
+    use std::arch::x86_64::*;
+
+    let q = i32::from(q_step.max(1));
+    let denom = _mm256_set1_pd((q * 64) as f64);
+    let scale = _mm256_set1_pd(64.0);
+    let half = _mm_set1_epi32(q * 32);
+    let positive_bias = _mm_set1_epi32(i32::from(deadzone_bias));
+    let negative_bias = _mm_set1_epi32(-i32::from(deadzone_bias));
+    let min_value = _mm_set1_epi32(i32::MIN);
+    let max_value = _mm_set1_epi32(i32::MAX);
+
+    let mut i = 0;
+    while i + 4 <= values.len() {
+        let value = _mm_loadu_si128(values.as_ptr().add(i).cast::<__m128i>());
+        let is_min = _mm_cmpeq_epi32(value, min_value);
+        let is_max = _mm_cmpeq_epi32(value, max_value);
+        if _mm_movemask_epi8(_mm_or_si128(is_min, is_max)) != 0 {
+            crate::crf::backend::scalar::quantize_levels_biased(
+                &values[i..i + 4],
+                &mut out[i..i + 4],
+                q_step,
+                deadzone_bias,
+            );
+            i += 4;
+            continue;
+        }
+
+        let sign = _mm_srai_epi32(value, 31);
+        let magnitude = _mm_sub_epi32(_mm_xor_si128(value, sign), sign);
+        let bias = _mm_blendv_epi8(positive_bias, negative_bias, sign);
+        let offset = _mm_add_epi32(half, bias);
+        let numerator = _mm256_add_pd(
+            _mm256_mul_pd(_mm256_cvtepi32_pd(magnitude), scale),
+            _mm256_cvtepi32_pd(offset),
+        );
+        let level = _mm256_cvttpd_epi32(_mm256_div_pd(numerator, denom));
+        let signed_level = _mm_sub_epi32(_mm_xor_si128(level, sign), sign);
+        _mm_storeu_si128(out.as_mut_ptr().add(i).cast::<__m128i>(), signed_level);
+        i += 4;
+    }
+
+    crate::crf::backend::scalar::quantize_levels_biased(
+        &values[i..],
+        &mut out[i..],
+        q_step,
+        deadzone_bias,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +359,50 @@ mod tests {
         let mut values = [i32::MIN, -3, 3, 9];
         soft_threshold_plane(&mut values, 3);
         assert_eq!(values, [i32::MIN, 0, 0, 9]);
+    }
+
+    #[test]
+    fn test_quantize_levels_biased_matches_scalar() {
+        let mut state = 0x51A7_D20Eu64;
+        let mut values = vec![0i32; 1003];
+        for value in &mut values {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *value = ((state >> 32) as i32 % 1_000_000) - 500_000;
+        }
+        values[0] = i32::MIN;
+        values[1] = i32::MAX;
+
+        for q_step in [1u8, 2, 3, 5, 10, 20, 255] {
+            for deadzone_bias in [-32i8, -4, 0, 4, 32] {
+                let mut expected = vec![0i32; values.len()];
+                let mut actual = vec![0i32; values.len()];
+                crate::crf::backend::scalar::quantize_levels_biased(
+                    &values,
+                    &mut expected,
+                    q_step,
+                    deadzone_bias,
+                );
+                quantize_levels_biased(&values, &mut actual, q_step, deadzone_bias);
+                assert_eq!(actual, expected, "q={q_step} bias={deadzone_bias}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_quantize_levels_biased_thresholds_and_tail() {
+        let values = [-10, -6, -5, -4, -1, 0, 1, 4, 5, 6, 10];
+        let mut expected = [0i32; 11];
+        let mut actual = [0i32; 11];
+        crate::crf::backend::scalar::quantize_levels_biased(
+            &values,
+            &mut expected,
+            10,
+            4,
+        );
+        quantize_levels_biased(&values, &mut actual, 10, 4);
+        assert_eq!(actual, expected);
     }
 }
 
