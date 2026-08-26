@@ -436,6 +436,22 @@ bt709 colorspace + primaries + transfer / full range
 - 新依赖必须说明用途、许可证、平台支持、维护状态、二进制体积和是否可由现有代码替代。
 - 禁止为了单一小功能引入大型运行时或外部 codec 依赖。
 
+### 11.1 原生动态库与 GPU 分发
+
+涉及原生加速后端时，发布包必须遵循标准的 `exe + dll` 布局：
+
+- Windows NVIDIA 构建必须使用 workspace 构建，同时生成 `crf-viewer.exe` 和
+  `crf_cuda.dll`；两个文件必须保持同一架构、同一版本并放在同一发布目录。
+- GPU 后端实现、PTX 和厂商 API 适配代码放在 `crf_cuda.dll`，主 EXE 只能通过稳定的
+  C ABI/窄加载层调用，禁止把 GPU 后端重新静态链接或嵌入 EXE。
+- `crf_cuda.dll` 只允许动态依赖目标机的 NVIDIA 驱动 `nvcuda.dll`；不得要求目标机安装
+  CUDA Toolkit、`nvcc` 或 `cudart.dll`。驱动 DLL 属于系统组件，不随应用复制。
+- 发布前必须验证 DLL 确实出现在安装包/压缩包中，并在无 NVIDIA 设备、DLL 缺失和驱动
+  异常时验证 EXE 可启动且自动回退 CPU。
+- CPU-only 构建可以省略 `crf_cuda.dll`，不得因缺少该 DLL 阻止 CPU 模式启动。
+- 本地诊断可使用 `CRF_CUDA_DLL` 指定 DLL 绝对路径，但不得把开发机 Toolkit 路径写死
+  到生产代码或发布脚本中。
+
 ## 12. 文档标准
 
 每个行为变更必须同步更新对应文档：

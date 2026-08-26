@@ -278,9 +278,33 @@ pnpm build
 ### 仅构建 Rust
 
 ```bash
-# 构建 Rust 后端
-cargo build --release
+# 构建 Rust workspace（NVIDIA 默认 feature 会同时生成 EXE 和 CUDA DLL）
+cargo build --manifest-path src-tauri/Cargo.toml --workspace --release --features nvidia-cuda
 ```
+
+Windows NVIDIA 发布包必须按标准 `exe + dll` 方式组织：
+
+```text
+src-tauri/target/release/
+  crf-viewer.exe
+  crf_cuda.dll
+```
+
+`crf_cuda.dll` 是应用自己的 CUDA 适配旁路库，必须与 `crf-viewer.exe` 一起复制到安装
+目录或压缩包；主程序找不到该 DLL、找不到 NVIDIA 驱动或 GPU 执行失败时，会自动回退 CPU。
+`nvcuda.dll` 由 NVIDIA 驱动安装提供，不作为应用文件复制；目标机不需要 CUDA Toolkit。
+发布前至少检查以下项目：
+
+```powershell
+Test-Path src-tauri/target/release/crf-viewer.exe
+Test-Path src-tauri/target/release/crf_cuda.dll
+$env:CRF_CUDA_DLL = (Resolve-Path src-tauri/target/release/crf_cuda.dll)
+cargo test --manifest-path src-tauri/Cargo.toml --features nvidia-cuda `
+  crf::backend::gpu::cuda::tests::cuda_diff_matches_scalar_when_driver_is_available -- --nocapture
+```
+
+发布包不能只复制 EXE；若采用 Tauri/其他安装器，必须将 `crf_cuda.dll` 配置为与主 EXE
+同目录的 sidecar/resource，并在安装后目录中复核文件存在。
 
 ---
 

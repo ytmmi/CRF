@@ -115,6 +115,17 @@ pnpm tauri build
 # 构建产物位于 src-tauri/target/release/bundle/
 ```
 
+Windows NVIDIA 版本采用标准 `exe + dll` 分发。Rust workspace 构建会同时生成：
+
+```text
+src-tauri/target/release/crf-viewer.exe
+src-tauri/target/release/crf_cuda.dll
+```
+
+发布或制作安装包时必须将 `crf_cuda.dll` 与 `crf-viewer.exe` 放在同一目录；不能只分发
+EXE。该 DLL 只使用 NVIDIA 驱动提供的 `nvcuda.dll`，目标机无需 CUDA Toolkit。没有 NVIDIA
+驱动、DLL 缺失或 GPU 异常时，程序自动回退 CPU；CPU-only 构建可不携带该 DLL。
+
 ---
 
 ## 安装指南
