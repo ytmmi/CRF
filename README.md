@@ -266,6 +266,7 @@ crf-viewer/
 - [项目开发、算法与构建标准](docs/project-standards.md)
 - [编解码器分层重构规划](docs/codec-architecture-refactor-plan.md)
 - [CPU/GPU 性能优化规划](docs/performance-optimization-plan.md)
+- [压缩算法与后端探索路线](docs/compression-algorithm-exploration.md)
 - [API 接口文档](docs/api.md)
 - [技术架构文档](docs/architecture.md)
 - [有损目标预设与首帧优化规划](docs/first-frame-optimization-plan.md)
