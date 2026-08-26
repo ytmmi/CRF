@@ -288,6 +288,19 @@ A: 针对二次元插画差分数据（大面积不变 + 平坦色块），自�
 | 内存占用 | < 50MB | 50帧序列 |
 | 启动时间 | < 1秒 | 冷启动 |
 
+**最新标定状态（2026-08-25）**：迭代后的默认有损参数与基准——完整实施
+记录见 [docs/optimization-review.md](docs/optimization-review.md) §9~§23。
+
+| 指标 | 数值 | 测试环境 |
+| :--- | :--- | :--- |
+| 默认调参 | `deadzone_bias=+4`、`chroma_deadzone_bias=Some(-4)`、`chroma_quant_percent=130%` | q90 亮/色度独立死区 |
+| 色度半分辨率 | 不受 `step>1` 阻断（4:2:0 解耦） | q95 档首次真实启用 |
+| CFL α 候选 | 9 个（±3 补齐） | 跨内容 −4~24%（q75） |
+| 色度 band steps | Y 表 step_by(2) 下采样映射 | JPEG 源 −36%（noise_adaptive） |
+| AVIF CQ18 对标 | CRF q90 = 3,500,035 B @ 49.86 dB vs AVIF 3,370,055 B @ 37.32 dB | +3.8% 体积 / +12.5 dB 质量 |
+| 编码速度（q90） | ≈ 800ms/帧（自适应全候选） | PNG1000 14 帧 |
+| 变换域候选 | frame_type=8（预测后变换 + CABAC 系数编码） | v1.14 正式格式化，已接入竞争 |
+
 **双模式说明**：无损与真有损并行可选——`EncodeParams.lossy_quality: Option<u8>`
 控制档位（None=无损），`lossy_tuning` 提供色度量化偏置、关键帧间隔、
 死区偏置三组精细参数（参考 JPEG/AVIF/WebP/H.264 的率失真工具设计）。
