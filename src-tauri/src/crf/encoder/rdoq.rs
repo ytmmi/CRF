@@ -266,7 +266,7 @@ pub(crate) fn trellis_quantize_interleaved(
     for plane in planes.iter_mut().take(components) {
         *plane = quant_plane(plane);
     }
-    crate::crf::encoder::dct_path::interleave(&planes, components)
+    crate::crf::core::transform::reconstruct::interleave(&planes, components)
 }
 
 #[cfg(test)]

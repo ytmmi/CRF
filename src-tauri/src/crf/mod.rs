@@ -3,7 +3,15 @@
 //! 本模块实现了 CRF (Compressing Residual Frames) 格式的编解码功能。
 //! CRF 是一种轻量级的无损压缩格式，专为差分图片序列设计。
 
+pub mod backend;
 pub mod checksum;
+// ===== P0 架构迁移：新增分层骨架（规划文档 §2）=====
+// codec: 对外 facade（P3 接入生产路径，当前为空骨架）
+// core: 编解码器共享的纯契约/数学（P1~P4 逐步迁入）
+// backend: 性能后端层（P5 接入 scalar/CPU SIMD/GPU）
+// 以下三个模块声明仅增加，不删除现有模块。迁移期旧路径保持生产。
+pub mod codec;
+pub mod core;
 pub mod decoder;
 pub mod encoder;
 pub mod error;

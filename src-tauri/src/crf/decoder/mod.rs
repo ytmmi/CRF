@@ -206,7 +206,7 @@ pub fn decode_frame(data: &[u8], header: &CrfHeader) -> CrfResult<ImageData> {
                     data_len,
                     None,
                 );
-                crate::crf::encoder::dct_path::dct_dequantize_inverse_interleaved_bs(
+                crate::crf::core::transform::reconstruct::dct_dequantize_inverse_interleaved_bs(
                     &q_coeffs, width, height, components, block_w, block_h,
                 )
             } else {

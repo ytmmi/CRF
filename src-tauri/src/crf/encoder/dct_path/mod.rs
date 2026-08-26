@@ -7,16 +7,28 @@
 //! DCT 将能量集中到低频系数，量化后高频系数大量归零，
 //! RLE 零行程效率远高于空间域标量量化。
 //! 解码端对称还原：RLE+CABAC → 反量化 → 逆 zigzag → 逆 DCT。
+//!
+//! **迁移说明（P1）**：逆变换函数（`dct_plane_inverse_bs`、
+//! `dct_dequantize_inverse_interleaved_bs` 等）已迁移到
+//! [`crate::crf::core::transform::reconstruct`]，解除 decoder → encoder
+//! 反向依赖。本文件保留正变换和量化函数（编码端专用），逆变换通过
+//! `pub use` 转发到公共模块。
 
 pub mod qm;
 
 use crate::crf::format::quantize_residuals;
 use crate::crf::transform::dct4x4_forward;
-use crate::crf::transform::dct4x4_inverse;
 use crate::crf::transform::dct8x8_forward;
-use crate::crf::transform::dct8x8_inverse;
-use crate::crf::transform::{dct_rect_forward, dct_rect_inverse, is_valid_rect};
+use crate::crf::transform::{dct_rect_forward, is_valid_rect};
 use qm::{quantize_coeffs_with_matrix, DCT_PERCEPTUAL_QM, DCT_PERCEPTUAL_QM8};
+
+// 逆变换函数已迁移到 core::transform::reconstruct（P1 解除反向依赖）
+// 保留 re-export 维持旧路径兼容（encoder 内部测试仍引用）
+#[allow(unused_imports)]
+pub use crate::crf::core::transform::reconstruct::{
+    dct_dequantize_inverse, dct_dequantize_inverse_interleaved,
+    dct_dequantize_inverse_interleaved_bs, dct_plane_inverse, dct_plane_inverse_bs,
+};
 
 /// 块形状合法集（v1.12：{bw, bh} 对，bw/bh ∈ {4, 8}）
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
@@ -99,52 +111,10 @@ pub fn dct_plane_forward_bs(
     out
 }
 
-/// 对整帧平面执行分块 DCT 逆变换（矩形形状）
-///
-/// 与 [`dct_plane_forward_bs`] 同一几何判定：完整块逆变换，残缺块透传。
-pub fn dct_plane_inverse_bs(
-    coeffs: &[i32],
-    width: usize,
-    height: usize,
-    block_w: usize,
-    block_h: usize,
-) -> Vec<i32> {
-    assert!(
-        is_valid_rect(block_w, block_h),
-        "非法块形状 {}×{}",
-        block_w,
-        block_h
-    );
-    let mut out = coeffs.to_vec();
-    for by in (0..height).step_by(block_h) {
-        for bx in (0..width).step_by(block_w) {
-            if by + block_h > height || bx + block_w > width {
-                continue; // 残缺块透传（与正变换判定一致）
-            }
-            let kernel = |blk: &[i32]| match (block_w, block_h) {
-                (8, 8) => dct8x8_inverse(blk),
-                (8, _) => dct_rect_inverse(blk, 8, 4),
-                _ => match block_h {
-                    8 => dct_rect_inverse(blk, 4, 8),
-                    _ => dct4x4_inverse(blk),
-                },
-            };
-            transform_block(coeffs, &mut out, width, bx, by, block_w, block_h, kernel);
-        }
-    }
-    out
-}
-
 /// 对整帧平面执行 4×4 分块 DCT 正变换（v1.10 前语义的兼容包装）
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
 pub fn dct_plane_forward(pixels: &[i32], width: usize, height: usize) -> Vec<i32> {
     dct_plane_forward_bs(pixels, width, height, 4, 4)
-}
-
-/// 对整帧平面执行 4×4 分块 DCT 逆变换（兼容包装）
-#[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
-pub fn dct_plane_inverse(coeffs: &[i32], width: usize, height: usize) -> Vec<i32> {
-    dct_plane_inverse_bs(coeffs, width, height, 4, 4)
 }
 
 /// DCT 域量化：DCT 正变换 → 死区标量量化
@@ -152,12 +122,6 @@ pub fn dct_plane_inverse(coeffs: &[i32], width: usize, height: usize) -> Vec<i32
 pub fn dct_quantize(pixels: &[i32], width: usize, height: usize, q_step: u8) -> Vec<i32> {
     let coeffs = dct_plane_forward(pixels, width, height);
     quantize_residuals(&coeffs, q_step)
-}
-
-/// DCT 域逆变换（反量化后调用）：量化系数平面 → 空间域重建
-#[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
-pub fn dct_dequantize_inverse(coeffs: &[i32], width: usize, height: usize) -> Vec<i32> {
-    dct_plane_inverse(coeffs, width, height)
 }
 
 /// 统一的交织数据 DCT 域量化入口（v1.12 矩形泛化）
@@ -227,39 +191,7 @@ pub fn dct_quantize_interleaved_bs(
     for plane in planes.iter_mut().take(components) {
         *plane = quant_plane(plane);
     }
-    interleave(&planes, components)
-}
-
-/// [`dct_quantize_interleaved_bs`] 的解码对称：量化系数（交织）→ 空间域重建。
-/// `(block_w, block_h)` 必须与编码端一致（由载荷 k 字节 bit5/bit7 标注）。
-pub fn dct_dequantize_inverse_interleaved_bs(
-    coeffs: &[i32],
-    width: usize,
-    height: usize,
-    components: usize,
-    block_w: usize,
-    block_h: usize,
-) -> Vec<i32> {
-    assert!(
-        is_valid_rect(block_w, block_h),
-        "非法块形状 {}×{}",
-        block_w,
-        block_h
-    );
-    if components <= 1 {
-        return dct_plane_inverse_bs(coeffs, width, height, block_w, block_h);
-    }
-    let n = width * height;
-    let mut planes: Vec<Vec<i32>> = vec![vec![0i32; n]; components];
-    for (px, chunk) in coeffs.chunks_exact(components).enumerate() {
-        for (c, &v) in chunk.iter().enumerate() {
-            planes[c][px] = v;
-        }
-    }
-    for plane in planes.iter_mut().take(components) {
-        *plane = dct_plane_inverse_bs(plane, width, height, block_w, block_h);
-    }
-    interleave(&planes, components)
+    crate::crf::core::transform::reconstruct::interleave(&planes, components)
 }
 
 /// 三分量交织数据的 DCT 域量化（frame_type=6 编码入口）
@@ -276,29 +208,6 @@ pub fn dct_quantize_interleaved(
     dct_quantize_interleaved_bs(
         pixels, width, height, components, q_step, 4, 4, false, false,
     )
-}
-
-/// [dct_quantize_interleaved] 的解码对称（4×4 兼容包装）
-#[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
-pub fn dct_dequantize_inverse_interleaved(
-    coeffs: &[i32],
-    width: usize,
-    height: usize,
-    components: usize,
-) -> Vec<i32> {
-    dct_dequantize_inverse_interleaved_bs(coeffs, width, height, components, 4, 4)
-}
-
-/// 按分量平面的样本顺序重新交织为 [c0,c1,c2,...] 布局
-pub(crate) fn interleave(planes: &[Vec<i32>], components: usize) -> Vec<i32> {
-    let n = planes[0].len();
-    let mut out = vec![0i32; n * components];
-    for (px, chunk) in out.chunks_exact_mut(components).enumerate() {
-        for (c, slot) in chunk.iter_mut().enumerate() {
-            *slot = planes[c][px];
-        }
-    }
-    out
 }
 
 #[cfg(test)]

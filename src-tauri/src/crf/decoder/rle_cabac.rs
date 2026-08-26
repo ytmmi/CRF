@@ -3,6 +3,9 @@
 //! 与 encoder/rle_cabac.rs 严格对称：
 //! - 同一套 9 上下文自适应概率模型（初始值与更新率一致）；
 //! - escape / 前缀位走算术解码，余数/数据位走等概率直通。
+//!
+//! **迁移说明（P1）**：`CtxModel` 引用已从 `crate::crf::encoder::ma_tree`
+//! 改为 `crate::crf::core::entropy::context`，解除 decoder → encoder 反向依赖。
 
 // ===== Range Coder 解码端 =====
 
@@ -171,7 +174,7 @@ impl<'a> CabacDecoder<'a> {
     pub fn decode_signed_array(
         &mut self,
         count: usize,
-        model: &crate::crf::encoder::ma_tree::CtxModel<'_>,
+        model: &crate::crf::core::entropy::context::CtxModel<'_>,
         stride: Option<usize>,
     ) -> Vec<i32> {
         let mut out = Vec::with_capacity(count);
@@ -270,7 +273,7 @@ pub fn decode_frame_rle_cabac(
     pixel_count: usize,
     stride: Option<usize>,
 ) -> Vec<i32> {
-    use crate::crf::encoder::ma_tree::{CtxModel, MaTree};
+    use crate::crf::core::entropy::context::{CtxModel, MaTree};
 
     if data.is_empty() {
         return vec![0; pixel_count]; // 损坏防护
