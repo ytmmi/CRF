@@ -9,7 +9,9 @@
 - `crf::backend::gpu::memory`：统一传输模式枚举和 i32 批处理显存估算，避免尺寸计算溢出。
 - `NvidiaCudaBackend`：通过公共 `BackendKernel` 暴露窄适配层；启用 feature 后提供 `diff_i32`，使用 CUDA Driver API 动态加载 `nvcuda.dll` 并执行内嵌 PTX。
 
-默认构建不引入 CUDA SDK，也不依赖 NVIDIA 驱动；无 NVIDIA 环境仍可安装、启动并使用 CPU 路径。
+默认 feature 为 `nvidia-cuda`，统一 `backend::ops::sub_i32` 会在首次达到 1M 元素时检查设备并优先使用 GPU；小输入、无 NVIDIA 环境、驱动异常或 kernel 失败会自动切换到 CPU。GPU 失败状态会被记忆，避免每次调用重复探测。
+
+使用 `--no-default-features` 可生成纯 CPU 构建；两种构建都不改变 CRF 码流语义。
 
 ## 启用 NVIDIA 构建
 

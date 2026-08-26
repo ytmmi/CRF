@@ -5,7 +5,7 @@ edition = "2021"
 description = "CRF - Diff Image Lossless Compression Viewer"
 
 [features]
-default = []
+default = ["nvidia-cuda"]
 # 通过 NVIDIA Driver API 动态加载执行内嵌 PTX；不要求安装 CUDA SDK。
 nvidia-cuda = []
 
