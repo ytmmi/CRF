@@ -115,11 +115,21 @@ P0 阶段完成的最低条件（规划文档 §10 P0 验收）：
 
 ## 7. 后续阶段预告
 
-| 阶段 | 目标 | 触及文件 |
-|---|---|---|
-| P1 | 解除 decoder → encoder 反向依赖 | `encoder/ma_tree.rs` → `core/entropy/context.rs`；`decoder/rle_cabac.rs` |
-| P2 | 拆容器层和 frame dispatch | `decoder/mod.rs` → `decoder/container/*` + `decoder/frame/*` |
-| P3 | 拆 encoder session 和 frame pipeline | `encoder/sequence.rs` → `encoder/session/*` + `encoder/frame/*` |
-| P4 | 整理公共工具层 | `format/*` → `core/*` 各子模块 |
-| P5 | 接入性能 backend | `backend/scalar` + `backend/cpu` + `backend/gpu` |
-| P6 | 测试和文档收敛 | `tests/*` 按领域拆分 |
+| 阶段 | 目标 | 触及文件 | 状态 |
+|---|---|---|---|
+| P1 | 解除 decoder → encoder 反向依赖 | `encoder/ma_tree.rs` → `core/entropy/context.rs`；`decoder/rle_cabac.rs` | ✅ 已完成 |
+| P2 | 拆容器层和 frame dispatch | `decoder/mod.rs` → `decoder/container/*` + `decoder/frame/*` | ✅ 已完成 |
+| P3 | 拆 encoder session 和 frame pipeline | `encoder/sequence.rs` → `encoder/session/*` + `encoder/frame/*` | ✅ 已完成 |
+| P4 | 整理公共工具层 | `format/*` → `core/*` 各子模块 | ✅ 已完成 |
+| P5 | 接入性能 backend | `backend/scalar` + `backend/cpu` + `backend/gpu` | ✅ 已完成 |
+| P6 | 测试和文档收敛 | `tests/*` 按领域拆分 | ✅ 已完成 |
+
+### P6 完成记录（2026-08-26）
+
+P6 测试收敛完成：
+- 删除旧转发文件：`encoder/ma_tree.rs`、`format/constants.rs`、`format/zigzag.rs`、`format/rct.rs`、`format/simd.rs`
+- 全量迁移导入路径至 `core::bitstream::constants`、`core::entropy::scan`、`core::color::rct`、`backend::cpu::simd`、`core::entropy::context`
+- 测试文件拆分：
+  - `encoder/tests.rs` (1036行) → `tests/{mod,roundtrip,lossy,rct_bypass}.rs`
+  - `test/mod.rs` (1081行) → `{mod,batch,probe}.rs`
+- `cargo test` 127 tests 全部通过
