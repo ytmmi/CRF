@@ -92,7 +92,7 @@ pub fn encode_crf(
 
 | 参数 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `frames` | ImageData[] | 图像帧数组（2~50帧） |
+| `frames` | ImageData[] | 批量图像帧数组（2~50 帧）；更长序列使用流式编码 API |
 | `params` | EncodeParams | 编码参数 |
 
 **EncodeParams 结构**：
@@ -412,7 +412,7 @@ interface DecodeResult {
 | :--- | :--- |
 | `Invalid magic number` | 文件魔数不匹配，不是有效的 CRF 文件 |
 | `Unsupported version: x.y` | 文件版本不支持 |
-| `Frame count out of range` | 帧数不在 2~50 范围内 |
+| `Frame count out of range` | 当前入口的帧数越界；批量入口为 2~50 帧，流式入口可超过 50 帧 |
 | `Image dimensions mismatch` | 图像尺寸不一致 |
 | `Bit depth not supported` | 不支持的位深 |
 | `Invalid compression type` | 无效的压缩类型 |
