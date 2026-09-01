@@ -26,6 +26,8 @@ use super::rdoq::trellis_quantize_interleaved;
 use super::scratch::FrameScratch;
 use super::{assemble_frame, rle_cabac, FrameQuant};
 
+use crate::crf::performance::telemetry::Span;
+
 /// 自适应编码结果：帧数据 + 帧级可识别的预测模式
 ///
 /// pred_mode 在帧级(1/5)或 CABAC 路径胜出时为 Some，
@@ -82,6 +84,7 @@ pub fn encode_frame_adaptive(
     let height = image.height as usize;
     let components = image.color_format.component_count();
 
+    let satd_span = Span::begin("encode.adaptive.satd");
     let mut ranked: Vec<(u64, PredictionMode)> = ADAPTIVE_CANDIDATES
         .par_iter()
         .map(|&m| {
@@ -92,6 +95,7 @@ pub fn encode_frame_adaptive(
         })
         .collect();
     ranked.sort_by_key(|&(satd, _)| satd);
+    drop(satd_span);
 
     // 历史引导：前一帧胜出的预测模式优先进入试编码集
     if let Some(pm) = preferred_mode {
@@ -130,6 +134,7 @@ pub fn encode_frame_adaptive(
     // 熵码流字节单调递增，超限即必败，产物不进入最终码流。
     let mut best: Option<(usize, Vec<u8>, Option<PredictionMode>)> = None;
     let mut frame_scratch = FrameScratch::default();
+    let trial_span = Span::begin("encode.adaptive.trial_encode");
     for (attempt, &(_, mode)) in ranked.iter().take(2).enumerate() {
         // 第二名候选的上限 = 第一名总长（含帧头）：熵码流字节单调递增，
         // 超限即必败，被淘汰候选的产物本就不会进入最终码流
@@ -157,15 +162,18 @@ pub fn encode_frame_adaptive(
             None => continue, // Fast-Fail
         }
     }
+    drop(trial_span);
 
     // P6 候选顺序优化：第三阶段前移平面化编码竞争（高频胜出 13/14 帧前置，
     // 使后续候选 Fast-Fail 上限更紧）。
     if compression_type == CompressionType::GolombRice && components == 3 {
+        let planar_span = Span::begin("encode.adaptive.planar");
         let payload = encode_planar_payload(image, compression_type, block_size, fq, band_steps)?;
         let planar = assemble_frame(&payload, image, 0, 3)?;
         if best.as_ref().is_none_or(|(sz, ..)| planar.len() < *sz) {
             best = Some((planar.len(), planar, None));
         }
+        drop(planar_span);
     }
 
     // planar 与 CABAC 均可闭环，有损下照常参与竞争；palette 仅限无损低色数场景。
@@ -352,6 +360,7 @@ pub fn encode_frame_adaptive(
         };
 
         let mut best_dct: Option<(usize, Vec<u8>, usize, usize, bool)> = None;
+        let dct_span = Span::begin("encode.adaptive.dct");
         for &(block_w, block_h, use_qm) in variants {
             let q_step = if fq.is_lossy() { fq.step.max(1) } else { 1 };
             let q_coeff = super::dct_path::dct_quantize_interleaved_bs(
@@ -386,6 +395,7 @@ pub fn encode_frame_adaptive(
                 best_dct = Some((len, full_payload, block_w, block_h, use_qm));
             }
         }
+        drop(dct_span);
 
         // Trellis 再竞争：仅有损且非 q95 档（Q=1 时 Trellis 短路无意义）
         if fq.is_lossy() && !fq.q1_matrix_scale {
