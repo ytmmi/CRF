@@ -88,12 +88,22 @@ mod integration_tests {
 
     /// 有损编解码测试
     fn verify_lossy_encode_decode(frames: &[crf::ImageData], label: &str, quality: u8) {
+        // V2 有损唯一入口：质量档位映射为量化步长写入文件头。
+        // lossy=None 是无损管线，不再触发 has_lossy_quant 标志。
+        // V2 预设默认首帧跟随序列量化（MatchSequence），此处显式
+        // 固定首帧无损（旧 golden_lossless 语义）——首帧是全部差分帧
+        // 的还原基准，其量化误差会传导进每一帧。
+        let mut lossy = crf::LossyOptionsV2Builder::preset(quality as u16 * 100)
+            .build()
+            .expect("预设质量档位应为合法 V2 配置");
+        lossy.first_frame.mode =
+            crate::crf::core::config::lossy_v2::FirstFrameMode::Lossless;
         let params = crf::EncodeParams {
             compression_type: "golomb-rice".to_string(),
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
             adaptive_prediction: true,
-            lossy: None,
+            lossy: Some(lossy),
             input_original_frames: true,
             user_metadata: None,
         };
