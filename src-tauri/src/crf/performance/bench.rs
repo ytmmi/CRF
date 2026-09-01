@@ -8,7 +8,7 @@
 //! `decode_from_bytes` 入口，与生产路径完全一致。
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
 use crate::crf::encoder::encode_sequence;
@@ -52,12 +52,14 @@ pub fn run(dir: &str) -> Result<(), String> {
     let warm = encode_sequence(&frames, &params).map_err(|e| e.to_string())?;
     let _ = decode_from_bytes(&warm).map_err(|e| e.to_string())?;
 
+    // 清空预热期采样，阶段计时跨全部测量轮聚合（与端到端 p50/p95 同口径）。
+    telemetry::clear();
+
     let mut enc_times = Vec::with_capacity(MEASURED_ROUNDS);
     let mut dec_times = Vec::with_capacity(MEASURED_ROUNDS);
     let mut bytes = 0usize;
 
     for round in 0..MEASURED_ROUNDS {
-        telemetry::clear();
         let enc_start = Instant::now();
         let encoded = encode_sequence(&frames, &params).map_err(|e| e.to_string())?;
         let enc_elapsed = enc_start.elapsed();
