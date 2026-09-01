@@ -570,6 +570,52 @@ report 必须记录实际后端、版本、回退和阈值。参数解析、能�
 
 **门槛**：没有可靠 profile 和可复现基线，禁止进入 SIMD 泛化或 GPU。
 
+**状态（2026-09-02）：已完成**。实现如下：
+
+- `crf::performance::telemetry`：RAII 阶段守卫 + 分位数报告，默认关闭（`CRF_PERF=1` 或 `enable()` 开启），零码流影响；
+- `crf::performance::bench`：`--bench <dir>` 端到端基准（预热 1 + 测量 5 轮，报告 p50/p95 与 MPix/s 吞吐）；
+- 编码入口注入阶段：`encode.rct` / `encode.first_frame` / `encode.rest_frames` / `encode.assemble`，解码入口 `decode.bytes`。
+
+**多尺寸基线（release，本机 2026-09-02）**：
+
+| 组 | 分辨率 | 帧数 | encode p50 | decode p50 | 首帧占比 |
+|---|---|---:|---:|---:|---:|
+| 2 | 1400×2711 | 2 | 15.2s | 0.30s | 91% |
+| 1000 | 1024×1820 | 14 | 12.8s | 0.81s | 47% |
+| 2000 | 3541×2508 | 8 | 52.6s | 2.0s | 75% |
+
+**首帧内部细分（1000 组，`encode.adaptive.*` 单轮均值）**：
+
+| 阶段 | 均值 | 结论 |
+|---|---:|---|
+| `encode.adaptive.satd` | 43.9ms | 可忽略（已 rayon 并行） |
+| `encode.adaptive.trial_encode` | 116.8ms | 次要 |
+| `encode.adaptive.dct` | 467.6ms | 次要（p95 1.13s，有损 Trellis 更重） |
+| `encode.adaptive.planar` | **2750.4ms** | **绝对主导** |
+
+**结论修正**：原 §2.2 假设首帧热点是 SAD/SATD/DCT，实测不成立。真正热点是
+planar 候选——3 分量帧上 planar 每平面递归跑一次完整自适应流水线（含自身
+SATD/DCT/CABAC 竞争），单次投入约 6 倍于 DCT。后续 CPU 优化以 planar
+剪枝/加速为第一优先级，SATD 不再投入。
+
+### P1a：planar 剪枝（profile 验证 + 字节预算 Fast-Fail）
+
+**profile 验证（`--probe-planar`，2026-09-02）**：假设「色度平坦度低于阈值
+⟹ planar 必败」可作为剪枝信号。探针对 9 组共 51 帧测量 RCT 后 Co/Cg 长零
+行程占比与 planar 实际胜出与否，结论**否定该假设**：
+
+- planar 胜出仅 3/51 帧（组 1 两帧、组 e 一帧），且胜出帧平坦度仅 0.40~0.72；
+- 平坦度 0.39~0.41 的组 5 却全败——平坦度与胜出无单调关系，不能作为阈值。
+
+**实现**：改用**数学上安全的字节预算 Fast-Fail**（`encode_planar_payload_limited`）。
+planar 逐子平面累加体积，一旦「已累计体积 + 剩余子平面的最小可能体积
+（长度前缀 4 + 帧头 11 + 载荷 1 字节）」超过当前最优总长，即提前终止。判定
+只用下界，绝不跳过潜在胜者，最终字节与剪枝前逐字节一致。
+
+**收益**：1000 组 release 实测 planar 均值 2750ms→2665ms（−3%），字节 11,090,743
+完全不变；全量单测通过。收益有限是因为 lossless 下 planar 极少胜出、Fast-Fail
+下界较松；真正大幅收益需进一步分析 planar 子平面内部热点，而非剪枝本身。
+
 ### P1：CPU 内存和调度
 
 - 消除重复分配、重复转换和嵌套线程池；

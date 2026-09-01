@@ -6,6 +6,7 @@
 //! 上色下大面积恒定，独立编码使 RLE 零行程成倍增长。
 
 use crate::crf::error::CrfResult;
+use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
 
 use super::adaptive::encode_frame_adaptive;
@@ -33,6 +34,24 @@ pub(crate) fn encode_planar_payload(
     fq: FrameQuant,
     band_steps: BandSteps<'_>,
 ) -> CrfResult<Vec<u8>> {
+    encode_planar_payload_limited(image, compression_type, block_size, fq, band_steps, usize::MAX)
+        .map(|opt| opt.expect("unlimited planar encoding always yields a payload"))
+}
+
+/// 带字节预算的 planar 载荷编码（Fast-Fail）。
+///
+/// 与 [`encode_planar_payload`] 逐字节等价，但当「已累计载荷体积 +
+/// 剩余子平面的最小可能体积（长度前缀 4 + 帧头 11 + 载荷 1 字节）」
+/// 超过 `byte_limit` 时提前返回 `Ok(None)`——planar 必败，跳过剩余
+/// 子平面编码。判定只使用数学下界，绝不改变胜出候选与最终字节。
+pub(crate) fn encode_planar_payload_limited(
+    image: &ImageData,
+    compression_type: CompressionType,
+    block_size: u16,
+    fq: FrameQuant,
+    band_steps: BandSteps<'_>,
+    byte_limit: usize,
+) -> CrfResult<Option<Vec<u8>>> {
     // CfL α 候选集（P1 精细化：补齐 ±3 填充稀疏区间）
     // 存储仍为 4 bit（α+8 ∈ [4,12]），载荷格式不变、解码端对称无须修改。
     // CfL 为无损整数预测扣除——更准的 α 只影响残差分布（更小残差→更好
@@ -218,6 +237,14 @@ pub(crate) fn encode_planar_payload(
         preferred_sub = sub_out.pred_mode;
         out.extend_from_slice(&(sub_out.data.len() as u32).to_le_bytes());
         out.extend_from_slice(&sub_out.data);
+
+        // Fast-Fail：剩余子平面每个至少 4(长度前缀)+11(帧头)+1(载荷)=16 字节。
+        // 若已累计体积 + 剩余最小体积已超预算，planar 必败，提前终止。
+        let remaining = 3 - (pi + 1);
+        const MIN_SUB_PLANE_BYTES: usize = 4 + FRAME_HEADER_SIZE + 1;
+        if out.len() + remaining * MIN_SUB_PLANE_BYTES > byte_limit {
+            return Ok(None);
+        }
     }
-    Ok(out)
+    Ok(Some(out))
 }

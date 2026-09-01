@@ -7,4 +7,6 @@
 //! - [`bench`]：端到端编解码基准（`--bench` CLI 分派）。
 
 pub mod bench;
+/// probe_planar：planar 剪枝信号（色度平坦度）的 profile 验证探针
+pub mod probe_planar;
 pub mod telemetry;

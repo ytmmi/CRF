@@ -12,7 +12,7 @@ use rayon::prelude::*;
 
 use crate::crf::encoder::banded::encode_banded_payload;
 use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
-use crate::crf::encoder::planar::encode_planar_payload;
+use crate::crf::encoder::planar::encode_planar_payload_limited;
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
 use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
@@ -168,10 +168,20 @@ pub fn encode_frame_adaptive(
     // 使后续候选 Fast-Fail 上限更紧）。
     if compression_type == CompressionType::GolombRice && components == 3 {
         let planar_span = Span::begin("encode.adaptive.planar");
-        let payload = encode_planar_payload(image, compression_type, block_size, fq, band_steps)?;
-        let planar = assemble_frame(&payload, image, 0, 3)?;
-        if best.as_ref().is_none_or(|(sz, ..)| planar.len() < *sz) {
-            best = Some((planar.len(), planar, None));
+        // Fast-Fail 预算：planar 仅需击败当前最佳总长；超预算即必败。
+        let planar_limit = best.as_ref().map_or(usize::MAX, |(sz, ..)| *sz);
+        if let Some(payload) = encode_planar_payload_limited(
+            image,
+            compression_type,
+            block_size,
+            fq,
+            band_steps,
+            planar_limit,
+        )? {
+            let planar = assemble_frame(&payload, image, 0, 3)?;
+            if best.as_ref().is_none_or(|(sz, ..)| planar.len() < *sz) {
+                best = Some((planar.len(), planar, None));
+            }
         }
         drop(planar_span);
     }

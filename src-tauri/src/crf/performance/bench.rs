@@ -107,7 +107,7 @@ pub fn run(dir: &str) -> Result<(), String> {
 }
 
 /// 加载目录内全部 PNG/JPG 图像为 RGB 帧（按文件名排序，与测试路径一致）。
-fn load_frames(dir: &str) -> Result<Vec<ImageData>, String> {
+pub(crate) fn load_frames(dir: &str) -> Result<Vec<ImageData>, String> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| format!("{dir}: {e}"))?
         .filter_map(|e| e.ok())

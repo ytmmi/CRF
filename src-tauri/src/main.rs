@@ -58,6 +58,19 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-planar" {
+        // planar 剪枝探针（profile 验证；可选第二个参数指定图像组目录）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::probe_planar::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let input_dir = r"E:\CRF\test\png";
     let output_dir = r"E:\CRF\test\output\crf";
