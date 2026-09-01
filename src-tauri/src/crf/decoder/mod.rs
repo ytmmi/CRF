@@ -59,6 +59,7 @@ pub use image_export::save_frame_as_image;
 /// **P2 架构迁移**：编排逻辑已下沉到 [`session::DecodeSession::decode_bytes`]，
 /// 本函数保留为兼容转发。
 pub fn decode_from_bytes(data: &[u8]) -> CrfResult<DecodeResult> {
+    let _span = crate::crf::performance::telemetry::Span::begin("decode.bytes");
     session::DecodeSession::decode_bytes(data)
 }
 

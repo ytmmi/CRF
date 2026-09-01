@@ -45,6 +45,19 @@ fn main() {
         test::run_probe_split_tests(&dir);
         return;
     }
+    if args.len() > 1 && args[1] == "--bench" {
+        // 端到端编解码基准（P0 可复现基线；可选第二个参数指定图像组目录）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::bench::run(&dir) {
+            eprintln!("Benchmark error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let input_dir = r"E:\CRF\test\png";
     let output_dir = r"E:\CRF\test\output\crf";

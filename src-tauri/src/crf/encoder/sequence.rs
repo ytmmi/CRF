@@ -20,6 +20,8 @@ use crate::crf::core::domain::{CompressionType, EncodeParams, Flags, ImageData};
 use super::adaptive::encode_frame_adaptive;
 use super::frame::{encode_frame, FrameQuant};
 
+use crate::crf::performance::telemetry::Span;
+
 /// 编码完整的 CRF 文件
 ///
 /// 输入：图像序列和编码参数
@@ -104,6 +106,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         )));
     }
     let use_rct = crate::crf::core::color::rct::rct_applicable(components);
+    let rct_span = Span::begin("encode.rct");
     let encode_frames: Vec<ImageData> = if use_rct {
         frames
             .iter()
@@ -122,6 +125,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         frames.to_vec()
     };
     header.flags.set_has_rct(use_rct);
+    drop(rct_span);
 
     // 设置用户数据
     if let Some(ref user_data) = params.user_metadata {
@@ -198,6 +202,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
 
         // ===== 阶段 1a：frame0 差分域输入构造（i==0 时差分即原帧本身；
         // q95_soft 轻滤语义保持不变——轻滤后的首帧就是文件中的真实内容）=====
+        let first_span = Span::begin("encode.first_frame");
         let mut first_diff_rgb = frames[0].pixels.clone();
         if q95_soft {
             soft1(&mut first_diff_rgb);
@@ -295,9 +300,11 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             g_hat_img.pixels = crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
         }
         let g_hat = g_hat_img.pixels; // RGB 域重建首帧
+        drop(first_span);
 
         // ===== 阶段 2：后续帧并行差分编码（残差 = 原始帧 − G_hat）=====
         // v1.13 RCT 首帧自适应的双路竞争仅属于首帧；差分帧逻辑保持原样。
+        let rest_span = Span::begin("encode.rest_frames");
         let rest_results: Vec<(Vec<u8>, Option<u8>, bool)> = frames
             .par_iter()
             .enumerate()
@@ -387,6 +394,7 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                 Ok((data, None, true))
             })
             .collect::<Result<Vec<_>, CrfError>>()?;
+        drop(rest_span);
 
         let mut all_results = Vec::with_capacity(frames.len());
         all_results.push(first_result);
@@ -599,11 +607,13 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
     }
 
     // 组装文件（使用 session::batch::assemble_crf_output，P3 架构迁移）
+    let assemble_span = Span::begin("encode.assemble");
     let output = super::session::batch::assemble_crf_output(
         &header,
         frames_start,
         &encoded_frames,
     )?;
+    drop(assemble_span);
 
     // P5.6 码率护栏：目标由配置层以定点整数表达，编码结果不得静默突破硬上限。
     if tuning.enabled {

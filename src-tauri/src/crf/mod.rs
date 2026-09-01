@@ -16,6 +16,8 @@ pub mod decoder;
 pub mod encoder;
 pub mod error;
 pub mod format;
+/// performance：性能可观测性层（阶段计时 telemetry + 端到端 bench，P0）
+pub mod performance;
 
 // 重新导出常用类型（公共 API 面，供集成与测试路径使用）
 // P4 后类型统一自 core::domain / core::bitstream / core::config 提供
