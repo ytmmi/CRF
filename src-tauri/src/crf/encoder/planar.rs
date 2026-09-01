@@ -78,11 +78,9 @@ pub(crate) fn encode_planar_payload(
         if alpha == 0 {
             return chroma.to_vec();
         }
-        chroma
-            .iter()
-            .zip(planes[0].iter())
-            .map(|(&c, &y)| c - ((alpha * (y - 128)) >> 4))
-            .collect()
+        let mut out = vec![0i32; chroma.len()];
+        crate::crf::backend::ops::cfl_luma_subtract(chroma, &planes[0], alpha, &mut out);
+        out
     };
     let co_adj = apply_cfl(&planes[1], alpha_c);
     let cg_adj = apply_cfl(&planes[2], alpha_g);

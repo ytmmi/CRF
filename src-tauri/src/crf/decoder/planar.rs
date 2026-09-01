@@ -132,22 +132,24 @@ pub(crate) fn decode_planar(data: &[u8], header: &CrfHeader) -> CrfResult<Vec<i3
     }
 
     // CfL 还原：色度平面加回亮度线性预测（Y 已重建，因果安全）
-    for (plane_idx, alpha) in [(1usize, alpha_c), (2, alpha_g)] {
+    let (y_plane, chroma_planes) = planes.split_at_mut(1);
+    let y = &y_plane[0];
+    for (plane_idx, alpha) in [(0usize, alpha_c), (1, alpha_g)] {
         if alpha != 0 {
-            #[allow(clippy::needless_range_loop)] // 双平面按下标同步遍历，range 写法最清晰
-            for i in 0..pixel_count {
-                let pred = (alpha * (planes[0][i] - 128)) >> 4;
-                planes[plane_idx][i] += pred;
-            }
+            crate::crf::backend::ops::cfl_luma_add_in_place(
+                &mut chroma_planes[plane_idx],
+                y,
+                alpha,
+            );
         }
     }
 
     // 交错还原：[Y,Co,Cg] 逐像素拼接
     let mut out = vec![0i32; pixel_count * 3];
     for i in 0..pixel_count {
-        out[i * 3] = planes[0][i];
-        out[i * 3 + 1] = planes[1][i];
-        out[i * 3 + 2] = planes[2][i];
+        out[i * 3] = y[i];
+        out[i * 3 + 1] = chroma_planes[0][i];
+        out[i * 3 + 2] = chroma_planes[1][i];
     }
     Ok(out)
 }

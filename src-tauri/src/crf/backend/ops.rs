@@ -90,6 +90,18 @@ pub fn quantize_levels_biased(
     )
 }
 
+/// CfL 亮度预测扣除：`out[i] = chroma[i] - ((alpha * (y[i] - 128)) >> 4)`
+#[inline]
+pub fn cfl_luma_subtract(chroma: &[i32], y: &[i32], alpha: i32, out: &mut [i32]) {
+    crate::crf::backend::cpu::simd::cfl_luma_subtract(chroma, y, alpha, out)
+}
+
+/// CfL 亮度预测还原：`plane[i] += ((alpha * (y[i] - 128)) >> 4)`（原地）
+#[inline]
+pub fn cfl_luma_add_in_place(plane: &mut [i32], y: &[i32], alpha: i32) {
+    crate::crf::backend::cpu::simd::cfl_luma_add_in_place(plane, y, alpha)
+}
+
 #[cfg(all(test, feature = "nvidia-cuda"))]
 mod tests {
     use super::*;

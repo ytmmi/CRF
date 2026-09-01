@@ -291,6 +291,89 @@ unsafe fn quantize_levels_biased_avx2(
     );
 }
 
+// ===== CfL 亮度预测扣除 / 还原 =====
+
+/// 计算亮度线性预测 `pred[i] = (alpha * (y[i] - 128)) >> 4` 并从色度扣除：
+/// `out[i] = chroma[i] - pred[i]`（编码端 apply_cfl；alpha=0 由调用方短路）。
+///
+/// alpha ∈ [-4, 4]、y ∈ [0, 255]（8bit），pred ∈ [-32, 32]，全程 i32 无溢出；
+/// `>> 4` 为算术右移，与 Rust i32 右移及解码端 `⌊α·(Y−128)/16⌋` 逐位一致。
+pub fn cfl_luma_subtract(chroma: &[i32], y: &[i32], alpha: i32, out: &mut [i32]) {
+    debug_assert_eq!(chroma.len(), y.len());
+    debug_assert_eq!(chroma.len(), out.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if chroma.len() >= 8 && has_avx2() {
+            // SAFETY: avx2 已检测；切片边界内操作
+            unsafe { cfl_sub_avx2(chroma, y, alpha, out) };
+            return;
+        }
+    }
+    for i in 0..chroma.len() {
+        out[i] = chroma[i] - ((alpha * (y[i] - 128)) >> 4);
+    }
+}
+
+/// 解码端 CfL 还原：`plane[i] += (alpha * (y[i] - 128)) >> 4`（原地）。
+pub fn cfl_luma_add_in_place(plane: &mut [i32], y: &[i32], alpha: i32) {
+    debug_assert_eq!(plane.len(), y.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if plane.len() >= 8 && has_avx2() {
+            // SAFETY: avx2 已检测；切片边界内操作
+            unsafe { cfl_add_avx2(plane, y, alpha) };
+            return;
+        }
+    }
+    for i in 0..plane.len() {
+        plane[i] += (alpha * (y[i] - 128)) >> 4;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn cfl_sub_avx2(chroma: &[i32], y: &[i32], alpha: i32, out: &mut [i32]) {
+    use std::arch::x86_64::*;
+    let valpha = _mm256_set1_epi32(alpha);
+    let v128 = _mm256_set1_epi32(128);
+    let mut i = 0;
+    while i + 8 <= chroma.len() {
+        let vy = _mm256_loadu_si256(y.as_ptr().add(i).cast::<__m256i>());
+        let vc = _mm256_loadu_si256(chroma.as_ptr().add(i).cast::<__m256i>());
+        let d = _mm256_sub_epi32(vy, v128);
+        let pred = _mm256_srai_epi32(_mm256_mullo_epi32(valpha, d), 4);
+        let r = _mm256_sub_epi32(vc, pred);
+        _mm256_storeu_si256(out.as_mut_ptr().add(i).cast::<__m256i>(), r);
+        i += 8;
+    }
+    while i < chroma.len() {
+        out[i] = chroma[i] - ((alpha * (y[i] - 128)) >> 4);
+        i += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn cfl_add_avx2(plane: &mut [i32], y: &[i32], alpha: i32) {
+    use std::arch::x86_64::*;
+    let valpha = _mm256_set1_epi32(alpha);
+    let v128 = _mm256_set1_epi32(128);
+    let mut i = 0;
+    while i + 8 <= plane.len() {
+        let vy = _mm256_loadu_si256(y.as_ptr().add(i).cast::<__m256i>());
+        let vp = _mm256_loadu_si256(plane.as_ptr().add(i).cast::<__m256i>());
+        let d = _mm256_sub_epi32(vy, v128);
+        let pred = _mm256_srai_epi32(_mm256_mullo_epi32(valpha, d), 4);
+        let r = _mm256_add_epi32(vp, pred);
+        _mm256_storeu_si256(plane.as_mut_ptr().add(i).cast::<__m256i>(), r);
+        i += 8;
+    }
+    while i < plane.len() {
+        plane[i] += (alpha * (y[i] - 128)) >> 4;
+        i += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +486,49 @@ mod tests {
         );
         quantize_levels_biased(&values, &mut actual, 10, 4);
         assert_eq!(actual, expected);
+    }
+
+    /// CfL 亮度预测扣除/还原：AVX2 与标量逐位一致，sub/add 互逆。
+    #[test]
+    fn test_cfl_luma_subtract_add_matches_scalar_and_roundtrips() {
+        let mut state: u64 = 0xC0FFEE_1234_5678;
+        let next = |state: &mut u64| -> i32 {
+            *state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((*state >> 33) as i32 % 512) - 256
+        };
+        // 覆盖 AVX2 批量路径（>=8）与标量尾部（<8）
+        for n in [1usize, 7, 8, 9, 31, 1000] {
+            for &alpha in &[-4i32, -3, -1, 0, 1, 2, 4] {
+                let y: Vec<i32> = (0..n).map(|_| next(&mut state).rem_euclid(256)).collect();
+                let chroma: Vec<i32> = (0..n).map(|_| next(&mut state)).collect();
+
+                // subtract 对拍
+                let mut actual_sub = vec![0i32; n];
+                cfl_luma_subtract(&chroma, &y, alpha, &mut actual_sub);
+                let expected_sub: Vec<i32> = chroma
+                    .iter()
+                    .zip(y.iter())
+                    .map(|(&c, &yv)| c - ((alpha * (yv - 128)) >> 4))
+                    .collect();
+                assert_eq!(actual_sub, expected_sub, "alpha={alpha} n={n} subtract");
+
+                // add 对拍 + 与 subtract 互逆
+                let mut actual_add = chroma.clone();
+                cfl_luma_add_in_place(&mut actual_add, &y, alpha);
+                let expected_add: Vec<i32> = chroma
+                    .iter()
+                    .zip(y.iter())
+                    .map(|(&c, &yv)| c + ((alpha * (yv - 128)) >> 4))
+                    .collect();
+                assert_eq!(actual_add, expected_add, "alpha={alpha} n={n} add");
+                // add 应还原 subtract 的扣除
+                let mut restored = actual_sub.clone();
+                cfl_luma_add_in_place(&mut restored, &y, alpha);
+                assert_eq!(restored, chroma, "alpha={alpha} n={n} roundtrip");
+            }
+        }
     }
 }
 
