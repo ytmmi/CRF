@@ -13,6 +13,8 @@ use super::adaptive::encode_frame_adaptive;
 use super::frame::BandSteps;
 use super::FrameQuant;
 
+use crate::crf::performance::telemetry::Span;
+
 /// 编码三平面打包载荷（frame_type=3）
 ///
 /// 载荷布局：[cfl_flags u8][len1 u32 LE][sub_frame1][len2][sub_frame2][len3][sub_frame3]
@@ -89,9 +91,10 @@ pub(crate) fn encode_planar_payload_limited(
         best_a
     }
 
+    let cfl_span = Span::begin("encode.adaptive.planar.cfl");
     let alpha_c = search_alpha(&planes[0], &planes[1]);
     let alpha_g = search_alpha(&planes[0], &planes[2]);
-
+    drop(cfl_span);
     // 应用 CfL 预测扣除
     let apply_cfl = |chroma: &[i32], alpha: i32| -> Vec<i32> {
         if alpha == 0 {
@@ -118,6 +121,7 @@ pub(crate) fn encode_planar_payload_limited(
     // 色度边界处均值会产生渗色（跨区域混合），中值选择主侧值保持锐度。
     // 无码流变化（编码端预处理，解码端只看到下采样后数据）。
     let (co_enc, cg_enc, cw, ch) = if half_res {
+        let ds_span = Span::begin("encode.adaptive.planar.downsample");
         let full_w = image.width as usize;
         let full_h = image.height as usize;
         let cw = full_w.div_ceil(2);
@@ -164,7 +168,9 @@ pub(crate) fn encode_planar_payload_limited(
             }
             small
         };
-        (ds(&co_adj), ds(&cg_adj), cw, ch)
+        let result = (ds(&co_adj), ds(&cg_adj), cw, ch);
+        drop(ds_span);
+        result
     } else {
         (co_adj, cg_adj, image.width as usize, image.height as usize)
     };
@@ -210,6 +216,11 @@ pub(crate) fn encode_planar_payload_limited(
         _ => Vec::new(),
     };
     for (pi, (plane, pw, ph)) in plane_refs.iter().enumerate() {
+        let sub_span = Span::begin(match pi {
+            0 => "encode.adaptive.planar.subplane_y",
+            1 => "encode.adaptive.planar.subplane_co",
+            _ => "encode.adaptive.planar.subplane_cg",
+        });
         let pfq = if pi == 0 { fq } else { fq_c };
         let sub_steps: BandSteps<'_> = if pi == 0 {
             band_steps
@@ -237,6 +248,7 @@ pub(crate) fn encode_planar_payload_limited(
         preferred_sub = sub_out.pred_mode;
         out.extend_from_slice(&(sub_out.data.len() as u32).to_le_bytes());
         out.extend_from_slice(&sub_out.data);
+        drop(sub_span);
 
         // Fast-Fail：剩余子平面每个至少 4(长度前缀)+11(帧头)+1(载荷)=16 字节。
         // 若已累计体积 + 剩余最小体积已超预算，planar 必败，提前终止。

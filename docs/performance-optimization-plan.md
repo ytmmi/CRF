@@ -616,6 +616,56 @@ planar 逐子平面累加体积，一旦「已累计体积 + 剩余子平面的�
 完全不变；全量单测通过。收益有限是因为 lossless 下 planar 极少胜出、Fast-Fail
 下界较松；真正大幅收益需进一步分析 planar 子平面内部热点，而非剪枝本身。
 
+### P1b：planar 子平面内部热点分析 + 次级候选剪枝
+
+**子平面内部分解（`encode.adaptive.planar.*` 细分计时，组 1000 五轮 75 次
+planar 调用，2026-09-02）**：
+
+| 阶段 | 均值 | 说明 |
+|---|---:|---|
+| `planar.subplane_y` | 794ms | Y 子平面（全分辨率） |
+| `planar.subplane_co` | 926ms | Co 子平面 |
+| `planar.subplane_cg` | 923ms | Cg 子平面 |
+| `planar.cfl` | 0.012ms | CfL α 搜索，**可忽略** |
+
+三子平面合计 ≈2642ms，占 planar 总耗时 2669ms 的 99%。即：planar 的开销
+**几乎全部来自 3 个子平面各自递归跑一遍完整自适应流水线**（SATD + top-2
+试编码 + banded + palette + intrabc + cabac + dct）。CfL 搜索与色度下采样
+（lossless 下 half_res=false 不运行）均非热点。
+
+**profile 验证（`--probe-planar-sub`，2026-09-02）**：对全部测试组逐子平面
+统计胜出 frame_type，结论**决定性**：
+
+- **Y 子平面**：cabac(frame_type=5) 100% 胜出；
+- **Co/Cg 子平面**：cabac 主导，rle(frame_type=1) 与 banded(frame_type=2)
+  偶有胜出（组 4/9 的 Co/Cg 为 rle，组 10/组 e 的 Cg 为 banded）；
+- **dct(6)、intrabc(7)、palette(4)、intra_transform(8) 在全部测试组子平面
+  胜出 0 次**。
+
+结论：单分量子平面（生产路径唯一 components==1 场景）经 RCT+CfL 去相关后，
+已无 Intrabc 的 8×8 精确重复纹理，也无 DCT 可聚集的频域能量——cabac 对残差流
+已最优。dct/intrabc 在子平面上从不 set `best`，跳过它们**字节透明**。banded
+会胜出（组 10 Cg 4/4、组 e Cg 1/3），必须保留；palette 在合成低色数单分量
+数据下可胜出（`test_palette_roundtrip_low_color`），也保留。
+
+**实现**（`encode_frame_adaptive`）：
+- intrabc 候选加 `components > 1` 门控——单分量子平面跳过（本来就仅无损运行）；
+- dct 候选加 `!(components == 1 && !fq.is_lossy())` 门控——仅 lossless 单分量
+  子平面跳过；有损单分量（色度 chroma_step 量化）下 DCT 可能真实胜出，无探针
+  证据，保留。
+
+**收益**（1000 组 release）：
+
+| 指标 | 剪枝前 | 剪枝后 | 变化 |
+|---|---:|---:|---:|
+| encode p50 | 14904ms | 9176ms | **−38.4%** |
+| planar 均值 | 2669ms | 1481ms | **−44.5%** |
+| 字节 | 11,090,743 | 11,090,743 | 逐字节一致 |
+
+全量单测 159 passed / 0 failed。这是 P1a Fast-Fail（−3%）之外的大幅收益：
+根因不再是"planar 极少胜出"，而是"planar 子平面内部有一半开销花在从不
+胜出的次级候选上"。
+
 ### P1：CPU 内存和调度
 
 - 消除重复分配、重复转换和嵌套线程池；

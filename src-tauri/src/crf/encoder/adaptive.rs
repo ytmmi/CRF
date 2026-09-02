@@ -199,6 +199,7 @@ pub fn encode_frame_adaptive(
             .first()
             .map(|&(_, m)| m)
             .unwrap_or(PredictionMode::Med);
+        let banded_span = Span::begin("encode.adaptive.banded");
         let mut banded_best: Option<(usize, Vec<u8>, u8)> = None;
         for bh in [BAND_HEIGHT, BAND_HEIGHT_ALT] {
             if bh != BAND_HEIGHT && height < 128 {
@@ -216,11 +217,13 @@ pub fn encode_frame_adaptive(
                 best = Some((banded.len(), banded, None));
             }
         }
+        drop(banded_span);
 
         // 第五阶段：调色板候选（frame_type=4）
         //
         // 二次元插画纯色块/低色数数据特化；planar 子平面经递归同样受益。
         // v2 载荷启用 copy-above token 化（coding_params.bit0=1 标记）。
+        let palette_span = Span::begin("encode.adaptive.palette");
         if palette_plausible(&image.pixels) {
             match encode_palette_payload(&image.pixels, width) {
                 Some(Ok(payload)) => {
@@ -233,6 +236,7 @@ pub fn encode_frame_adaptive(
                 None => {} // 色数超限，放弃候选
             }
         }
+        drop(palette_span);
 
         // 第八阶段：帧内块复制候选（frame_type=7，v1.11）
         //
@@ -242,7 +246,12 @@ pub fn encode_frame_adaptive(
         // v1.11 差分帧启用：因果完备性修复（PRED 候选剔除 DC/TopRight、
         // 残差流一次性解码）后，差分帧的块级 COPY 同样安全。
         let enable_itbc = std::env::var("CRF_ITBC").map(|v| v == "1").unwrap_or(true);
-        if enable_itbc {
+        let itbc_span = Span::begin("encode.adaptive.intrabc");
+        // P1b 子平面剪枝：单分量（planar 子平面，生产路径唯一 components==1
+        // 场景）经 RCT+CfL 去相关后已无 8×8 精确重复纹理，IntraBC 的块复制
+        // 命中率为零。探针实测全部测试组子平面 intrabc 胜出 0 次——跳过不
+        // 改变任何候选的 `best`（它从不 set best），字节透明。
+        if enable_itbc && components > 1 {
             let payload_itbc =
                 super::intrabc::encode_intrabc_payload(&image.pixels, width, height, components)?;
             let itbc = assemble_frame(&payload_itbc, image, 0, 7)?;
@@ -250,6 +259,7 @@ pub fn encode_frame_adaptive(
                 best = Some((itbc.len(), itbc, None));
             }
         }
+        drop(itbc_span);
     }
 
     // 第六阶段：CABAC 熵编码候选（frame_type=5）
@@ -259,6 +269,7 @@ pub fn encode_frame_adaptive(
     // P6 预筛（§5-P6）：残差能量极低时 CABAC 无法改善平面化候选
     //（RLE 对零行程已最优），跳过闭环预测以节省时间。
     if compression_type == CompressionType::GolombRice {
+        let cabac_span = Span::begin("encode.adaptive.cabac");
         if let Some(&(_, best_mode)) = ranked.first().filter(|_| avg_abs_res >= 0.5) {
             // CABAC 候选同样走闭环（有损）或开环（无损），与帧级路径一致。
             // v2 梯度分级上下文：空间域残差流传入 stride 启用因果梯度分级
@@ -340,7 +351,14 @@ pub fn encode_frame_adaptive(
     // 跳过 DCT 可能改变 Fast-Fail 上限链使产物变化，只要解码质量
     // 不劣化即为有效收益（速度+可能的体积双赢）。纹理/噪声内容
     //（残差能量高）照常竞争。
-    if compression_type == CompressionType::GolombRice && dct_worth {
+    //
+    // P1b 子平面剪枝（lossless 单分量）：planar 子平面经 RCT+CfL 去相关
+    // 后已无频域能量可聚集，探针实测全部测试组 lossless 子平面 DCT 胜出
+    // 0 次（cabac 对残差流已最优）。跳过不改变 `best`（DCT 从不 set best），
+    // 字节透明。有损单分量（色度 chroma_step 量化）仍保留 DCT——量化下
+    // 变换域可能真实胜出，无探针证据，不剪。
+    let skip_dct_subplane = components == 1 && !fq.is_lossy();
+    if compression_type == CompressionType::GolombRice && dct_worth && !skip_dct_subplane {
         const TRELLIS_FLAG_BIT: u8 = 0x10;
         const QM_FLAG_BIT: u8 = 0x40;
         const BW8_FLAG_BIT: u8 = 0x20; // 原 BS8：宽度=8
@@ -464,6 +482,7 @@ pub fn encode_frame_adaptive(
         // 仅 3 分量时参与（单分量 Gray 用前序帧级候选）。
         // P6 预筛：同 DCT 指标——平坦内容时跳过（DCT 无收益则 frame_type=8 也无）。
         if compression_type == CompressionType::GolombRice && components == 3 && dct_worth {
+            let itrans_span = Span::begin("encode.adaptive.intra_transform");
             let payload_tf8 = encode_intra_transform_payload(
                 image,
                 compression_type,
@@ -476,6 +495,7 @@ pub fn encode_frame_adaptive(
             if best.as_ref().is_none_or(|(sz, ..)| tf8.len() < *sz) {
                 best = Some((tf8.len(), tf8, None));
             }
+            drop(itrans_span);
         }
     }
 

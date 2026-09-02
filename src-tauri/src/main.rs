@@ -71,6 +71,19 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-planar-sub" {
+        // planar 子平面次级候选胜出频率探针（profile 验证）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::probe_planar_sub::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let input_dir = r"E:\CRF\test\png";
     let output_dir = r"E:\CRF\test\output\crf";
