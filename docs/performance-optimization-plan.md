@@ -713,17 +713,34 @@ buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 保守阈值 1.5GB，当前批量路径峰值内存余量充足，RCT 副本消除后大图组
 （组 10 类 8500×5816）触发 allocator fail-fast 的风险进一步下降。
 
-**未完成（需先 profile，不凭经验动手）**：
-- **嵌套线程池治理**：`sequence.rs` 的 `frames.par_iter()`（帧级外层）与
-  `adaptive.rs` 的 `ADAPTIVE_CANDIDATES.par_iter()`（SATD 内层）、`banded.rs`
-  的 `into_par_iter()`（条带内层）构成 Rayon 嵌套并行。文档 §4.3 禁止嵌套
-  并行「除非有明确的线程预算和基准证明」——需先测过度订阅/收益，再决定
-  是否收紧为单层并行。
+**嵌套线程池 profile 验证（2026-09-02，结论：非瓶颈，不改动）**：
+
+| RAYON_NUM_THREADS | encode p50 | 相对 1 线程 |
+|---:|---:|---:|
+| 1 | 32331ms | 1.0× |
+| 8 | 16284ms | 1.99× |
+| 16 | ~9373~12578ms | 2.6~3.4×（噪声大，机器热降频） |
+
+- **无 OS 级线程爆炸**：grep 确认全库无 `ThreadPool::build`/`build_global`/
+  `install`，仅隐式全局池的 `par_iter`/`into_par_iter`。Rayon 嵌套并行复用
+  同一 16 线程池（工作窃取），不新建线程——§4.3「过度订阅」风险未兑现。
+- **缩放单调不劣化**：16 > 8 > 1，无病态过度订阅信号。
+- **真正瓶颈是首帧（45% 串行）**：`first_frame` 4231ms / `rest_frames`
+  5165ms。首帧单帧候选流水线（SATD→试编码→planar→banded→…→dct）本质串行，
+  仅 SATD（8 候选）与 banded（条带）内部并行——1→16 线程首帧仅 5926→4231ms
+  （1.4×），印证串行主导。
+
+**结论**：嵌套并行不是当前瓶颈，收紧为单层并行只会牺牲 SATD/banded 的
+内层并行收益，得不偿失。速度主收益应转向**首帧内部串行流水线的并行化/加速**
+（也是 P1b planar 剪枝的延续），或 P2 SIMD 对首帧 kernel 的加速。故本项目
+标记为「已 profile，暂不实施」。
+
+**未完成（架构迁移项，非 P1 纯性能项）**：
 - **batch/streaming resolved config 深层收敛**：`codec::encode` facade 路径
   仍解析配置两次（报告用 `ResolvedConfig::resolve` + 编码用 `from_options`），
   streaming 用 `ResolveContext::default()`（缺 components/frame_count）。
-  这属规划文档 P3.b「主流程直接消费 ResolvedConfig」的架构迁移项，非 P1
-  纯性能项，留待 session 拆分时收敛。
+  属规划文档 P3.b「主流程直接消费 ResolvedConfig」的架构迁移项，留待
+  session 拆分时收敛。
 
 ### P2：CPU SIMD 扩展
 
