@@ -11,4 +11,6 @@ pub mod bench;
 pub mod probe_planar;
 /// probe_planar_sub：planar 子平面次级候选胜出频率探针（profile 验证）
 pub mod probe_planar_sub;
+/// probe_first_frame：首帧内部候选阶段 profile 探针
+pub mod probe_first_frame;
 pub mod telemetry;

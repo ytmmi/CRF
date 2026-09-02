@@ -16,6 +16,8 @@
 //! 3. DC 模式：逆量化残差 + 预测重建
 //! 4. HVMED 模式：逆 zigzag → 逆量化 → 逆 DCT + 预测重建
 
+use rayon::prelude::*;
+
 use crate::crf::encoder::coeff_cabac::CoeffCABAC;
 use crate::crf::error::CrfResult;
 use crate::crf::core::domain::{CompressionType, ImageData};
@@ -169,14 +171,25 @@ pub fn encode_intra_transform_payload(
         planes[2].push(px[2]);
     }
 
+    // P1 首帧加速：三平面（Y/Co/Cg）编码互相独立（各自 CoeffCABAC + 重建
+    // 缓冲局部状态，无跨平面依赖），并行计算各平面载荷。rayon collect 保序
+    // + 后续按 Y/Co/Cg 顺序拼接，字节与串行版逐位一致。
+    let plane_payloads: Vec<Vec<u8>> = planes
+        .par_iter()
+        .enumerate()
+        .map(|(pi, plane)| -> CrfResult<Vec<u8>> {
+            let (p_q, p_bias) = if pi == 0 {
+                (q_step, deadzone) // Y: 亮度步长+偏置
+            } else {
+                (chroma_step.max(1), chroma_bias) // Co/Cg: 色度步长+偏置
+            };
+            let (payload, _recon) = encode_plane(plane, w, h, p_q, p_bias)?;
+            Ok(payload)
+        })
+        .collect::<CrfResult<Vec<_>>>()?;
+
     let mut out = vec![0u8]; // flags 预留
-    for (pi, plane) in planes.iter().enumerate() {
-        let (p_q, p_bias) = if pi == 0 {
-            (q_step, deadzone) // Y: 亮度步长+偏置
-        } else {
-            (chroma_step.max(1), chroma_bias) // Co/Cg: 色度步长+偏置
-        };
-        let (payload, _) = encode_plane(plane, w, h, p_q, p_bias)?;
+    for payload in plane_payloads {
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(&payload);
     }

@@ -735,6 +735,49 @@ buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 （也是 P1b planar 剪枝的延续），或 P2 SIMD 对首帧 kernel 的加速。故本项目
 标记为「已 profile，暂不实施」。
 
+### P1c：首帧内部串行流水线并行化（dct 变体并行）
+
+**profile 验证（`--probe-first-frame`，2026-09-02）**：首帧探针对单次
+`encode_frame_adaptive`（RCT 域、lossless）测得各候选阶段独占耗时：
+
+| 阶段 | 耗时 | 说明 |
+|---|---:|---|
+| **dct** | **611ms** | 4 个 lossless 变体串行 |
+| **planar** | **620ms** | 3 子平面串行（有 preferred_sub 字节依赖） |
+| cabac | 113ms | 首帧胜出者（frame_type=5） |
+| intra_transform | 134ms | 3 平面串行 |
+| trial_encode | 60ms | top-2 串行（Fast-Fail 链） |
+| banded | 56ms | 条带已并行 |
+| intrabc / palette | 33 / 28ms | 串行 |
+
+两大串行怪兽是 dct 与 planar。planar 因 `preferred_sub`（子平面间历史引导）
+存在字节依赖不可并行；**dct 的 4 个 lossless 变体（4×4/8×8/8×4/4×8）完全
+独立**——各自算系数流 + CABAC 载荷，`best_dct` 取最小、无跨变体 Fast-Fail、
+无字节依赖。
+
+**实现**：
+1. dct 变体循环改为 `variants.par_iter()` 并行计算各变体（lossless 4 版 /
+   常规有损 6 版），rayon `collect` 保序后按同序严格 `<` 比较取最小——
+   tie-break 与串行版逐字节一致。
+2. `encode_intra_transform_payload` 的三平面（Y/Co/Cg）循环改为 `par_iter()`
+   并行计算各平面载荷（各平面 CoeffCABAC/重建缓冲均为局部状态、无跨平面
+   依赖），collect 保序后按 Y/Co/Cg 顺序拼接——字节逐位一致。
+
+**收益**（组 1000 release，16 线程）：
+
+| 指标 | 改前 | 改后 | 变化 |
+|---|---:|---:|---:|
+| 首帧 dct 阶段 | 611ms | 200ms | **−67%** |
+| intra_transform 均值 | 134ms | 117ms | **−13%** |
+| first_frame | 4231ms | 3208ms | **−24%** |
+| encode p50 | ~9373ms | 8236ms | **−12%** |
+| 字节 | 11,090,743 | 11,090,743 | 逐字节一致 |
+
+全量单测 159 passed / 0 failed。首帧是 encode 的 45% 串行主导，dct 变体并行
+直接砍掉首帧最大的串行块，intra_transform 三平面并行锦上添花，端到端 −12%
+（达到 P1 的 ≥10% 门槛）。剩余首帧串行块（planar 620ms）受 `preferred_sub`
+字节依赖约束无法字节透明并行，留待 P2 SIMD 或格式级重构。
+
 **未完成（架构迁移项，非 P1 纯性能项）**：
 - **batch/streaming resolved config 深层收敛**：`codec::encode` facade 路径
   仍解析配置两次（报告用 `ResolvedConfig::resolve` + 编码用 `from_options`），

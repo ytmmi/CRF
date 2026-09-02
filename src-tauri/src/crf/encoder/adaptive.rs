@@ -389,36 +389,47 @@ pub fn encode_frame_adaptive(
 
         let mut best_dct: Option<(usize, Vec<u8>, usize, usize, bool)> = None;
         let dct_span = Span::begin("encode.adaptive.dct");
-        for &(block_w, block_h, use_qm) in variants {
-            let q_step = if fq.is_lossy() { fq.step.max(1) } else { 1 };
-            let q_coeff = super::dct_path::dct_quantize_interleaved_bs(
-                &image.pixels,
-                width,
-                height,
-                components,
-                q_step,
-                block_w,
-                block_h,
-                use_qm,
-                fq.q1_matrix_scale && use_qm,
-            );
-            // DCT 系数流为非空间域数据，不启用空间域分类器（stride=None）
-            // 载荷 v3：[k|形状/矩阵标志 u8][flags=Uniform][cabac 码流]
-            let (payload, k) = rle_cabac::encode_frame_rle_cabac_adaptive(&q_coeff, None)?;
-            let mut flag_byte = k;
-            if block_w == 8 {
-                flag_byte |= BW8_FLAG_BIT;
-            }
-            if block_h == 8 {
-                flag_byte |= BH8_FLAG_BIT;
-            }
-            if use_qm {
-                flag_byte |= QM_FLAG_BIT;
-            }
-            let mut full_payload = Vec::with_capacity(payload.len() + 1);
-            full_payload.push(flag_byte);
-            full_payload.extend_from_slice(&payload);
-            let len = FRAME_HEADER_SIZE + full_payload.len();
+        let q_step = if fq.is_lossy() { fq.step.max(1) } else { 1 };
+        // P1 首帧加速：DCT 各变体（lossless 4 版 / 常规有损 6 版）互相独立——
+        // 各自算自己的系数流与 CABAC 载荷，`best_dct` 取最小、无跨变体
+        // Fast-Fail、无字节依赖。首帧为串行主瓶颈（探针实测 lossless dct
+        // 611ms），并行化使 dct 阶段随线程数近线性缩放。rayon collect 保序 +
+        // 后续同序严格 `<` 比较，tie-break 与串行版逐字节一致。
+        let dct_results: Vec<(usize, Vec<u8>, usize, usize, bool)> = variants
+            .par_iter()
+            .map(|&(block_w, block_h, use_qm)| -> CrfResult<(usize, Vec<u8>, usize, usize, bool)> {
+                let q_coeff = super::dct_path::dct_quantize_interleaved_bs(
+                    &image.pixels,
+                    width,
+                    height,
+                    components,
+                    q_step,
+                    block_w,
+                    block_h,
+                    use_qm,
+                    fq.q1_matrix_scale && use_qm,
+                );
+                // DCT 系数流为非空间域数据，不启用空间域分类器（stride=None）
+                // 载荷 v3：[k|形状/矩阵标志 u8][flags=Uniform][cabac 码流]
+                let (payload, k) = rle_cabac::encode_frame_rle_cabac_adaptive(&q_coeff, None)?;
+                let mut flag_byte = k;
+                if block_w == 8 {
+                    flag_byte |= BW8_FLAG_BIT;
+                }
+                if block_h == 8 {
+                    flag_byte |= BH8_FLAG_BIT;
+                }
+                if use_qm {
+                    flag_byte |= QM_FLAG_BIT;
+                }
+                let mut full_payload = Vec::with_capacity(payload.len() + 1);
+                full_payload.push(flag_byte);
+                full_payload.extend_from_slice(&payload);
+                let len = FRAME_HEADER_SIZE + full_payload.len();
+                Ok((len, full_payload, block_w, block_h, use_qm))
+            })
+            .collect::<CrfResult<Vec<_>>>()?;
+        for (len, full_payload, block_w, block_h, use_qm) in dct_results {
             if best_dct.as_ref().is_none_or(|(sz, ..)| len < *sz) {
                 best_dct = Some((len, full_payload, block_w, block_h, use_qm));
             }
