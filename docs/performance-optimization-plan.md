@@ -762,6 +762,11 @@ buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 2. `encode_intra_transform_payload` 的三平面（Y/Co/Cg）循环改为 `par_iter()`
    并行计算各平面载荷（各平面 CoeffCABAC/重建缓冲均为局部状态、无跨平面
    依赖），collect 保序后按 Y/Co/Cg 顺序拼接——字节逐位一致。
+3. `rle_cabac` 的 MA 树 / 梯度 / 统一三变体竞争改为 `par_iter()` 并行——
+   串行版收缩 `best_len` 仅提前淘汰「必败」变体（`out_len()` 是最终体积下界，
+   超限即必败），胜出者恒为严格最小体积变体、与上限无关；并行给每个变体
+   `byte_limit`（最宽松）作独立预算，collect 保序后按 MA→Gradient→Uniform
+   顺序严格 `<` 归约——字节逐位一致。
 
 **收益**（组 1000 release，16 线程）：
 
@@ -769,14 +774,15 @@ buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 |---|---:|---:|---:|
 | 首帧 dct 阶段 | 611ms | 200ms | **−67%** |
 | intra_transform 均值 | 134ms | 117ms | **−13%** |
-| first_frame | 4231ms | 3208ms | **−24%** |
-| encode p50 | ~9373ms | 8236ms | **−12%** |
+| cabac 均值 | 49ms | 37ms | **−25%** |
+| first_frame | 4231ms | 2797ms | **−34%** |
+| encode p50 | ~9373ms | 7814ms | **−17%** |
 | 字节 | 11,090,743 | 11,090,743 | 逐字节一致 |
 
 全量单测 159 passed / 0 failed。首帧是 encode 的 45% 串行主导，dct 变体并行
-直接砍掉首帧最大的串行块，intra_transform 三平面并行锦上添花，端到端 −12%
-（达到 P1 的 ≥10% 门槛）。剩余首帧串行块（planar 620ms）受 `preferred_sub`
-字节依赖约束无法字节透明并行，留待 P2 SIMD 或格式级重构。
+砍掉首帧最大的串行块，intra_transform 三平面与 cabac 三变体并行锦上添花，
+端到端 −17%（远超 P1 的 ≥10% 门槛）。剩余首帧串行块（planar 620ms）受
+`preferred_sub` 字节依赖约束无法字节透明并行，留待 P2 SIMD 或格式级重构。
 
 **未完成（架构迁移项，非 P1 纯性能项）**：
 - **batch/streaming resolved config 深层收敛**：`codec::encode` facade 路径

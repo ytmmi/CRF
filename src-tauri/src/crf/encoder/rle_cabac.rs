@@ -9,6 +9,8 @@
 //! Meta-Adaptive 同款，数据驱动决策树）/ 固定梯度 4 档 / 全帧统一单档，
 //! 取码流最小者，flags 编码所选模式。保证相对任何单一模式单调不劣化。
 
+use rayon::prelude::*;
+
 use crate::crf::core::entropy::context::{CtxModel, N_CTX};
 
 // ===== Range Coder（32 位区间 + 64 位低位累积）=====
@@ -329,87 +331,131 @@ pub fn encode_frame_rle_cabac_adaptive_limited(
     stride: Option<usize>,
     byte_limit: usize,
 ) -> crate::crf::error::CrfResult<Option<(Vec<u8>, u8)>> {
-    use crate::crf::core::entropy::context::{build_ma_tree, CtxModel};
+    use crate::crf::core::entropy::context::build_ma_tree;
 
     // 共用 k（同像素集直方图竞争结果一致）
     let probe = CabacEncoder::adaptive(pixels);
     let k = probe.k;
 
-    // best_len 初值 = 上限：所有变体的比较基准从「上限」开始，
-    // 任何变体完整产出后按实际字节数竞争
-    let mut best_body: Option<Vec<u8>> = None;
-    let mut best_len = byte_limit;
+    // P1 首帧加速：三变体并行。串行版的收缩 best_len 只对后续变体收紧
+    // Fast-Fail 上限，但该上限仅淘汰「必败」变体——out_len() 是最终体积的
+    // 下界，超限即最终体积 ≥ 上限，严格 < 竞争必败；胜出者恒为严格最小
+    // 体积的变体，与上限无关。故并行给每个变体 byte_limit（最宽松）作独立
+    // 预算，rayon collect 保序后按 MA→Gradient→Uniform 顺序严格 < 归约，
+    // 字节逐位一致。
+    let variants: Vec<u8> = if stride.is_some() {
+        vec![0, 1, 2] // MA / Gradient / Uniform
+    } else {
+        vec![2] // 非空间域载荷（如 DCT 系数流）仅 Uniform
+    };
+    let results: Vec<Option<(Vec<u8>, usize)>> = variants
+        .par_iter()
+        .map(|&variant| -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
+            encode_cabac_variant(pixels, k, stride, byte_limit, variant)
+        })
+        .collect::<crate::crf::error::CrfResult<Vec<_>>>()?;
 
-    // 变体 1：MA 树（仅空间域可用）
-    if let Some(st) = stride {
-        let tree = build_ma_tree(pixels, Some(st))?;
-        let ma_header = tree.serialize();
-        let model = CtxModel::Ma(&tree);
-        let mut enc = CabacEncoder::new(k);
-        if enc
-            .encode_signed_array_limited(
-                pixels,
-                k,
-                &model,
-                stride,
-                best_len.saturating_sub(1 + ma_header.len()),
-            )
-            .is_some()
-        {
+    let mut best: Option<(Vec<u8>, usize)> = None;
+    let mut best_len = byte_limit;
+    for r in results {
+        if let Some((body, total)) = r {
+            if total < best_len {
+                best_len = total;
+                best = Some((body, total));
+            }
+        }
+    }
+    Ok(best.map(|(body, _)| (body, k)))
+}
+
+/// 编码单个 CABAC 上下文变体（0=MA 树 / 1=固定梯度 / 2=全帧统一），
+/// 返回完整 body（含 flags 字节与 MA 树头）与总体积；超 `byte_limit`
+/// 返回 None（该变体必败）。
+///
+/// 每个变体使用 `byte_limit`（最宽松）作独立 Fast-Fail 预算——`out_len()`
+/// 为最终体积下界，超限即必败；收紧为串行版收缩 best_len 只是提前淘汰
+/// 败者、节省败者编码时间，不改变胜出变体的字节。故并行版与串行版
+/// 逐字节一致。
+fn encode_cabac_variant(
+    pixels: &[i32],
+    k: u8,
+    stride: Option<usize>,
+    byte_limit: usize,
+    variant: u8,
+) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
+    use crate::crf::core::entropy::context::{build_ma_tree, CtxModel};
+
+    match variant {
+        0 => {
+            // 变体 1：MA 树（仅空间域可用）
+            let Some(st) = stride else {
+                return Ok(None);
+            };
+            let tree = build_ma_tree(pixels, Some(st))?;
+            let ma_header = tree.serialize();
+            let model = CtxModel::Ma(&tree);
+            let mut enc = CabacEncoder::new(k);
+            let stream_limit = byte_limit.saturating_sub(1 + ma_header.len());
+            if enc
+                .encode_signed_array_limited(pixels, k, &model, stride, stream_limit)
+                .is_none()
+            {
+                return Ok(None);
+            }
             let stream = enc.finish();
             let total = 1 + ma_header.len() + stream.len();
-            if total < best_len {
-                best_len = total;
-                let mut body = Vec::with_capacity(total);
-                body.push(0x01); // flags: MA
-                body.extend_from_slice(&ma_header);
-                body.extend_from_slice(&stream);
-                best_body = Some(body);
+            if total >= byte_limit {
+                return Ok(None);
             }
+            let mut body = Vec::with_capacity(total);
+            body.push(0x01); // flags: MA
+            body.extend_from_slice(&ma_header);
+            body.extend_from_slice(&stream);
+            Ok(Some((body, total)))
         }
-    }
-
-    // 变体 2：固定梯度 4 档（仅空间域可用）
-    if stride.is_some() && best_len > 1 {
-        let model = CtxModel::Gradient;
-        let mut enc = CabacEncoder::new(k);
-        if enc
-            .encode_signed_array_limited(pixels, k, &model, stride, best_len - 1)
-            .is_some()
-        {
+        1 => {
+            // 变体 2：固定梯度 4 档（仅空间域可用）
+            let model = CtxModel::Gradient;
+            let mut enc = CabacEncoder::new(k);
+            let stream_limit = byte_limit.saturating_sub(1);
+            if enc
+                .encode_signed_array_limited(pixels, k, &model, stride, stream_limit)
+                .is_none()
+            {
+                return Ok(None);
+            }
             let stream = enc.finish();
             let total = 1 + stream.len();
-            if total < best_len {
-                best_len = total;
-                let mut body = Vec::with_capacity(total);
-                body.push(0x02); // flags: Gradient
-                body.extend_from_slice(&stream);
-                best_body = Some(body);
+            if total >= byte_limit {
+                return Ok(None);
             }
+            let mut body = Vec::with_capacity(total);
+            body.push(0x02); // flags: Gradient
+            body.extend_from_slice(&stream);
+            Ok(Some((body, total)))
         }
-    }
-
-    // 变体 3：全帧统一（恒可用，无树头/额外开销）
-    if best_len > 1 {
-        let model = CtxModel::Uniform;
-        let mut enc = CabacEncoder::new(k);
-        if enc
-            .encode_signed_array_limited(pixels, k, &model, stride, best_len - 1)
-            .is_some()
-        {
+        _ => {
+            // 变体 3：全帧统一（恒可用，无树头/额外开销）
+            let model = CtxModel::Uniform;
+            let mut enc = CabacEncoder::new(k);
+            let stream_limit = byte_limit.saturating_sub(1);
+            if enc
+                .encode_signed_array_limited(pixels, k, &model, stride, stream_limit)
+                .is_none()
+            {
+                return Ok(None);
+            }
             let stream = enc.finish();
             let total = 1 + stream.len();
-            if total < best_len {
-                best_len = total;
-                let mut body = Vec::with_capacity(total);
-                body.push(0x00); // flags: Uniform
-                body.extend_from_slice(&stream);
-                best_body = Some(body);
+            if total >= byte_limit {
+                return Ok(None);
             }
+            let mut body = Vec::with_capacity(total);
+            body.push(0x00); // flags: Uniform
+            body.extend_from_slice(&stream);
+            Ok(Some((body, total)))
         }
     }
-
-    Ok(best_body.map(|b| (b, k)))
 }
 
 #[cfg(test)]
