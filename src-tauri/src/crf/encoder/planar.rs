@@ -198,11 +198,16 @@ pub(crate) fn encode_planar_payload_limited(
     };
 
     let mut preferred_sub: Option<crate::crf::core::domain::PredictionMode> = None;
-    // (平面数据, 平面宽, 平面高)：Y 全分辨率；Co/Cg 视 half_res 而定
-    let plane_refs: [(&Vec<i32>, usize, usize); 3] = [
-        (&planes[0], image.width as usize, image.height as usize),
-        (&co_enc, cw, ch),
-        (&cg_enc, cw, ch),
+    // (平面数据, 平面宽, 平面高)：Y 全分辨率；Co/Cg 视 half_res 而定。
+    // P1：子平面数据转为独占所有权（move 而非 clone）——planes[0]/co_enc/cg_enc
+    // 此时均已构建完成且循环后不再使用，move 进 ImageData 省去 3 次全帧克隆。
+    // 注意 planes[1]/planes[2]（CfL 前的原始色度）已被 co_enc/cg_enc 取代，随
+    // 数组解构丢弃。
+    let [y_plane, _, _] = planes;
+    let owned_planes: [(Vec<i32>, usize, usize); 3] = [
+        (y_plane, image.width as usize, image.height as usize),
+        (co_enc, cw, ch),
+        (cg_enc, cw, ch),
     ];
     // 色度条带步长（P1 精细化，评审 §11.1 第二项）：
     // band_steps 按 BAND_HEIGHT(32) 行分段对 Y 估计；色度半分辨率 ch=h/2
@@ -215,7 +220,7 @@ pub(crate) fn encode_planar_payload_limited(
         Some(y_steps) if !half_res => y_steps.to_vec(),
         _ => Vec::new(),
     };
-    for (pi, (plane, pw, ph)) in plane_refs.iter().enumerate() {
+    for (pi, (plane, pw, ph)) in owned_planes.into_iter().enumerate() {
         let sub_span = Span::begin(match pi {
             0 => "encode.adaptive.planar.subplane_y",
             1 => "encode.adaptive.planar.subplane_co",
@@ -230,16 +235,16 @@ pub(crate) fn encode_planar_payload_limited(
             None
         };
         let plane_image = ImageData {
-            width: *pw as u16,
-            height: *ph as u16,
+            width: pw as u16,
+            height: ph as u16,
             bit_depth: image.bit_depth,
             color_format: ColorFormat::Gray,
-            pixels: (*plane).clone(),
+            pixels: plane,
         };
         let sub_out = encode_frame_adaptive(
             &plane_image,
             compression_type,
-            block_size.min(*pw as u16).max(4),
+            block_size.min(pw as u16).max(4),
             false,
             pfq,
             preferred_sub,

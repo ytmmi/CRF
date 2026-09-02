@@ -694,6 +694,37 @@ planar 调用，2026-09-02）**：
 副本，属「重复转换」范畴的直接达标项）。速度主收益仍需后续 P1 轮次（scratch
 buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 
+**已完成（2026-09-02，第二轮：scratch 分配削减 + 配置解析收敛）**：
+
+3. **planar 子平面 move 取代 clone**：`encode_planar_payload_limited` 原先以
+   `plane_refs: [(&Vec<i32>, …); 3]` 借用三个子平面，循环内 `(*plane).clone()`
+   对每个子平面做一次全帧克隆（共 3 次/planar 调用）。现改为 `owned_planes`
+   独占所有权数组（`[y_plane, _, _] = planes` 解构丢弃 CfL 前原始色度），
+   循环内 `pixels: plane` 直接 move——省去 3 次全帧克隆，字节逐位一致。
+
+4. **会话层消除重复配置解析**：`EncodeSession::encode_sequence` 原先先调
+   `ResolvedConfig::resolve`（内部再跑一次 `KernelLossyConfig::from_options`）
+   然后丢弃结果，仅用于重复校验；而 `sequence::encode_sequence` 主流程会再
+   做完全相同的工作。现移除该重复解析，直接委托主流程（校验语义不变，
+   因为 `sequence` 内部的压缩类型校验 + `from_options` 错误处理完全覆盖）。
+
+**低内存峰值验证**：组 1000（1024×1820×14 帧）实测进程峰值工作集
+**239.9 MB**（编码 + 解码全流程）。对比 `sequence.rs` 的 BATCH_MEM_LIMIT
+保守阈值 1.5GB，当前批量路径峰值内存余量充足，RCT 副本消除后大图组
+（组 10 类 8500×5816）触发 allocator fail-fast 的风险进一步下降。
+
+**未完成（需先 profile，不凭经验动手）**：
+- **嵌套线程池治理**：`sequence.rs` 的 `frames.par_iter()`（帧级外层）与
+  `adaptive.rs` 的 `ADAPTIVE_CANDIDATES.par_iter()`（SATD 内层）、`banded.rs`
+  的 `into_par_iter()`（条带内层）构成 Rayon 嵌套并行。文档 §4.3 禁止嵌套
+  并行「除非有明确的线程预算和基准证明」——需先测过度订阅/收益，再决定
+  是否收紧为单层并行。
+- **batch/streaming resolved config 深层收敛**：`codec::encode` facade 路径
+  仍解析配置两次（报告用 `ResolvedConfig::resolve` + 编码用 `from_options`），
+  streaming 用 `ResolveContext::default()`（缺 components/frame_count）。
+  这属规划文档 P3.b「主流程直接消费 ResolvedConfig」的架构迁移项，非 P1
+  纯性能项，留待 session 拆分时收敛。
+
 ### P2：CPU SIMD 扩展
 
 - 先 SoA diff/RCT/resample/统计；
