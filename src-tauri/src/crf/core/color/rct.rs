@@ -27,17 +27,26 @@ pub fn rct_applicable(components: usize) -> bool {
 ///
 /// 输出布局与输入一致（逐像素 [Y, Co, Cg] 对应原 [R, G, B] 槽位）。
 pub fn rct_forward(pixels: &[i32], components: usize) -> CrfResult<Vec<i32>> {
+    let mut out = pixels.to_vec();
+    rct_forward_in_place(&mut out, components)?;
+    Ok(out)
+}
+
+/// 正向 YCoCg-R 变换（**真正原地**，不分配新缓冲）
+///
+/// 与 [`rct_forward`] 逐位一致，但直接改写传入切片——供已持有可变差分/
+/// 首帧缓冲的调用方省去一次全帧 `to_vec` 克隆（P1：消除重复分配/RCT）。
+/// 校验语义与 [`rct_forward`] 完全相同（仅 3 分量）。
+pub fn rct_forward_in_place(pixels: &mut [i32], components: usize) -> CrfResult<()> {
     if !rct_applicable(components) {
         return Err(CrfError::InvalidCodingParams(
             "RCT requires 3-component color format".to_string(),
         ));
     }
-
-    let mut out = pixels.to_vec();
     // 后端统一入口（backend::ops）：AVX2 可用时核心算术向量化
     // （逐位一致，见 backend/cpu/simd.rs；scalar/GPU 接入时仅改 ops 内部）
-    crate::crf::backend::ops::rct_forward(&mut out);
-    Ok(out)
+    crate::crf::backend::ops::rct_forward(pixels);
+    Ok(())
 }
 
 /// 逆向 YCoCg-R 变换（精确还原原始 RGB）

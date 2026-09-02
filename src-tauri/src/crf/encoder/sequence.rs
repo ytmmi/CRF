@@ -106,26 +106,10 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         )));
     }
     let use_rct = crate::crf::core::color::rct::rct_applicable(components);
-    let rct_span = Span::begin("encode.rct");
-    let encode_frames: Vec<ImageData> = if use_rct {
-        frames
-            .iter()
-            .map(|f| {
-                let transformed = crate::crf::core::color::rct::rct_forward(&f.pixels, components)?;
-                Ok(ImageData {
-                    width: f.width,
-                    height: f.height,
-                    bit_depth: f.bit_depth,
-                    color_format: f.color_format,
-                    pixels: transformed,
-                })
-            })
-            .collect::<CrfResult<Vec<_>>>()?
-    } else {
-        frames.to_vec()
-    };
+    // 注意：路径 G 按帧在首帧/差分帧阶段内部独立做 RCT，不需要全帧 RCT
+    // 前置副本；`encode_frames` 仅路径 C 使用，故延迟到路径 C 分支内懒计算
+    //（P1：消除路径 G 的重复 RCT 变换与整份像素深拷贝）。
     header.flags.set_has_rct(use_rct);
-    drop(rct_span);
 
     // 设置用户数据
     if let Some(ref user_data) = params.user_metadata {
@@ -214,15 +198,16 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         } else {
             None
         };
-        let first_eff_pixels = crate::crf::core::color::rct::rct_forward(&first_diff_rgb, components)?;
+        // P1：原地 RCT——bypass 副本已在上一行克隆，first_diff_rgb 可直接
+        // 原地改写为 RCT 域，省去 rct_forward 内部 to_vec 全帧克隆，逐位一致。
+        crate::crf::core::color::rct::rct_forward_in_place(&mut first_diff_rgb, components)?;
         let first_eff_frame = ImageData {
             width: frames[0].width,
             height: frames[0].height,
             bit_depth: frames[0].bit_depth,
             color_format: frames[0].color_format,
-            pixels: first_eff_pixels,
+            pixels: first_diff_rgb,
         };
-        drop(first_diff_rgb);
 
         // ===== 阶段 1b：frame0 编码（fq_for_index(0) 决定无损/有损档位；
         // 双路竞争字节最小者胜出，平局保守保持 RCT 版）=====
@@ -338,13 +323,15 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
                         &thresholds,
                     );
                 }
-                let eff_pixels = crate::crf::core::color::rct::rct_forward(&diff_rgb, components)?;
+                // P1：原地 RCT——diff_rgb 已是独占缓冲，直接改写省去 rct_forward
+                // 内部的 to_vec 全帧克隆，逐位一致。
+                crate::crf::core::color::rct::rct_forward_in_place(&mut diff_rgb, components)?;
                 let eff_frame = ImageData {
                     width: frame.width,
                     height: frame.height,
                     bit_depth: frame.bit_depth,
                     color_format: frame.color_format,
-                    pixels: eff_pixels,
+                    pixels: diff_rgb,
                 };
                 let fq = fq_for_index(i);
                 // 闭环 per-band 自适应步长（噪声归一化）：失真稠密的条带
@@ -402,6 +389,27 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         all_results
     } else {
         // ===== 路径 C：兼容（预差分序列 + 模式继承 + 关键帧间隔）=====
+        // 全帧 RCT 前置副本仅在路径 C 需要（首帧 + 预差分残差帧均以 RCT 域编码）。
+        let rct_span = Span::begin("encode.rct");
+        let encode_frames: Vec<ImageData> = if use_rct {
+            frames
+                .iter()
+                .map(|f| {
+                    let transformed =
+                        crate::crf::core::color::rct::rct_forward(&f.pixels, components)?;
+                    Ok(ImageData {
+                        width: f.width,
+                        height: f.height,
+                        bit_depth: f.bit_depth,
+                        color_format: f.color_format,
+                        pixels: transformed,
+                    })
+                })
+                .collect::<CrfResult<Vec<_>>>()?
+        } else {
+            frames.to_vec()
+        };
+        drop(rct_span);
         let first_fq = FrameQuant::lossless();
         let (mut first_data, mut first_pm) = if params.adaptive_prediction {
             let out = encode_frame_adaptive(

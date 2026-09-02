@@ -191,12 +191,13 @@ impl StreamingEncoder {
                 }
                 let mut diff = vec![0i32; frame.pixels.len()];
                 crate::crf::backend::ops::sub_i32(&frame.pixels, &golden.pixels, &mut diff);
-                let eff_pixels = crate::crf::core::color::rct::rct_forward(&diff, components)?;
+                // P1：原地 RCT——diff 已是独占缓冲，直接改写省去 to_vec 全帧克隆。
+                crate::crf::core::color::rct::rct_forward_in_place(&mut diff, components)?;
 
                 let fq_band: Vec<u8> = if self.noise_on() && components == 3 {
                     fq_band_steps(
                         fq_base.step,
-                        &eff_pixels,
+                        &diff,
                         width,
                         height,
                         components,
@@ -218,7 +219,7 @@ impl StreamingEncoder {
                             height: frame.height,
                             bit_depth: frame.bit_depth,
                             color_format: frame.color_format,
-                            pixels: eff_pixels,
+                            pixels: diff,
                         },
                         self.compression_type,
                         self.header.block_size,
@@ -235,7 +236,7 @@ impl StreamingEncoder {
                             height: frame.height,
                             bit_depth: frame.bit_depth,
                             color_format: frame.color_format,
-                            pixels: eff_pixels,
+                            pixels: diff,
                         },
                         self.compression_type,
                         self.header.block_size,
