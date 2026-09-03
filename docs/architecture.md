@@ -77,6 +77,11 @@ CRF Viewer 是一个基于 Tauri 2 框架构建的跨平台桌面应用，用于
 
 ### 1. 前端模块 (React)
 
+> **注意**：仓库当前没有 React/Tauri 前端源码（见
+> [《CRF 有损精细参数接口规划》](lossy-tuning-interface-plan.md)：UI 落地点是可直接供
+> 未来前端消费的 `expert_panel_schema()` 与解析 API）。以下为早期规划的前端目录，
+> 不代表已实现，仅作参考。
+
 ```
 src/
 +-- components/           # UI 组件
@@ -115,56 +120,109 @@ src/
 
 ### 2. 后端模块 (Rust)
 
+> 以下结构与 `src-tauri/src/` 实际源码一致（2026-09-03 核对）。早期文档中的
+> `crf/encoder.rs`/`crf/decoder.rs`/`format.rs`/`header.rs` 扁平结构已废弃：
+> `format/` 与顶层 `transform/` 目录已删除，实现迁入 `core/`；
+> 分层契约以 [《CRF 编码器/解码器分层架构重构规划》](codec-architecture-refactor-plan.md)为准。
+
 ```
 src-tauri/src/
-+-- main.rs              # 应用入口
-+-- commands/            # Tauri 命令
-|   +-- file.rs          # 文件操作命令
-|   +-- codec.rs         # 编解码命令
-|   +-- image.rs         # 图像处理命令
-+-- crf/                 # CRF 格式核心
-|   +-- mod.rs           # 模块导出
-|   +-- format.rs        # 格式定义和常量
-|   +-- header.rs        # 文件头解析
-|   +-- encoder.rs       # 编码器实现
-|   +-- decoder.rs       # 解码器实现
-|   +-- checksum.rs      # 校验和计算
-+-- image/               # 图像处理
++-- main.rs              # 应用入口（CLI 参数解析 + Tauri）
++-- cli_config.rs        # CLI 配置解析（有损 V2 flags / 专家配置）
++-- test/                # 集成测试（批量/流式/探针）
 |   +-- mod.rs
-|   +-- loader.rs        # 图像加载
-|   +-- processor.rs     # 图像预处理
-+-- error.rs             # 错误类型定义
+|   +-- batch.rs         # 批量 + 流式编码测试套件
+|   +-- probe.rs         # 分区/DCT 候选探针
++-- crf/                 # CRF 格式核心
+|   +-- mod.rs           # 模块导出 + 公共 re-export
+|   +-- error.rs         # 错误类型（CrfError/CrfResult）
+|   +-- checksum.rs      # CRC32 校验
+|   +-- codec/           # 对外 facade（应用层唯一稳定入口）
+|   |   +-- mod.rs
+|   |   +-- encode.rs    # EncodeRequest → EncodeReport
+|   |   +-- decode.rs    # DecodeRequest → DecodeResult
+|   |   +-- config.rs    # V2 JSON 解析 / 专家面板 schema
+|   |   +-- error.rs     # CodecError 对外错误映射
+|   +-- core/            # 编解码器共享的纯契约与数学（不依赖 encoder/decoder）
+|   |   +-- mod.rs
+|   |   +-- contract.rs  # FramePacket / ReferenceState / ResolvedConfig / CandidateResult
+|   |   +-- domain/      # 数据模型与不变量（ImageData/EncodeParams/Flags/FrameHeader）
+|   |   +-- config/      # 请求/预设/解析（lossy_v2 有损参数模型）
+|   |   +-- bitstream/   # 格式契约与容器边界（header/constants）
+|   |   +-- color/       # YCoCg-R 可逆色彩变换（rct）
+|   |   +-- prediction/  # 预测契约（intra 帧内预测 / cost SATD 代价）
+|   |   +-- transform/   # 变换/量化/RDOQ/重建（dct4/dct8/rect/plane/qm/quant/rdoq/closed_loop/reconstruct）
+|   |   +-- entropy/     # 熵编码语法（scan zigzag / golomb k 选择 / cabac RC 常量 / context）
+|   |   +-- perceptual/  # 噪声感知估计与软阈值（noise）
+|   +-- encoder/         # 编码器
+|   |   +-- mod.rs
+|   |   +-- session/     # 序列生命周期（session/batch/reference）
+|   |   +-- frame/       # 帧管线（mod 单帧入口 / candidate 候选竞争 / intrabc 块复制）
+|   |   +-- dct_path/    # frame_type=6 候选编排
+|   |   +-- sequence.rs  # 序列编码主流程（encode_sequence）
+|   |   +-- streaming.rs # 流式编码 API（>50 帧）
+|   |   +-- golomb.rs / rle_golomb.rs / exp_golomb.rs / rle_cabac.rs / coeff_cabac.rs  # 熵编码器族
+|   |   +-- planar.rs / banded.rs / intra_transform.rs / transform.rs  # 候选
+|   |   +-- scratch.rs   # 帧/条带 Scratch Buffer 复用
+|   +-- decoder/         # 解码器
+|   |   +-- mod.rs
+|   |   +-- container/   # 容器层（reader/footer，CRC/边界校验）
+|   |   +-- frame/       # 帧分派层（dispatcher/packet）
+|   |   +-- reconstruct/ # 重建层（逆预测/逆变换/色彩还原）
+|   |   +-- session.rs   # 解码会话（序列编排 + 时间参考恢复）
+|   |   +-- golomb.rs / rle_golomb.rs / exp_golomb.rs / rle_cabac.rs / coeff_cabac.rs  # 熵解码器族
+|   |   +-- planar.rs / banded.rs / palette.rs / intrabc.rs / intra_transform.rs / transform.rs  # payload 解码
+|   +-- backend/         # 性能后端（可选，CPU 标量/ SIMD 永远保留）
+|   |   +-- mod.rs
+|   |   +-- scalar/      # 标量参考实现（正确性基准）
+|   |   +-- cpu/         # AVX2 SIMD 运行时分派
+|   |   +-- gpu/         # CUDA 能力探测（capability/runtime/memory）
+|   |   +-- ops.rs       # 后端算子契约
+|   +-- performance/     # 可观测性层（telemetry 阶段计时 / bench / probe）
 ```
 
 **职责说明**：
 
 | 模块 | 职责 |
 | :--- | :--- |
-| `commands` | 暴露给前端的 Tauri API |
-| `crf::encoder` | 将图像序列编码为 .crf 文件 |
-| `crf::decoder` | 将 .crf 文件解码为图像序列 |
-| `crf::format` | 格式常量、结构体定义 |
-| `image` | 图像加载、格式转换、预处理 |
+| `crf::codec` | 对外 facade：应用层唯一稳定入口，编排 session，禁止算法/容器/设备 API |
+| `crf::core` | 编解码器共享的纯契约与数学；不知道文件路径和设备 API |
+| `crf::encoder` | 将图像序列编码为 .crf 文件（session + frame 管线 + 熵编码器） |
+| `crf::decoder` | 将 .crf 文件解码为图像序列（容器 → 分派 → 重建 → 会话） |
+| `crf::backend` | 性能后端（scalar/SIMD/GPU），仅通过 backend trait 接入，不依赖 session |
+| `crf::performance` | 阶段计时 telemetry + 端到端 bench + 探针，不进入生产路径 |
+| `test` | 批量/流式集成测试与探针（大图组、字节透明校验） |
 
 ### 3. CRF 编解码核心
 
 ```
 crf/
-+-- format.rs            # 格式规范
-|   +-- FILE_MAGIC       # 魔数定义
-|   +-- HEADER_SIZE      # 头部大小
-|   +-- CRF 结构体定义
-+-- header.rs            # 头部处理
-|   +-- parse_header()   # 解析头部
-|   +-- write_header()   # 写入头部
-+-- encoder.rs           # 编码器
-|   +-- encode_frame()   # 单帧编码
-|   +-- encode_sequence()# 序列编码
-+-- decoder.rs           # 解码器
-|   +-- decode_frame()   # 单帧解码
-|   +-- decode_sequence()# 序列解码
-+-- checksum.rs          # 校验
-    +-- crc32()          # CRC32 计算
++-- codec/                       # 对外 facade
+|   +-- encode(request)          # EncodeRequest → EncodeReport
+|   +-- decode_from_bytes()      # DecodeRequest → DecodeResult
++-- core/                        # 共享契约与数学
+|   +-- contract.rs              # FramePacket / ReferenceState / ResolvedConfig / CandidateResult
+|   +-- domain/                  # ImageData / EncodeParams / Flags / FrameHeader / FrameIndexEntry
+|   +-- config/lossy_v2/         # 有损参数模型（types/resolve/kernel/builder/json/ui）
+|   +-- bitstream/               # CrfHeader / 常量（HEADER_SIZE / FRAME_HEADER_SIZE / BAND_HEIGHT）
+|   +-- color/rct.rs             # YCoCg-R 正逆变换
+|   +-- prediction/              # intra（predict_at/apply/undo）+ cost（SATD）
+|   +-- transform/               # dct4/dct8/rect/plane/qm/quant/rdoq/closed_loop/reconstruct
+|   +-- entropy/                 # scan（zigzag）+ golomb（k 选择）+ cabac（RC 常量）+ context（MA 树）
+|   +-- perceptual/noise.rs      # 噪声感知估计/软阈值
++-- encoder/
+|   +-- session/                 # EncodeSession（batch/reference）
+|   +-- frame/                   # 单帧入口 / 候选竞争 / 帧内块复制
+|   +-- sequence.rs              # encode_sequence（头构建/RCT/golden 差分/文件组装）
+|   +-- streaming.rs             # StreamingEncoder（逐帧推送，>50 帧）
+|   +-- golomb.rs / rle_golomb.rs / exp_golomb.rs / rle_cabac.rs / coeff_cabac.rs
++-- decoder/
+|   +-- container/               # reader/footer（CRC、边界）
+|   +-- frame/                   # dispatcher/packet（frame_type 路由）
+|   +-- reconstruct/             # 逆预测/逆变换/色彩还原
+|   +-- session.rs               # DecodeSession（decode_bytes + 时间参考恢复）
+|   +-- golomb.rs / rle_golomb.rs / exp_golomb.rs / rle_cabac.rs / coeff_cabac.rs
++-- checksum.rs                  # crc32()
 ```
 
 ---
@@ -188,13 +246,15 @@ crf/
 
 **详细步骤**：
 
-1. **图像加载**：使用 `image-rs` 读取 PNG/BMP/TIFF 文件
-2. **格式统一**：转换为统一的像素格式（RGB/灰度，8/10/12/16位）
-3. **残差计算**：如果输入是多张图像，计算相邻帧差值生成残差帧
+1. **图像加载**：使用 `image-rs` 读取 PNG/BMP/TIFF/JPEG/WebP 文件
+2. **格式统一**：转换为统一的像素格式（RGB/灰度，8/10/12/16 位）
+3. **残差计算**：golden 参考架构——首帧编码并本地重建得到 `G_hat`，后续帧差分至
+   `G_hat`（而非相邻帧差值）；有损时误差不沿链累积，帧间零依赖可全并行
 4. **熵编码**：
-   - Zigzag 扫描将二维数据转为一维
-   - 使用 Golomb-Rice 或指数哥伦布编码压缩
-5. **文件组装**：写入文件头 + 帧索引 + 编码数据 + 文件尾
+   - 帧内预测（MED/Paeth/DC/planar/斜向等）+ 自适应候选竞争
+   - 变换域候选（DCT/矩形变换 + 感知矩阵 + Trellis）+ CABAC/RLE/Golomb 混合熵编码
+   - 帧级/条带级/三平面多路竞争，字节最小者胜出（单调不劣化）
+5. **文件组装**：写入文件头 + 帧索引 + 编码数据 + CRC32 文件尾
 
 ### 2. 解码流程（CRF -> 图像）
 
