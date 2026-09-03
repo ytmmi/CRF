@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use crate::crf::error::CrfResult;
 use crate::crf::core::domain::PredictionMode;
 use crate::crf::core::prediction::intra::predict_at;
-use crate::crf::format::satd_for_mode_sampled;
+use crate::crf::core::prediction::cost::satd_for_mode_sampled;
 
 /// 块边长（像素）
 const BS: usize = 8;

@@ -1,9 +1,7 @@
 //! 闭环预测 + 死区量化（真有损模式核心）
 //!
-//! 从 `format/prediction.rs` 拆出（P4 整理，规划文档 §3.6/§6.3）：
-//! 闭环量化依赖空间预测的 [`predict_at`]，但自身是"量化"职责，
-//! 与纯空间预测（apply/undo）分离，避免 prediction.rs 混合
-//! 预测公式与量化语义两类不相关职责。
+//! 规划文档 §3.6/§6.3：闭环量化依赖空间预测的 [`crate::crf::core::prediction::intra::predict_at`]，
+//! 但自身是"量化"职责，与纯空间预测（apply/undo）分离。P4 已从 `format/closed_loop.rs` 迁入。
 
 use crate::crf::core::domain::PredictionMode;
 use crate::crf::core::prediction::intra::predict_at;

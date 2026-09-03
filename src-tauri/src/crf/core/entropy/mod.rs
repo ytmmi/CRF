@@ -18,7 +18,7 @@
 //! **迁移状态（P1）**：`context` 模块已迁入（原 `encoder/ma_tree.rs`），
 //! 解除 `decoder/rle_cabac.rs` 对 `encoder::ma_tree` 的反向依赖。
 //! `encoder/ma_tree.rs` 保留为 `pub use` 转发层，后续删除。
-//! `format/zigzag.rs` 将在 P4 迁移到 `core/entropy/scan.rs`。
+//! **迁移状态（P4）**：`scan`（原 `format/zigzag.rs`）与 `golomb`（原 `format/k_value.rs`）已迁入。
 
 #![allow(dead_code)]
 
@@ -26,3 +26,5 @@
 pub mod context;
 /// scan：Zigzag 扫描与符号编码（P4 迁入，原 format/zigzag.rs）
 pub mod scan;
+/// golomb：Golomb-Rice 参数 k 的自适应选择（P4 迁入，原 format/k_value.rs）
+pub mod golomb;

@@ -1,8 +1,7 @@
 //! 预测模式代价估计（RDO 排序用）
 //!
-//! 从 `format/prediction.rs` 拆出（P4 整理，规划文档 §3.5 cost.rs）：
-//! 模式代价是"选择"职责，与空间预测执行（apply/undo）分离，
-//! 便于后续迁入 `core/prediction/cost.rs`。
+//! 规划文档 §3.5 cost.rs：模式代价是"选择"职责，与空间预测执行
+//! （apply/undo）分离。P4 已从 `format/cost.rs` 迁入。
 
 use crate::crf::core::domain::PredictionMode;
 use crate::crf::core::prediction::intra::predict_at;

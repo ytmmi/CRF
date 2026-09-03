@@ -13,6 +13,7 @@
 //! **迁移状态（P4）**：`dct4`/`dct8`/`rect`（原顶层 `crate::crf::transform`）
 //! 与 `reconstruct`（原 `encoder/dct_path` 逆变换部分）已迁入，
 //! 消除 core 对旧顶层 transform 的依赖。旧顶层 `transform/` 目录已删除。
+//! `quant`（原 `format/quant.rs`）与 `closed_loop`（原 `format/closed_loop.rs`）已迁入。
 
 #![allow(dead_code)]
 
@@ -25,6 +26,11 @@ pub mod rect;
 
 /// reconstruct：逆变换与块重建（原 encoder/dct_path 逆变换部分）
 pub mod reconstruct;
+
+/// quant：残差死区标量量化（原 format/quant.rs）
+pub mod quant;
+/// closed_loop：闭环预测 + 死区量化（原 format/closed_loop.rs）
+pub mod closed_loop;
 
 // 与旧顶层 transform 一致的公共 re-export（兼容路径）
 pub use dct4::{dct4x4_forward, dct4x4_inverse};

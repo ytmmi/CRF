@@ -65,10 +65,9 @@ pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError>
     let resolved = crate::crf::core::contract::ResolvedConfig::resolve(&request.params, &request.frames)
         .map_err(super::CodecError::from)?;
 
-    // 通过 EncodeSession 编排（规划文档 §4.2）
-    let bytes =
-        crate::crf::encoder::session::session::EncodeSession::encode_sequence(&request.frames, &request.params)
-            .map_err(super::CodecError::from)?;
+    // 通过 EncodeSession 编排（规划文档 §4.2）；主流程直接消费已解析配置（P3.b 完成）
+    let bytes = crate::crf::encoder::session::session::EncodeSession::encode_sequence(&request.frames, &resolved)
+        .map_err(super::CodecError::from)?;
 
     Ok(EncodeReport {
         bytes,

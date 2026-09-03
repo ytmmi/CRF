@@ -5,7 +5,7 @@
 //!    不再被 `step > 1` 阻断；q95（step=1）档位下半分辨率真实可用，
 //!    且编解码往返保持文件自包含正确；
 //! 2. 色度步长比例失效修复——Q × 130% 在小 Q 区间不再截断回亮度步长
-//!    （单元边界见 format/quant.rs::tests），本模块验证其经完整管线
+//!    （单元边界见 core/transform/quant.rs::tests），本模块验证其经完整管线
 //!    （planar 三平面候选参与竞争）的端到端自洽。
 
 use crate::crf::LossyOptionsV2Builder;

@@ -14,19 +14,32 @@ use rayon::prelude::*;
 
 use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
-use crate::crf::core::bitstream::header::CrfHeader;
-use crate::crf::core::domain::{CompressionType, EncodeParams, Flags, ImageData};
+use crate::crf::core::domain::{EncodeParams, ImageData};
 
 use super::adaptive::encode_frame_adaptive;
 use super::frame::{encode_frame, FrameQuant};
 
 use crate::crf::performance::telemetry::Span;
 
-/// 编码完整的 CRF 文件
+/// 编码完整的 CRF 文件（公共入口）
 ///
-/// 输入：图像序列和编码参数
-/// 输出：完整的 CRF 文件数据
+/// 内部先经 [`crate::crf::core::contract::ResolvedConfig::resolve`] 解析配置一次，
+/// 再委托 [`encode_sequence_resolved`] 消费，避免 compression_type/header/RCT/量化
+/// 的重复解析（P3.b 配置解析收敛）。
 pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult<Vec<u8>> {
+    let resolved = crate::crf::core::contract::ResolvedConfig::resolve(params, frames)?;
+    encode_sequence_resolved(frames, &resolved)
+}
+
+/// 消费已解析配置的序列编码主流程（P3.b）
+///
+/// 输入校验与编码编排保留在此；配置解析（压缩类型映射、文件头构建、RCT 判定、
+/// 有损内核配置）由 [`crate::crf::core::contract::ResolvedConfig`] 一次性提供，
+/// 批量和 streaming 不得分别解析。
+pub(crate) fn encode_sequence_resolved(
+    frames: &[ImageData],
+    resolved: &crate::crf::core::contract::ResolvedConfig,
+) -> CrfResult<Vec<u8>> {
     // 验证输入
     if frames.is_empty() {
         return Err(CrfError::FrameCountOutOfRange(0));
@@ -56,43 +69,19 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
         }
     }
 
-    // 确定压缩类型
-    let compression_type = match params.compression_type.as_str() {
-        "golomb-rice" | "golomb" => CompressionType::GolombRice,
-        "exp-golomb" | "exp_golomb" | "egc" => CompressionType::ExpGolomb,
-        "transform" | "dct" => CompressionType::Transform,
-        _ => {
-            return Err(CrfError::InvalidCodingParams(
-                params.compression_type.clone(),
-            ))
-        }
-    };
+    // 消费已解析配置：压缩类型、文件头、RCT、有损内核均来自 ResolvedConfig
+    let params = &resolved.params;
+    let compression_type = resolved.header_template.compression_type;
+    let mut header = resolved.header_template.clone();
+    let tuning = resolved.kernel.clone();
+    let use_rct = resolved.use_rct;
+    let lossy_quant_step = tuning.enabled.then_some(tuning.global_step);
 
-    // 构建文件头
-    let mut header = CrfHeader::new(
-        frame_count,
-        first.width,
-        first.height,
-        first.bit_depth,
-        first.color_format,
-        compression_type,
-    );
-    header.block_size = params.block_size.unwrap_or(8) as u16;
-    header.prediction_mode = params.prediction_mode;
-
-    // 设置帧索引标志
-    let mut flags = Flags::new();
-    flags.set_has_index(true);
-    header.flags = flags;
-
-    // 可逆色彩变换（YCoCg-R）：参考 AV1 / HEVC RExt / JPEG-XL 无损模式的做法。
-    // 对 3 分量格式在空间预测之前先去除 RGB 通道相关性，
-    // 使残差能量集中于亮度通道；纯整数运算、严格可逆。
-    let components = first.color_format.component_count();
     // INF.1 内存预检：batch 接口全帧驻留（RCT 后全帧 + G_hat + 编码产物 +
     // planar 中间量），大图组会触发 allocator fail-fast panic。返回结构化错误
     // 引导用户用 streaming 路径（CRF_STREAMING=1，内存 O(golden+单帧+码流)）。
     // §13 发现组10（8500×5816×4帧 ~2.4GB）batch panic；1000 组（~310MB）正常。
+    let components = first.color_format.component_count();
     let per_frame_bytes = first.width as usize * first.height as usize * components * 4;
     let estimated_bytes = per_frame_bytes
         .checked_mul(frame_count as usize)
@@ -104,34 +93,6 @@ pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult
             estimated_bytes as f64 / 1_000_000_000.0,
             BATCH_MEM_LIMIT as f64 / 1_000_000_000.0,
         )));
-    }
-    let use_rct = crate::crf::core::color::rct::rct_applicable(components);
-    // 注意：路径 G 按帧在首帧/差分帧阶段内部独立做 RCT，不需要全帧 RCT
-    // 前置副本；`encode_frames` 仅路径 C 使用，故延迟到路径 C 分支内懒计算
-    //（P1：消除路径 G 的重复 RCT 变换与整份像素深拷贝）。
-    header.flags.set_has_rct(use_rct);
-
-    // 设置用户数据
-    if let Some(ref user_data) = params.user_metadata {
-        header.user_data = user_data.clone();
-    }
-
-    // 验证文件头
-    header.validate()?;
-
-    // 真有损：质量档位映射为量化步长，写入文件头（flags.bit2 + byte21）
-    let tuning = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
-        params.lossy.as_ref(),
-        crate::crf::core::config::lossy_v2::ResolveContext {
-            components: Some(components),
-            frame_count: Some(frames.len()),
-        },
-    )
-    .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
-    let lossy_quant_step = tuning.enabled.then_some(tuning.global_step);
-    if let Some(q) = lossy_quant_step {
-        header.lossy_quant = q;
-        header.flags.set_has_lossy_quant(true);
     }
 
     let interval = tuning.anchor_interval.max(1) as usize;

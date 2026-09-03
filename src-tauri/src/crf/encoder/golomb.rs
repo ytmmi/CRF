@@ -1,5 +1,5 @@
 use crate::crf::error::CrfResult;
-use crate::crf::format::{adaptive_k, block_adaptive_k};
+use crate::crf::core::entropy::golomb::{adaptive_k, block_adaptive_k};
 use crate::crf::core::entropy::scan::zigzag_encode;
 
 /// Golomb-Rice 编码器

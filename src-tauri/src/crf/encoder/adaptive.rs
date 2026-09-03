@@ -17,9 +17,9 @@ use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
 use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
 use crate::crf::core::prediction::intra::apply_prediction_into;
-use crate::crf::format::closed_loop::closed_loop_predict_quant_banded_into;
-use crate::crf::format::cost::residual_activity_for_mode_sampled;
-use crate::crf::format::satd_for_mode_sampled;
+use crate::crf::core::transform::closed_loop::closed_loop_predict_quant_banded_into;
+use crate::crf::core::prediction::cost::residual_activity_for_mode_sampled;
+use crate::crf::core::prediction::cost::satd_for_mode_sampled;
 
 use super::frame::BandSteps;
 use super::rdoq::trellis_quantize_interleaved;

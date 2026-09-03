@@ -8,6 +8,7 @@
 //! 熵解码结果即为反量化后的预测残差，后续逆预测流程与无损完全一致。
 //!
 //! 有损参数解析统一由 `core/config/lossy_v2` 提供；本模块仅保留底层量化数学 helper。
+//! P4 已从 `format/quant.rs` 迁入。
 
 /// 批量死区量化（含偏置）
 pub fn quantize_residuals_tuned(residuals: &[i32], q_step: u8, deadzone_bias: i8) -> Vec<i32> {

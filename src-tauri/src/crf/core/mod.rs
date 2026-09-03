@@ -20,23 +20,22 @@
 //! domain + bitstream contracts
 //! ```
 //!
-//! **迁移状态（P0）**：仅定义公共契约类型（[`contract`] 模块）与空子模块声明。
-//! P1~P4 阶段逐步将 `format/` 与 `transform/` 的实现迁移到本层各子模块。
-//! 迁移期旧路径保持生产，新模块通过 re-export 保持兼容。
+//! **迁移状态（P4）**：`contract` 定义公共契约类型（FramePacket/ReferenceState/
+//! ResolvedConfig/CandidateResult）。`domain`/`config`/`bitstream`/`color`/
+//! `prediction`/`transform`/`entropy` 各子模块已迁入真实实现，旧 `format/` 与
+//! 顶层 `transform/` 目录已删除，无转发层。
 //!
 //! 参考：[编解码器分层重构规划](../../../../docs/codec-architecture-refactor-plan.md) §3
 
 /// 公共契约类型（FramePacket / ReferenceState / ResolvedConfig / CandidateResult）
 pub mod contract;
 
-// ===== 以下子模块 P0 阶段为空声明，P1~P4 逐步迁入实现 =====
-//
-// 每个子模块的 mod.rs 当前仅包含职责说明与 `#![allow(dead_code)]`，
-// 不包含任何实现。迁移顺序遵循规划文档 §10：
-// - P1：transform（解除 decoder → encoder 反向依赖）；
-// - P2：bitstream（拆容器层）；
-// - P3：config / domain（session 拆分）；
-// - P4：prediction / entropy / color（工具层整理）。
+// ===== 子模块职责（P4 已迁入实现，不再为空声明）=====
+// 迁移顺序遵循规划文档 §10（P1~P4 已基本完成）：
+// - P1：transform（解除 decoder → encoder 反向依赖）✅；
+// - P2：bitstream（拆容器层）✅；
+// - P3：config / domain（session 拆分）✅；
+// - P4：prediction / entropy / color（工具层整理）◐ 熵编码状态机待续。
 
 /// domain：数据模型与不变量（image/frame/tile/coefficient）
 pub mod domain;

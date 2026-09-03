@@ -40,7 +40,8 @@ pub struct StreamingEncoder {
     params: EncodeParams,
     compression_type: CompressionType,
     header: CrfHeader,
-    tuning: crate::crf::core::config::lossy_v2::KernelLossyConfig,
+    /// P3.b：有损内核配置；首帧 push 时用真实 components 解析（new() 时为 None）
+    tuning: Option<crate::crf::core::config::lossy_v2::KernelLossyConfig>,
     lossy_quant_step: Option<u8>,
     #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
     interval: usize,
@@ -79,21 +80,15 @@ impl StreamingEncoder {
         header.block_size = params.block_size.unwrap_or(8) as u16;
         header.prediction_mode = params.prediction_mode;
 
-        let tuning = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
-            params.lossy.as_ref(),
-            crate::crf::core::config::lossy_v2::ResolveContext::default(),
-        )
-        .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
-        let interval = tuning.anchor_interval.max(1) as usize;
-        let lossy_quant_step = tuning.enabled.then_some(tuning.global_step);
-
+        // P3.b：有损内核配置延迟到首帧 push 时解析（streaming 在 new() 时
+        // 尚无帧信息，components/frame_count 未知，无法正确解析 chroma 采样）。
         Ok(StreamingEncoder {
             params: params.clone(),
             compression_type,
             header,
-            tuning,
-            lossy_quant_step,
-            interval,
+            tuning: None,
+            lossy_quant_step: None,
+            interval: 0,
             golden_rgb: None,
             body: Vec::new(),
             frame_layout: Vec::new(),
@@ -118,6 +113,21 @@ impl StreamingEncoder {
         let components = frame.color_format.component_count();
         let width = frame.width as usize;
         let height = frame.height as usize;
+        // P3.b：首帧 push 时用真实 components 解析有损内核配置（frame_count 在
+        // streaming 中未知保持 None；components 决定 chroma 采样自动解析与校验）。
+        if self.tuning.is_none() {
+            let tuning = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
+                self.params.lossy.as_ref(),
+                crate::crf::core::config::lossy_v2::ResolveContext {
+                    components: Some(components),
+                    frame_count: None,
+                },
+            )
+            .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
+            self.interval = tuning.anchor_interval.max(1) as usize;
+            self.lossy_quant_step = tuning.enabled.then_some(tuning.global_step);
+            self.tuning = Some(tuning);
+        }
         let fq_base = self.frame_quant(self.frames_written);
 
         match &self.golden_rgb {
@@ -201,7 +211,9 @@ impl StreamingEncoder {
                         width,
                         height,
                         components,
-                        &self.tuning,
+                        self.tuning
+                            .as_ref()
+                            .expect("lossy config resolved before band quantization"),
                     )
                 } else {
                     Vec::new()
@@ -313,8 +325,12 @@ impl StreamingEncoder {
     }
 
     fn noise_on(&self) -> bool {
+        let tuning = self
+            .tuning
+            .as_ref()
+            .expect("lossy config resolved before noise check");
         self.lossy_quant_step.is_some()
-            && self.tuning.noise_adaptive
+            && tuning.noise_adaptive
             && self.header.color_format.component_count() == 3
     }
 
@@ -325,12 +341,16 @@ impl StreamingEncoder {
         //    golden_lossless=false（批量路径允许有损首帧）；
         //  - 旧实现无锚点帧间隔（keyframe_interval）步长折算。
         // 现统一委托 session::batch::fq_for_index，语义与 batch 完全一致。
-        let q95 = self.tuning.q95_perceptual;
+        let tuning = self
+            .tuning
+            .as_ref()
+            .expect("lossy config resolved before frame quantization");
+        let q95 = tuning.q95_perceptual;
         super::session::batch::fq_for_index(
             i,
             self.lossy_quant_step,
-            &self.tuning,
-            self.tuning.deadzone_bias,
+            tuning,
+            tuning.deadzone_bias,
             self.interval,
             q95,
         )

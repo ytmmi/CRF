@@ -13,6 +13,7 @@
 //! 避免引入未实现的依赖。所有类型标注 `#[allow(dead_code)]`——P1 起逐步接入。
 
 use crate::crf::core::bitstream::header::CrfHeader;
+use crate::crf::core::config::lossy_v2::KernelLossyConfig;
 use crate::crf::core::domain::{
     EncodeParams, FrameHeader, FrameIndexEntry, ImageData,
 };
@@ -154,8 +155,8 @@ pub struct ResolvedConfig {
     pub header_template: CrfHeader,
     /// 是否启用 RCT（由 `rct_applicable` 解析）
     pub use_rct: bool,
-    /// 量化步长（0=无损；>0 为有损死区量化步长）
-    pub quant_step: u8,
+    /// 完整的有损内核配置（P3.b：主流程直接消费，不再重复解析）
+    pub kernel: KernelLossyConfig,
 }
 
 impl ResolvedConfig {
@@ -176,7 +177,9 @@ impl ResolvedConfig {
         use crate::crf::core::domain::{CompressionType, Flags};
         use crate::crf::error::CrfError;
 
-        let first = &frames[0];
+        let first = frames
+            .first()
+            .ok_or_else(|| CrfError::FrameCountOutOfRange(0))?;
         let frame_count = frames.len() as u16;
 
         // 压缩类型解析（与 encoder/sequence.rs 保持同一映射）
@@ -213,8 +216,8 @@ impl ResolvedConfig {
         let components = first.color_format.component_count();
         let use_rct = rct_applicable(components);
 
-        // 有损量化步长（None=无损）
-        let lossy = crate::crf::core::config::lossy_v2::KernelLossyConfig::from_options(
+        // 有损内核配置（唯一解析点：P3.b 主流程直接消费，不再重复解析）
+        let kernel = KernelLossyConfig::from_options(
             params.lossy.as_ref(),
             crate::crf::core::config::lossy_v2::ResolveContext {
                 components: Some(components),
@@ -222,13 +225,21 @@ impl ResolvedConfig {
             },
         )
         .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
-        let quant_step = lossy.enabled.then_some(lossy.global_step).unwrap_or(0);
+
+        // P3.b：解析期冻结完整文件头（has_rct / has_lossy_quant / lossy_quant），
+        // 与 sequence.rs 原内联解析产出的字节一致；first_frame_no_rct 仍为编码期决策。
+        header.flags.set_has_rct(use_rct);
+        if kernel.enabled {
+            header.lossy_quant = kernel.global_step;
+            header.flags.set_has_lossy_quant(true);
+        }
+        header.validate()?;
 
         Ok(ResolvedConfig {
             params: params.clone(),
             header_template: header,
             use_rct,
-            quant_step,
+            kernel,
         })
     }
 }

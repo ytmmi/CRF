@@ -12,7 +12,9 @@
 //! 引用允许的已重建数据；探针可以读取原图，但不得复用为生产函数。
 //!
 //! **迁移状态（P4）**：`intra` 模块已迁入（原 `format/prediction.rs`）。
-//! 旧 `format/prediction.rs` 不再保留。
+//! `cost` 模块已迁入（原 `format/cost.rs`）。旧 `format/` 目录已删除。
 
 /// intra：帧内预测与逆预测（P4 迁入，原 format/prediction.rs）
 pub mod intra;
+/// cost：预测模式代价估计（P4 迁入，原 format/cost.rs）
+pub mod cost;

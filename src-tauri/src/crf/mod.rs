@@ -15,7 +15,6 @@ pub mod core;
 pub mod decoder;
 pub mod encoder;
 pub mod error;
-pub mod format;
 /// performance：性能可观测性层（阶段计时 telemetry + 端到端 bench，P0）
 pub mod performance;
 
@@ -29,7 +28,9 @@ pub use error::CrfResult;
 #[allow(unused_imports)]
 pub use core::prediction::intra::apply_prediction;
 #[allow(unused_imports)]
-pub use format::{closed_loop_predict_quant_banded, satd_for_mode_sampled};
+pub use core::transform::closed_loop::closed_loop_predict_quant_banded;
+#[allow(unused_imports)]
+pub use core::prediction::cost::satd_for_mode_sampled;
 #[allow(unused_imports)]
 pub use core::config::lossy_v2::{
     expert_panel_schema, ChromaSampling, ConfigError, LossyBase, LossyOptionsV2,

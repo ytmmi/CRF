@@ -16,7 +16,7 @@
 
 pub mod qm;
 
-use crate::crf::format::quantize_residuals;
+use crate::crf::core::transform::quant::quantize_residuals;
 use crate::crf::core::transform::{
     dct4x4_forward_into, dct8x8_forward_into, dct_rect_forward_into, is_valid_rect,
 };
@@ -26,7 +26,7 @@ use qm::{quantize_coeffs_with_matrix, DCT_PERCEPTUAL_QM, DCT_PERCEPTUAL_QM8};
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
 pub const SUPPORTED_BLOCK_SHAPES: [(usize, usize); 4] = [(4, 4), (8, 8), (8, 4), (4, 8)];
 
-/// 死区标量量化单点（round-to-nearest，与 format::quant 同款逻辑）
+/// 死区标量量化单点（round-to-nearest，与 core/transform/quant 同款逻辑）
 #[inline]
 pub(crate) fn quant_scalar(v: i32, q: i32) -> i32 {
     let half = q / 2;

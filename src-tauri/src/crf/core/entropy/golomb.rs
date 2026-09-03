@@ -1,3 +1,7 @@
+//! Golomb-Rice 参数 k 的自适应选择
+//!
+//! P4 已从 `format/k_value.rs` 迁入（规划文档 §3.7 golomb.rs）。
+
 /// 自适应选择 Golomb-Rice 参数 k
 ///
 /// 针对二次元插画差分图优化：
