@@ -16,7 +16,7 @@ use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
 use crate::crf::core::domain::{EncodeParams, ImageData};
 
-use super::adaptive::encode_frame_adaptive;
+use super::frame::candidate::encode_frame_adaptive;
 use super::frame::{encode_frame, FrameQuant};
 
 use crate::crf::performance::telemetry::Span;
@@ -432,7 +432,7 @@ pub(crate) fn encode_sequence_resolved(
 
         let mut rest: Vec<(Vec<u8>, Option<u8>)> = Vec::new();
         if params.adaptive_prediction {
-            let outs: Vec<CrfResult<super::adaptive::AdaptiveOutput>> = encode_frames
+            let outs: Vec<CrfResult<super::frame::candidate::AdaptiveOutput>> = encode_frames
                 .par_iter()
                 .enumerate()
                 .skip(1)

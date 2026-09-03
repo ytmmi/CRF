@@ -21,7 +21,7 @@
 
 use crate::crf::core::color::rct;
 use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
-use crate::crf::encoder::adaptive::encode_frame_adaptive;
+use crate::crf::encoder::frame::candidate::encode_frame_adaptive;
 use crate::crf::encoder::frame::FrameQuant;
 use crate::crf::performance::bench::load_frames;
 

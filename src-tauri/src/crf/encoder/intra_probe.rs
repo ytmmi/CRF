@@ -318,7 +318,7 @@ mod tests {
                     chroma_half_res: false,
                     q1_matrix_scale: false,
                 };
-                let out_a = super::super::adaptive::encode_frame_adaptive(
+                let out_a = super::super::frame::candidate::encode_frame_adaptive(
                     &img,
                     crate::crf::core::domain::CompressionType::GolombRice,
                     8,

@@ -21,10 +21,11 @@ use crate::crf::core::transform::closed_loop::closed_loop_predict_quant_banded_i
 use crate::crf::core::prediction::cost::residual_activity_for_mode_sampled;
 use crate::crf::core::prediction::cost::satd_for_mode_sampled;
 
-use super::frame::BandSteps;
-use super::rdoq::trellis_quantize_interleaved;
-use super::scratch::FrameScratch;
-use super::{assemble_frame, rle_cabac, FrameQuant};
+use super::BandSteps;
+use super::super::rdoq::trellis_quantize_interleaved;
+use super::super::scratch::FrameScratch;
+use super::{assemble_frame, FrameQuant};
+use super::super::rle_cabac;
 
 use crate::crf::performance::telemetry::Span;
 
@@ -143,7 +144,7 @@ pub fn encode_frame_adaptive(
         } else {
             best.as_ref().map_or(usize::MAX, |(sz, ..)| *sz)
         };
-        match super::frame::encode_frame_inner_limited_with_scratch(
+        match super::encode_frame_inner_limited_with_scratch(
             image,
             compression_type,
             block_size,
@@ -398,7 +399,7 @@ pub fn encode_frame_adaptive(
         let dct_results: Vec<(usize, Vec<u8>, usize, usize, bool)> = variants
             .par_iter()
             .map(|&(block_w, block_h, use_qm)| -> CrfResult<(usize, Vec<u8>, usize, usize, bool)> {
-                let q_coeff = super::dct_path::dct_quantize_interleaved_bs(
+                let q_coeff = super::super::dct_path::dct_quantize_interleaved_bs(
                     &image.pixels,
                     width,
                     height,
@@ -442,10 +443,10 @@ pub fn encode_frame_adaptive(
                 let mut final_payload = payload_bs;
                 if use_qm {
                     let table: &[u32] = match (block_w, block_h) {
-                        (8, 8) => &super::dct_path::qm::DCT_PERCEPTUAL_QM8,
-                        (8, 4) => &super::dct_path::qm::DCT_PERCEPTUAL_QM_WIDE,
-                        (4, 8) => &super::dct_path::qm::DCT_PERCEPTUAL_QM_TALL,
-                        _ => &super::dct_path::qm::DCT_PERCEPTUAL_QM,
+                        (8, 8) => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM8,
+                        (8, 4) => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM_WIDE,
+                        (4, 8) => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM_TALL,
+                        _ => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM,
                     };
                     let t_coeff = trellis_quantize_interleaved(
                         &image.pixels,
@@ -583,13 +584,13 @@ fn encode_palette_payload(pixels: &[i32], width: usize) -> Option<CrfResult<Vec<
         };
 
         // token/索引流先行构建以获取 k（头部需要）
-        let mut probe = super::rle_golomb::RleGolombEncoder::adaptive(&payload_indices);
+        let mut probe = super::super::rle_golomb::RleGolombEncoder::adaptive(&payload_indices);
         let k = probe.k;
         probe.encode_signed_array(&payload_indices);
         let idx_bytes = probe.finish();
 
         // palette 值流：exp-Golomb(zigzag)，无需额外参数
-        let mut pe = super::exp_golomb::ExpGolombEncoder::new();
+        let mut pe = super::super::exp_golomb::ExpGolombEncoder::new();
         for &v in &palette_order {
             pe.encode_signed(v);
         }

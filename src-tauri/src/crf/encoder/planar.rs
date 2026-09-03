@@ -9,7 +9,7 @@ use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
 
-use super::adaptive::encode_frame_adaptive;
+use super::frame::candidate::encode_frame_adaptive;
 use super::frame::BandSteps;
 use super::FrameQuant;
 

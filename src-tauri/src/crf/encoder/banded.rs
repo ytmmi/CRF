@@ -15,7 +15,7 @@ use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::domain::{ImageData, PredictionMode};
 use crate::crf::core::prediction::intra::{apply_prediction_band_into, predict_at};
 
-use super::adaptive::ADAPTIVE_CANDIDATES;
+use super::frame::candidate::ADAPTIVE_CANDIDATES;
 use super::rle_golomb;
 use super::scratch::BandScratch;
 

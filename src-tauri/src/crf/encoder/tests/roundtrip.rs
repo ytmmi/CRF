@@ -3,7 +3,7 @@
 use crate::crf::core::color::rct::rct_forward;
 use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
 
-use super::super::adaptive::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
+use super::super::frame::candidate::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
 use super::super::banded::encode_banded_payload;
 use super::super::encode_sequence;
 use super::super::frame::{assemble_frame, encode_frame_inner, FrameQuant};
@@ -236,10 +236,10 @@ fn test_palette_copy_above_benefit() {
 
     // 直接对比两种索引流编码的载荷大小
     let payload_v2 =
-        crate::crf::encoder::adaptive::test_hooks::encode_palette_payload_for_test(&pixels, width)
+        crate::crf::encoder::frame::candidate::test_hooks::encode_palette_payload_for_test(&pixels, width)
             .unwrap()
             .unwrap();
-    let baseline = crate::crf::encoder::adaptive::test_hooks::palette_index_baseline_size(
+    let baseline = crate::crf::encoder::frame::candidate::test_hooks::palette_index_baseline_size(
         &indices_only(&pixels),
     );
     println!(

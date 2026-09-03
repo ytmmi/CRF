@@ -1,9 +1,12 @@
-//! 单帧编码层：帧级 API 与帧头装配
+//! 帧管线层：单帧编码入口、候选竞争与具体候选（规划文档 §4.3，P3.c 拆入）
 //!
-//! - [`encode_frame`] / [`encode_frame_inner`]：按固定预测模式编码单帧
-//!   （有损时走闭环预测+量化，杜绝误差漂移）；
-//! - [`assemble_frame`]：将已编码载荷装配为带帧头的完整帧缓冲；
-//! - [`FrameQuant`]：单帧量化配置（步长/死区偏置/色度参数）。
+//! - 本文件（`mod.rs`）：单帧入口 [`encode_frame`]/[`encode_frame_inner`]、
+//!   [`assemble_frame`] 帧头装配、[`FrameQuant`] 单帧量化配置；
+//! - [`candidate`]：逐帧自适应预测模式决策与 frame_type 多路仲裁；
+//! - [`intrabc`]：帧内块复制候选（frame_type=7，无损路径）。
+
+pub(crate) mod candidate;
+pub(crate) mod intrabc;
 
 use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;

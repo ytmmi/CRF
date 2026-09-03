@@ -16,18 +16,17 @@
 | P0 冻结边界+骨架 | 建立目标目录与公共契约 | ✅ 完成 | `codec/`、`core/`、`backend/` 三骨架；`core/contract.rs` 定义 `FramePacket`/`CandidateResult`/`ReferenceState`/`ResolvedConfig` 四契约 |
 | P1 解除反向依赖 | dct_path 逆变换迁 core、CtxModel 迁 core | ✅ 完成 | `CtxModel` 迁至 `core/entropy/context.rs`；`dct_path` 逆变换迁至 `core/transform/reconstruct.rs`；decoder 中残留 `use crate::crf::encoder` 全部在 `#[cfg(test)]` 模块内 |
 | P2 拆容器+分派 | decoder 容器/分派/重建/会话分层 | ✅ 完成 | `decoder/container/`、`decoder/frame/`（dispatcher/packet）、`decoder/reconstruct/`、`decoder/session.rs` 均落地，`decode_from_bytes` 转发至 `DecodeSession` |
-| P3 拆 encoder session+frame | batch/streaming session、候选/RDO/payload | ◐ 部分 | `encoder/session/{batch,reference,session}.rs` 已建；P3.b 配置解析收敛已完成（facade 解析一次透传 `ResolvedConfig`，streaming 首帧 push 时补 components）；但 `encoder/frame/` 目录未建，`sequence.rs`/`adaptive.rs`/`intrabc.rs` 仍为单体 |
+| P3 拆 encoder session+frame | batch/streaming session、候选/RDO/payload | ✅ 完成 | `encoder/session/{batch,reference,session}.rs` 已建；P3.b 配置解析收敛已完成（facade 解析一次透传 `ResolvedConfig`，streaming 首帧 push 时补 components）；P3.c `encoder/frame/` 目录已建（`mod.rs` 单帧入口 + `candidate.rs` 候选竞争 + `intrabc.rs` 帧内块复制），原 `frame.rs`/`adaptive.rs`/`intrabc.rs` 三个单体迁入 |
 | P4 整理公共工具层 | prediction/transform/entropy/color/config 迁 core | ◐ 部分（约 70%）| 已迁：prediction/{intra,cost}、transform/{dct4,dct8,rect,reconstruct,quant,closed_loop}、entropy/{context,scan,golomb}、color/rct、bitstream/{header,constants}、domain/types、config/lossy_v2，旧 `format/` 目录已删除；未迁：encoder/decoder 两侧的 golomb/rle_golomb/exp_golomb/rle_cabac/coeff_cabac 状态机、rdoq、noise |
 | P5 接入性能 backend | scalar→SIMD→GPU | ◐ 骨架完成 | `backend/{scalar,cpu,gpu}` 已建；GPU 仍为能力探测（capability/cuda/runtime/memory），未接入默认 |
 | P6 测试+文档收敛 | 拆大测试文件、更新架构图 | ◐ 部分 | ✅ 测试已拆：`test/{batch,mod,probe}.rs`、`encoder/tests/{lossy,roundtrip,rct_bypass,mod}.rs`，全项目最大文件 714 行（`core/prediction/intra.rs`）无超限；❌ 架构图与迁移记录文档收敛仍在进行（即本文档） |
 
 ### 剩余迁移项（按优先级）
 
-1. **P3.c 拆 `encoder/frame/`**：`sequence.rs`、`adaptive.rs`、`intrabc.rs` 按候选/参考/RDO/payload 职责拆分。
-2. **P4 续迁熵编码状态机**：encoder/decoder 两侧 `golomb/rle_golomb/exp_golomb/rle_cabac/coeff_cabac`——
+1. **P4 续迁熵编码状态机**：encoder/decoder 两侧 `golomb/rle_golomb/exp_golomb/rle_cabac/coeff_cabac`——
    按规划 §3.7 把「语法定义」与「encoder/decoder 状态机」分离，语法迁 `core/entropy/`，
    writer 留 encoder、reader 留 decoder；`rdoq` → `core/transform/`，`noise` → `core/perceptual/`。
-3. **P6 文档收敛**：更新架构图、模块职责与迁移记录（本文档及 architecture.md）。
+2. **P6 文档收敛**：更新架构图、模块职责与迁移记录（本文档及 architecture.md）。
 
 ## 1. 重构动机
 

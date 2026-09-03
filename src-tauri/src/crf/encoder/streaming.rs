@@ -20,7 +20,7 @@ use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, FRAME_HE
 use crate::crf::core::bitstream::header::CrfHeader;
 use crate::crf::core::domain::{CompressionType, EncodeParams, ImageData};
 
-use super::adaptive::encode_frame_adaptive;
+use super::frame::candidate::encode_frame_adaptive;
 use super::noise::estimate_band_quant_steps;
 use super::FrameQuant;
 
