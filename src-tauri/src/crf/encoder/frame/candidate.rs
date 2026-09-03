@@ -22,7 +22,7 @@ use crate::crf::core::prediction::cost::residual_activity_for_mode_sampled;
 use crate::crf::core::prediction::cost::satd_for_mode_sampled;
 
 use super::BandSteps;
-use super::super::rdoq::trellis_quantize_interleaved;
+use crate::crf::core::transform::rdoq::trellis_quantize_interleaved;
 use super::super::scratch::FrameScratch;
 use super::{assemble_frame, FrameQuant};
 use super::super::rle_cabac;
@@ -443,10 +443,10 @@ pub fn encode_frame_adaptive(
                 let mut final_payload = payload_bs;
                 if use_qm {
                     let table: &[u32] = match (block_w, block_h) {
-                        (8, 8) => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM8,
-                        (8, 4) => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM_WIDE,
-                        (4, 8) => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM_TALL,
-                        _ => &super::super::dct_path::qm::DCT_PERCEPTUAL_QM,
+                        (8, 8) => &crate::crf::core::transform::qm::DCT_PERCEPTUAL_QM8,
+                        (8, 4) => &crate::crf::core::transform::qm::DCT_PERCEPTUAL_QM_WIDE,
+                        (4, 8) => &crate::crf::core::transform::qm::DCT_PERCEPTUAL_QM_TALL,
+                        _ => &crate::crf::core::transform::qm::DCT_PERCEPTUAL_QM,
                     };
                     let t_coeff = trellis_quantize_interleaved(
                         &image.pixels,

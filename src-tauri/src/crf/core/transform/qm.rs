@@ -4,7 +4,7 @@
 //! 矩阵版系数量化器。量化输出为各位置 Q_pos 倍数的自描述残差，
 //! 解码端零感知（反量化隐含于残差值本身）。
 
-use super::quant_scalar;
+use super::quant::quant_scalar;
 
 /// 4×4 感知权重表：按 `freq = r + c` 递增，DC 权重恒为 64（×1.0）。
 ///

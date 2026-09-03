@@ -2,113 +2,28 @@
 //!
 //! 对标 JPEG/AVIF 的变换编码管线：
 //! 平面数据 → 分块 lifting DCT（4×4 / 8×8，v1.10 起可变）→ 死区量化
-//! （flat / 感知矩阵，见 [`qm`]）→ RLE+CABAC
+//! （flat / 感知矩阵）→ RLE+CABAC
 //!
 //! DCT 将能量集中到低频系数，量化后高频系数大量归零，
 //! RLE 零行程效率远高于空间域标量量化。
 //! 解码端对称还原：RLE+CABAC → 反量化 → 逆 zigzag → 逆 DCT。
 //!
-//! **迁移说明（P1）**：逆变换函数（`dct_plane_inverse_bs`、
-//! `dct_dequantize_inverse_interleaved_bs` 等）已迁移到
-//! [`crate::crf::core::transform::reconstruct`]，解除 decoder → encoder
-//! 反向依赖。本文件保留正变换和量化函数（编码端专用），逆变换在
-//! `core::transform::reconstruct`（测试模块经公共路径直接访问）。
+//! **迁移说明（P4）**：正变换（`dct_plane_forward_bs`）、感知矩阵（`qm`）
+//! 与单点量化（`quant_scalar`）已迁移到 `core/transform`；本文件保留
+//! frame_type=6 候选编排（解包 → 变换 → 量化 → 交织）。逆变换在
+//! `core::transform::reconstruct`（P1 迁入）。
 
-pub mod qm;
-
-use crate::crf::core::transform::quant::quantize_residuals;
-use crate::crf::core::transform::{
-    dct4x4_forward_into, dct8x8_forward_into, dct_rect_forward_into, is_valid_rect,
+use crate::crf::core::transform::is_valid_rect;
+use crate::crf::core::transform::plane::{dct_plane_forward, dct_plane_forward_bs};
+use crate::crf::core::transform::qm::{
+    quantize_coeffs_with_matrix, DCT_PERCEPTUAL_QM, DCT_PERCEPTUAL_QM8, DCT_PERCEPTUAL_QM_TALL,
+    DCT_PERCEPTUAL_QM_WIDE,
 };
-use qm::{quantize_coeffs_with_matrix, DCT_PERCEPTUAL_QM, DCT_PERCEPTUAL_QM8};
+use crate::crf::core::transform::quant::quantize_residuals;
 
 /// 块形状合法集（v1.12：{bw, bh} 对，bw/bh ∈ {4, 8}）
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
 pub const SUPPORTED_BLOCK_SHAPES: [(usize, usize); 4] = [(4, 4), (8, 8), (8, 4), (4, 8)];
-
-/// 死区标量量化单点（round-to-nearest，与 core/transform/quant 同款逻辑）
-#[inline]
-pub(crate) fn quant_scalar(v: i32, q: i32) -> i32 {
-    let half = q / 2;
-    if v >= 0 {
-        (v + half) / q * q
-    } else {
-        -(((-v) + half) / q * q)
-    }
-}
-
-/// 从 `src` 抽取 (bx,by) 处的完整矩形块 → `transform` → 写回 `dst` 同位置
-#[allow(clippy::too_many_arguments)] // 编码器领域函数，参数为算法固有维度
-fn transform_block(
-    src: &[i32],
-    dst: &mut [i32],
-    width: usize,
-    bx: usize,
-    by: usize,
-    bw: usize,
-    bh: usize,
-    transform: impl Fn(&[i32], &mut [i32]),
-) {
-    let n = bw * bh;
-    let mut block = [0i32; 64];
-    for r in 0..bh {
-        for c in 0..bw {
-            block[r * bw + c] = src[(by + r) * width + (bx + c)];
-        }
-    }
-    let mut transformed = [0i32; 64];
-    transform(&block[..n], &mut transformed[..n]);
-    for r in 0..bh {
-        for c in 0..bw {
-            dst[(by + r) * width + (bx + c)] = transformed[r * bw + c];
-        }
-    }
-}
-
-/// 对整帧平面执行分块 DCT 正变换（矩形形状：bw/bh ∈ {4, 8}）
-///
-/// 仅完整块参与变换；右/下边界的残缺块原样透传——
-/// 残缺块若强行 clamp 填充，正向会丢弃虚拟位置的系数而逆向却
-/// 读回错误数据，破坏可逆性（历史缺陷：非对齐尺寸边界列/行必损）。
-/// 正逆两端用同一几何判定，确保逐块对称。
-pub fn dct_plane_forward_bs(
-    pixels: &[i32],
-    width: usize,
-    height: usize,
-    block_w: usize,
-    block_h: usize,
-) -> Vec<i32> {
-    assert!(
-        is_valid_rect(block_w, block_h),
-        "非法块形状 {}×{}",
-        block_w,
-        block_h
-    );
-    let mut out = pixels.to_vec();
-    for by in (0..height).step_by(block_h) {
-        for bx in (0..width).step_by(block_w) {
-            if by + block_h > height || bx + block_w > width {
-                continue; // 残缺块透传
-            }
-            let kernel = |blk: &[i32], dst: &mut [i32]| match (block_w, block_h) {
-                (8, 8) => dct8x8_forward_into(blk, dst),
-                (8, _) => dct_rect_forward_into(blk, dst, 8, 4),
-                _ => match block_h {
-                    8 => dct_rect_forward_into(blk, dst, 4, 8),
-                    _ => dct4x4_forward_into(blk, dst),
-                },
-            };
-            transform_block(pixels, &mut out, width, bx, by, block_w, block_h, kernel);
-        }
-    }
-    out
-}
-
-/// 对整帧平面执行 4×4 分块 DCT 正变换（v1.10 前语义的兼容包装）
-#[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
-pub fn dct_plane_forward(pixels: &[i32], width: usize, height: usize) -> Vec<i32> {
-    dct_plane_forward_bs(pixels, width, height, 4, 4)
-}
 
 /// DCT 域量化：DCT 正变换 → 死区标量量化
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
@@ -151,8 +66,8 @@ pub fn dct_quantize_interleaved_bs(
             let table: &[u32] = match (block_w, block_h) {
                 (8, 8) => &DCT_PERCEPTUAL_QM8,
                 (4, 4) => &DCT_PERCEPTUAL_QM,
-                (8, 4) => &qm::DCT_PERCEPTUAL_QM_WIDE,
-                _ => &qm::DCT_PERCEPTUAL_QM_TALL,
+                (8, 4) => &DCT_PERCEPTUAL_QM_WIDE,
+                _ => &DCT_PERCEPTUAL_QM_TALL,
             };
             quantize_coeffs_with_matrix(
                 &coeffs,

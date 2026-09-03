@@ -19,9 +19,10 @@
 //! - **解码端零感知**：输出仍为各位置 Q_pos 倍数的自描述残差，
 //!   与 flat/矩阵量化产物同构。
 
-use crate::crf::encoder::dct_path::qm::quantize_coeffs_with_matrix;
-use crate::crf::encoder::dct_path::quant_scalar;
-use crate::crf::core::transform::is_valid_rect;
+use super::is_valid_rect;
+use super::plane::dct_plane_forward_bs;
+use super::qm::quantize_coeffs_with_matrix;
+use super::quant::quant_scalar;
 
 /// λ 系数分子/分母（λ = 850/100 · Q_pos² = 8.5Q²）
 ///
@@ -239,9 +240,7 @@ pub(crate) fn trellis_quantize_interleaved(
     qm_table: &[u32],
 ) -> Vec<i32> {
     let quant_plane = |plane: &[i32]| -> Vec<i32> {
-        let coeffs = crate::crf::encoder::dct_path::dct_plane_forward_bs(
-            plane, width, height, block_w, block_h,
-        );
+        let coeffs = dct_plane_forward_bs(plane, width, height, block_w, block_h);
         trellis_quantize_coeffs(
             &coeffs,
             width,
@@ -266,7 +265,7 @@ pub(crate) fn trellis_quantize_interleaved(
     for plane in planes.iter_mut().take(components) {
         *plane = quant_plane(plane);
     }
-    crate::crf::core::transform::reconstruct::interleave(&planes, components)
+    super::reconstruct::interleave(&planes, components)
 }
 
 #[cfg(test)]

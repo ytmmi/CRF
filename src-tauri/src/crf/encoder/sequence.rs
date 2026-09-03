@@ -266,7 +266,7 @@ pub(crate) fn encode_sequence_resolved(
                 }
                 // 噪声感知软阈值预处理（仅差分帧、零中心性门控内生效）
                 if noise_on {
-                    use super::noise::{
+                    use crate::crf::core::perceptual::noise::{
                         estimate_interleaved_band_thresholds, soft_threshold_interleaved,
                     };
                     let thresholds = estimate_interleaved_band_thresholds(
@@ -298,7 +298,7 @@ pub(crate) fn encode_sequence_resolved(
                 // 闭环 per-band 自适应步长（噪声归一化）：失真稠密的条带
                 // 死区加宽，静止为主的条带保持基础步长精细度。
                 let band_steps: Vec<u8> = if noise_on {
-                    use super::noise::estimate_band_quant_steps;
+                    use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
                     estimate_band_quant_steps(
                         &eff_frame.pixels,
                         eff_frame.width as usize,

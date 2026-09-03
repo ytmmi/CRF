@@ -57,3 +57,6 @@ pub mod transform;
 
 /// entropy：符号化和熵编码（token/scan/RLE/Golomb/CABAC/context）
 pub mod entropy;
+
+/// perceptual：噪声感知估计与软阈值（P4 迁入，原 encoder/noise.rs）
+pub mod perceptual;

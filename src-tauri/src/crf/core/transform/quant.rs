@@ -34,6 +34,19 @@ pub fn quantize_residuals(residuals: &[i32], q_step: u8) -> Vec<i32> {
     quantize_residuals_tuned(residuals, q_step, 0)
 }
 
+/// 死区标量量化单点（round-to-nearest，输出为 Q 的倍数）
+///
+/// P4 已从 `encoder/dct_path` 迁入，供矩阵量化与 RDOQ 复用同一舍入语义。
+#[inline]
+pub fn quant_scalar(v: i32, q: i32) -> i32 {
+    let half = q / 2;
+    if v >= 0 {
+        (v + half) / q * q
+    } else {
+        -(((-v) + half) / q * q)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,6 +14,8 @@
 //! 与 `reconstruct`（原 `encoder/dct_path` 逆变换部分）已迁入，
 //! 消除 core 对旧顶层 transform 的依赖。旧顶层 `transform/` 目录已删除。
 //! `quant`（原 `format/quant.rs`）与 `closed_loop`（原 `format/closed_loop.rs`）已迁入。
+//! `plane`（原 `encoder/dct_path` 正变换）、`qm`（原 `encoder/dct_path/qm.rs` 感知矩阵）
+//! 与 `rdoq`（原 `encoder/rdoq.rs` Trellis）已迁入。
 
 #![allow(dead_code)]
 
@@ -27,10 +29,16 @@ pub mod rect;
 /// reconstruct：逆变换与块重建（原 encoder/dct_path 逆变换部分）
 pub mod reconstruct;
 
-/// quant：残差死区标量量化（原 format/quant.rs）
+/// quant：残差死区标量量化（原 format/quant.rs；P4 增补 quant_scalar 单点舍入）
 pub mod quant;
 /// closed_loop：闭环预测 + 死区量化（原 format/closed_loop.rs）
 pub mod closed_loop;
+/// plane：分块 DCT 正变换（P4 迁入，原 encoder/dct_path/mod.rs）
+pub mod plane;
+/// qm：感知量化矩阵（P4 迁入，原 encoder/dct_path/qm.rs）
+pub mod qm;
+/// rdoq：Trellis 率失真优化量化（P4 迁入，原 encoder/rdoq.rs）
+pub mod rdoq;
 
 // 与旧顶层 transform 一致的公共 re-export（兼容路径）
 pub use dct4::{dct4x4_forward, dct4x4_inverse};
