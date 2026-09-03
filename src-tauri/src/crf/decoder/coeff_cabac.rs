@@ -4,8 +4,7 @@
 //! 解码每块 zigzag 系数 → 逆 run-level → 按模式重建。
 
 use crate::crf::decoder::rle_cabac::RangeDecoder;
-
-const INIT_PROB: u16 = 2048;
+use crate::crf::core::entropy::cabac::INIT_PROB;
 
 pub struct CoeffCABACDecoder<'a> {
     rc: RangeDecoder<'a>,

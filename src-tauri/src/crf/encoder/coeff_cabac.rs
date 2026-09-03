@@ -10,9 +10,7 @@
 //! ctx_nonzero 的 0-bit 更紧凑；run/level 的偏斜分布在 CABAC 下更高效。
 
 use crate::crf::encoder::rle_cabac::RangeEncoder;
-
-/// CABAC 上下文初始概率（/4096 定点，2048=0.5）
-const INIT_PROB: u16 = 2048;
+use crate::crf::core::entropy::cabac::INIT_PROB;
 
 pub struct CoeffCABAC {
     rc: RangeEncoder,

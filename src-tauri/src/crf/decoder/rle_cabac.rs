@@ -6,12 +6,12 @@
 //!
 //! **迁移说明（P1）**：`CtxModel` 引用已从 `crate::crf::encoder::ma_tree`
 //! 改为 `crate::crf::core::entropy::context`，解除 decoder → encoder 反向依赖。
+//! **迁移说明（P4）**：RC 常量（RC_BITS/RC_MOVE/RC_TOP/INIT_PROB）统一
+//! 由 `core/entropy/cabac.rs` 提供。
+
+use crate::crf::core::entropy::cabac::{RC_BITS, RC_MOVE, RC_TOP, INIT_PROB};
 
 // ===== Range Coder 解码端 =====
-
-const RC_BITS: u32 = 12;
-const RC_MOVE: u32 = 5;
-const RC_TOP: u32 = 1 << 24;
 
 pub struct RangeDecoder<'a> {
     range: u32,
@@ -125,7 +125,7 @@ impl<'a> CabacDecoder<'a> {
     pub fn new(data: &'a [u8], k: u8) -> Self {
         CabacDecoder {
             rc: RangeDecoder::new(data),
-            probs: [2048; N_CTX],
+            probs: [INIT_PROB; N_CTX],
             k,
         }
     }

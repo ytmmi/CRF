@@ -11,13 +11,11 @@
 
 use rayon::prelude::*;
 
+use crate::crf::core::entropy::cabac::{RC_BITS, RC_MOVE, RC_TOP, INIT_PROB};
 use crate::crf::core::entropy::context::{CtxModel, N_CTX};
 
 // ===== Range Coder（32 位区间 + 64 位低位累积）=====
-
-const RC_BITS: u32 = 12; // 概率定点精度：P(1) ∈ [0, 4096]
-const RC_MOVE: u32 = 5; // 概率更新率 1/32
-const RC_TOP: u32 = 1 << 24;
+// RC 常量（RC_BITS/RC_MOVE/RC_TOP/INIT_PROB）统一定义在 core/entropy/cabac.rs（P4）。
 
 /// 二值算术编码器
 pub struct RangeEncoder {
@@ -119,7 +117,7 @@ impl CabacEncoder {
     pub fn new(k: u8) -> Self {
         CabacEncoder {
             rc: RangeEncoder::new(),
-            probs: vec![2048; N_CTX],
+            probs: vec![INIT_PROB; N_CTX],
             k,
         }
     }

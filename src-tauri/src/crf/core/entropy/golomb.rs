@@ -1,6 +1,10 @@
-//! Golomb-Rice 参数 k 的自适应选择
+//! Golomb-Rice 参数 k 的自适应选择（规划文档 §3.7 golomb.rs）
 //!
-//! P4 已从 `format/k_value.rs` 迁入（规划文档 §3.7 golomb.rs）。
+//! 定义 Golomb-Rice/Exp-Golomb 的 k 选择语法：基于值分布的
+//! [`adaptive_k`]/[`block_adaptive_k`] 估计，以及基于非零值直方图精确竞争的
+//! [`best_k_by_histogram`]。三者均为纯数学，编解码端共享同一「k 选择契约」。
+
+use super::scan::zigzag_encode;
 
 /// 自适应选择 Golomb-Rice 参数 k
 ///
@@ -92,4 +96,49 @@ pub fn block_adaptive_k(
     }
 
     k_values
+}
+
+/// 基于非零值直方图的多 k 精确竞争
+///
+/// 单遍 O(N) 统计非零 zigzag 值直方图（零行程不走 Golomb，不影响 k 选择），
+/// 对每个候选 k 精确计算非零值 Golomb 总位长 Σ(⌊u/2^k⌋ + 1 + k)，取最小者。
+/// 相比单一 abs-mean 估计，可修正残差分布非对称时的次优偏差。
+///
+/// 候选集：k ∈ {0..=6}（覆盖 |v| ≤ 255 的全部合理区间；位深更高时
+/// 大幅值由 exp-Golomb 行程/调色板等路径承接）。
+///
+/// P4 已从 `encoder/rle_golomb.rs` 迁入（原 `pub(crate) fn best_k_by_histogram`）。
+pub fn best_k_by_histogram(values: &[i32]) -> u8 {
+    use std::collections::HashMap;
+
+    // 单遍统计非零 zigzag 值直方图
+    let mut hist: HashMap<u32, u64> = HashMap::new();
+    let mut nonzero: u64 = 0;
+    for &v in values {
+        if v == 0 {
+            continue; // 零走 RLE 行程，与 k 无关
+        }
+        *hist.entry(zigzag_encode(v)).or_insert(0) += 1;
+        nonzero += 1;
+    }
+    if nonzero == 0 {
+        return 0;
+    }
+
+    let mut best_k = 0u8;
+    let mut best_len = u64::MAX;
+    for k in 0u8..=6 {
+        let ku = k as u64;
+        let mut total: u64 = 0;
+        for (&u, &cnt) in &hist {
+            // Golomb-Rice(k) 位长：商 q=⌊u/2^k⌋ 个 '1' + 终止 '0' + k 位余数
+            let uu = u as u64;
+            total += cnt * ((uu >> ku) + 1 + ku);
+        }
+        if total < best_len {
+            best_len = total;
+            best_k = k;
+        }
+    }
+    best_k
 }

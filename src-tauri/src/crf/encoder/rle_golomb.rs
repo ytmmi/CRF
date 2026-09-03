@@ -1,5 +1,5 @@
 use crate::crf::error::CrfResult;
-use crate::crf::core::entropy::golomb::adaptive_k;
+use crate::crf::core::entropy::golomb::{adaptive_k, best_k_by_histogram};
 use crate::crf::core::entropy::scan::zigzag_encode;
 
 /// RLE+Golomb 混合编码器
@@ -244,49 +244,6 @@ pub fn encode_frame_rle_golomb(pixels: &[i32], k: u8) -> CrfResult<(Vec<u8>, u8)
     encoder.encode_signed_array(pixels);
     let encoded = encoder.finish();
     Ok((encoded, k))
-}
-
-/// 基于非零值直方图的多 k 精确竞争
-///
-/// 单遍 O(N) 统计非零 zigzag 值直方图（零行程不走 Golomb，不影响 k 选择），
-/// 对每个候选 k 精确计算非零值 Golomb 总位长 Σ(⌊u/2^k⌋ + 1 + k)，取最小者。
-/// 相比单一 abs-mean 估计，可修正残差分布非对称时的次优偏差。
-///
-/// 候选集：k ∈ {0..=6}（覆盖 |v| ≤ 255 的全部合理区间；位深更高时
-/// 大幅值由 exp-Golomb 行程/调色板等路径承接）。
-pub(crate) fn best_k_by_histogram(values: &[i32]) -> u8 {
-    use std::collections::HashMap;
-
-    // 单遍统计非零 zigzag 值直方图
-    let mut hist: HashMap<u32, u64> = HashMap::new();
-    let mut nonzero: u64 = 0;
-    for &v in values {
-        if v == 0 {
-            continue; // 零走 RLE 行程，与 k 无关
-        }
-        *hist.entry(zigzag_encode(v)).or_insert(0) += 1;
-        nonzero += 1;
-    }
-    if nonzero == 0 {
-        return 0;
-    }
-
-    let mut best_k = 0u8;
-    let mut best_len = u64::MAX;
-    for k in 0u8..=6 {
-        let ku = k as u64;
-        let mut total: u64 = 0;
-        for (&u, &cnt) in &hist {
-            // Golomb-Rice(k) 位长：商 q=⌊u/2^k⌋ 个 '1' + 终止 '0' + k 位余数
-            let uu = u as u64;
-            total += cnt * ((uu >> ku) + 1 + ku);
-        }
-        if total < best_len {
-            best_len = total;
-            best_k = k;
-        }
-    }
-    best_k
 }
 
 /// 编码残差帧数据（RLE+Golomb 混合，多 k 直方图精确竞争）
