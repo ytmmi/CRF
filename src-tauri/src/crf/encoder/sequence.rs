@@ -295,24 +295,25 @@ pub(crate) fn encode_sequence_resolved(
                     pixels: diff_rgb,
                 };
                 let fq = fq_for_index(i);
-                // 闭环 per-band 自适应步长（噪声归一化）：失真稠密的条带
-                // 死区加宽，静止为主的条带保持基础步长精细度。
-                let band_steps: Vec<u8> = if noise_on {
-                    use crate::crf::core::perceptual::noise::{
-                        band_activity_enabled, estimate_band_activity_steps,
-                        estimate_band_quant_steps,
-                    };
-                    if band_activity_enabled() {
-                        // P4.2 activity masking 探针：空间梯度能量步长（纹理增步长省码率）
+                // 闭环 per-band 自适应步长：噪声归一化（amp25 失真感知）或
+                // activity masking（空间梯度感知）二选一，由 V2 perceptual 字段决定。
+                let activity_on = tuning.activity_masking_x100 != 100
+                    || tuning.flat_area_protection_x100 != 100;
+                let band_steps: Vec<u8> = if noise_on || activity_on {
+                    if activity_on {
+                        // P4.2/P4.3 activity masking：纹理增步长省码率 + 平坦减步长防 banding
+                        use crate::crf::core::perceptual::noise::estimate_band_activity_steps;
                         estimate_band_activity_steps(
                             &eff_frame.pixels,
                             eff_frame.width as usize,
                             eff_frame.height as usize,
                             components,
                             fq.step,
-                            100,
+                            tuning.activity_masking_x100,
+                            tuning.flat_area_protection_x100,
                         )
                     } else {
+                        use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
                         estimate_band_quant_steps(
                             &eff_frame.pixels,
                             eff_frame.width as usize,
@@ -326,7 +327,7 @@ pub(crate) fn encode_sequence_resolved(
                     Vec::new()
                 };
                 let band_ref: super::frame::BandSteps<'_> =
-                    if noise_on { Some(&band_steps) } else { None };
+                    if noise_on || activity_on { Some(&band_steps) } else { None };
                 let mut data = if params.adaptive_prediction {
                     encode_frame_adaptive(
                         &eff_frame,

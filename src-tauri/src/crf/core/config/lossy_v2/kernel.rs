@@ -14,6 +14,10 @@ pub struct KernelLossyConfig {
     pub chroma_half_res: bool,
     pub noise_adaptive: bool,
     pub noise_tau_x100: u16,
+    /// P4.2 activity masking：纹理区增步长强度（100=中性，>100 纹理区加宽死区省码率）
+    pub activity_masking_x100: u16,
+    /// P4.3 flat-area protection：平坦区减步长强度（100=中性，>100 平坦区收窄死区防 banding）
+    pub flat_area_protection_x100: u16,
     pub reference_mode: ReferenceModeV2,
     pub change_mask: ToolMode,
     pub motion_mode: MotionModeV2,
@@ -40,6 +44,8 @@ impl KernelLossyConfig {
             chroma_half_res: false,
             noise_adaptive: false,
             noise_tau_x100: 150,
+            activity_masking_x100: 100,
+            flat_area_protection_x100: 100,
             reference_mode: ReferenceModeV2::Golden,
             change_mask: ToolMode::Off,
             motion_mode: MotionModeV2::Off,
@@ -121,6 +127,8 @@ impl KernelLossyConfig {
             chroma_half_res: effective.chroma.sampling == ChromaSampling::Cs420,
             noise_adaptive: effective.perceptual.noise_mode == NoiseMode::Manual,
             noise_tau_x100: effective.perceptual.noise_tau_x100.unwrap_or(150),
+            activity_masking_x100: effective.perceptual.activity_masking_x100,
+            flat_area_protection_x100: effective.perceptual.flat_area_protection_x100,
             reference_mode: effective.temporal.reference_mode,
             change_mask: effective.temporal.change_mask,
             motion_mode: effective.temporal.motion_mode,

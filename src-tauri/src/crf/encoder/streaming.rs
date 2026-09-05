@@ -204,7 +204,7 @@ impl StreamingEncoder {
                 // P1：原地 RCT——diff 已是独占缓冲，直接改写省去 to_vec 全帧克隆。
                 crate::crf::core::color::rct::rct_forward_in_place(&mut diff, components)?;
 
-                let fq_band: Vec<u8> = if self.noise_on() && components == 3 {
+                let fq_band: Vec<u8> = if self.noise_on() || self.activity_on() {
                     fq_band_steps(
                         fq_base.step,
                         &diff,
@@ -334,6 +334,16 @@ impl StreamingEncoder {
             && self.header.color_format.component_count() == 3
     }
 
+    fn activity_on(&self) -> bool {
+        let tuning = self
+            .tuning
+            .as_ref()
+            .expect("lossy config resolved before activity check");
+        self.lossy_quant_step.is_some()
+            && (tuning.activity_masking_x100 != 100 || tuning.flat_area_protection_x100 != 100)
+            && self.header.color_format.component_count() == 3
+    }
+
     fn frame_quant(&self, i: usize) -> FrameQuant {
         // 与批量路径共用同一逐帧量化配置（规划文档 §3.2：batch/streaming
         // 不得分别解析）。修复历史语义分叉：
@@ -404,14 +414,28 @@ fn fq_band_steps(
     components: usize,
     tuning: &crate::crf::core::config::lossy_v2::KernelLossyConfig,
 ) -> Vec<u8> {
-    estimate_band_quant_steps(
-        eff_pixels,
-        width,
-        height,
-        components,
-        fq_step,
-        tuning.noise_tau_x100,
-    )
+    if tuning.activity_masking_x100 != 100 || tuning.flat_area_protection_x100 != 100 {
+        // P4.2/P4.3 activity masking：空间梯度能量步长
+        use crate::crf::core::perceptual::noise::estimate_band_activity_steps;
+        estimate_band_activity_steps(
+            eff_pixels,
+            width,
+            height,
+            components,
+            fq_step,
+            tuning.activity_masking_x100,
+            tuning.flat_area_protection_x100,
+        )
+    } else {
+        estimate_band_quant_steps(
+            eff_pixels,
+            width,
+            height,
+            components,
+            fq_step,
+            tuning.noise_tau_x100,
+        )
+    }
 }
 
 // FRAME_HEADER_SIZE 引用占位
