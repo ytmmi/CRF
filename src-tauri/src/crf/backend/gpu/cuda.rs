@@ -104,6 +104,12 @@ impl NvidiaCudaBackend {
     pub fn rct_forward(&self, pixels: &mut [i32]) -> Result<(), BackendError> {
         super::runtime::run_rct_forward(self.device.device_id, pixels)
     }
+
+    /// 在启用 `nvidia-cuda` feature 时执行 YCoCg-R 逆向变换（3 分量交织，原地）。
+    #[cfg(feature = "nvidia-cuda")]
+    pub fn rct_inverse(&self, pixels: &mut [i32]) -> Result<(), BackendError> {
+        super::runtime::run_rct_inverse(self.device.device_id, pixels)
+    }
 }
 
 impl BackendKernel for NvidiaCudaBackend {
@@ -201,6 +207,48 @@ mod tests {
                 return;
             }
             Err(error) => panic!("CUDA rct_forward kernel failed: {error:?}"),
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "nvidia-cuda")]
+    #[test]
+    fn cuda_rct_inverse_matches_scalar_when_driver_is_available() {
+        use crate::crf::backend::BackendError;
+        let Some(backend) = NvidiaCudaBackend::new(0) else {
+            return;
+        };
+        // 确定性 YCoCg 域 3 分量交织像素（覆盖正负值）
+        let n = 4096usize;
+        let mut input: Vec<i32> = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let y = (i as i32).wrapping_mul(5).wrapping_sub(1000);
+            let co = (i as i32).wrapping_mul(2).wrapping_add(333);
+            let cg = (i as i32).wrapping_mul(3).wrapping_sub(777);
+            input.push(y);
+            input.push(co);
+            input.push(cg);
+        }
+        // 标量参考（YCoCg-R 逆向变换公式）
+        let mut expected = input.clone();
+        for px in expected.chunks_exact_mut(3) {
+            let (y, co, cg) = (px[0], px[1], px[2]);
+            let t = y - (cg >> 1);
+            let g = cg + t;
+            let b = t - (co >> 1);
+            px[0] = co + b;
+            px[1] = g;
+            px[2] = b;
+        }
+        let mut actual = input.clone();
+        match backend.rct_inverse(&mut actual) {
+            Ok(()) => {}
+            Err(BackendError::DeviceError(reason))
+                if reason.contains("crf_cuda.dll could not be loaded") =>
+            {
+                return;
+            }
+            Err(error) => panic!("CUDA rct_inverse kernel failed: {error:?}"),
         }
         assert_eq!(actual, expected);
     }

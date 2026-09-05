@@ -42,6 +42,19 @@ DONE: ret;
  st.global.s32 [%rd3],%r12; st.global.s32 [%rd3+4],%r9; st.global.s32 [%rd3+8],%r11;
 DONE_RCT: ret;
 }
+.visible .entry rct_inverse(.param .u64 pix,.param .u32 npix) {
+ .reg .pred %p; .reg .b32 %r<14>; .reg .b64 %rd<6>;
+ ld.param.u64 %rd1,[pix]; ld.param.u32 %r1,[npix];
+ mov.u32 %r2,%tid.x; mov.u32 %r3,%ctaid.x; mov.u32 %r4,%ntid.x; mad.lo.u32 %r5,%r3,%r4,%r2;
+ setp.ge.u32 %p,%r5,%r1; @%p bra DONE_RCTI;
+ mul.wide.u32 %rd2,%r5,12;
+ add.u64 %rd3,%rd1,%rd2;
+ ld.global.s32 %r6,[%rd3]; ld.global.s32 %r7,[%rd3+4]; ld.global.s32 %r8,[%rd3+8];
+ shr.s32 %r9,%r8,1; sub.s32 %r10,%r6,%r9; add.s32 %r11,%r8,%r10;
+ shr.s32 %r9,%r7,1; sub.s32 %r12,%r10,%r9; add.s32 %r6,%r7,%r12;
+ st.global.s32 [%rd3],%r6; st.global.s32 [%rd3+4],%r11; st.global.s32 [%rd3+8],%r12;
+DONE_RCTI: ret;
+}
 "#;
 
 #[cfg(windows)]
@@ -276,8 +289,13 @@ unsafe fn execute_diff(
 ///   co = r - b; t = b + (co >> 1); cg = g - t; y = t + (cg >> 1)
 /// `pixels` 指向 `npix * 3` 个 i32；kernel 每线程处理一个像素（3 个 i32）。
 #[cfg(windows)]
-unsafe fn execute_rct(session: &Session, pixels: *mut i32, npix: usize) -> Result<(), R> {
-    let function = session.function("rct_forward")?;
+unsafe fn execute_rct(
+    session: &Session,
+    kernel: &str,
+    pixels: *mut i32,
+    npix: usize,
+) -> Result<(), R> {
+    let function = session.function(kernel)?;
     if (session.driver.ctx_set_current)(session.context) != OK {
         return Err(-1);
     }
@@ -397,8 +415,40 @@ pub unsafe extern "system" fn crf_cuda_rct_forward(
 
     #[cfg(windows)]
     {
-        return with_session(device_id, |session| execute_rct(session, pixels, npix))
-            .map_or(-1, |_| OK);
+        return with_session(device_id, |session| {
+            execute_rct(session, "rct_forward", pixels, npix)
+        })
+        .map_or(-1, |_| OK);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (device_id, pixels, npix);
+        -4
+    }
+}
+
+/// 执行 YCoCg-R 逆向变换（3 分量交织，原地）。`npix` 为像素数（i32 元素数 = npix*3）。
+/// 返回零表示成功，非零表示驱动/设备错误。
+#[no_mangle]
+pub unsafe extern "system" fn crf_cuda_rct_inverse(
+    device_id: u32,
+    pixels: *mut i32,
+    npix: usize,
+) -> R {
+    if npix == 0 {
+        return OK;
+    }
+    if pixels.is_null() || npix > u32::MAX as usize {
+        return -2;
+    }
+
+    #[cfg(windows)]
+    {
+        return with_session(device_id, |session| {
+            execute_rct(session, "rct_inverse", pixels, npix)
+        })
+        .map_or(-1, |_| OK);
     }
 
     #[cfg(not(windows))]

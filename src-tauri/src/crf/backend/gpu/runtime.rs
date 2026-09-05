@@ -27,6 +27,7 @@ struct Sidecar {
     lib: *mut c_void,
     diff: DiffFn,
     rct_forward: RctForwardFn,
+    rct_inverse: RctForwardFn,
 }
 
 #[cfg(windows)]
@@ -91,10 +92,19 @@ impl Sidecar {
                 "crf_cuda_rct_forward export is missing".into(),
             ));
         }
+        let rct_inv_symbol = CString::new("crf_cuda_rct_inverse").unwrap();
+        let rct_inv_address = GetProcAddress(lib, rct_inv_symbol.as_ptr());
+        if rct_inv_address.is_null() {
+            FreeLibrary(lib);
+            return Err(BackendError::DeviceError(
+                "crf_cuda_rct_inverse export is missing".into(),
+            ));
+        }
         Ok(Self {
             lib,
             diff: std::mem::transmute_copy(&address),
             rct_forward: std::mem::transmute_copy(&rct_address),
+            rct_inverse: std::mem::transmute_copy(&rct_inv_address),
         })
     }
 }
@@ -144,12 +154,17 @@ pub fn run_diff_i32(device_id: u32, a: &[i32], b: &[i32]) -> Result<Vec<i32>, Ba
     })
 }
 
-/// 执行 YCoCg-R 正向变换（3 分量交织，原地）。`pixels` 长度必须是 3 的倍数。
+/// 原地 RCT 变换的公共执行路径：校验 3 分量交织、阈值、惰性加载 sidecar、调用 kernel。
 #[cfg(windows)]
-pub fn run_rct_forward(device_id: u32, pixels: &mut [i32]) -> Result<(), BackendError> {
+fn run_inplace_rct(
+    device_id: u32,
+    pixels: &mut [i32],
+    pick: impl Fn(&Sidecar) -> RctForwardFn,
+    label: &str,
+) -> Result<(), BackendError> {
     if pixels.len() % 3 != 0 {
         return Err(BackendError::Unsupported(
-            "rct_forward requires interleaved 3-component pixels",
+            "rct requires interleaved 3-component pixels",
         ));
     }
     let npix = pixels.len() / 3;
@@ -157,15 +172,27 @@ pub fn run_rct_forward(device_id: u32, pixels: &mut [i32]) -> Result<(), Backend
         return Ok(());
     }
     with_sidecar(|sidecar| {
-        let code = unsafe { (sidecar.rct_forward)(device_id, pixels.as_mut_ptr(), npix) };
+        let code = unsafe { (pick(sidecar))(device_id, pixels.as_mut_ptr(), npix) };
         if code == 0 {
             Ok(())
         } else {
             Err(BackendError::DeviceError(format!(
-                "crf_cuda.dll rct_forward failed with code {code}"
+                "crf_cuda.dll {label} failed with code {code}"
             )))
         }
     })
+}
+
+/// 执行 YCoCg-R 正向变换（3 分量交织，原地）。`pixels` 长度必须是 3 的倍数。
+#[cfg(windows)]
+pub fn run_rct_forward(device_id: u32, pixels: &mut [i32]) -> Result<(), BackendError> {
+    run_inplace_rct(device_id, pixels, |s| s.rct_forward, "rct_forward")
+}
+
+/// 执行 YCoCg-R 逆向变换（3 分量交织，原地）。`pixels` 长度必须是 3 的倍数。
+#[cfg(windows)]
+pub fn run_rct_inverse(device_id: u32, pixels: &mut [i32]) -> Result<(), BackendError> {
+    run_inplace_rct(device_id, pixels, |s| s.rct_inverse, "rct_inverse")
 }
 
 #[cfg(not(windows))]
@@ -177,6 +204,13 @@ pub fn run_diff_i32(_device_id: u32, _a: &[i32], _b: &[i32]) -> Result<Vec<i32>,
 
 #[cfg(not(windows))]
 pub fn run_rct_forward(_device_id: u32, _pixels: &mut [i32]) -> Result<(), BackendError> {
+    Err(BackendError::Unsupported(
+        "NVIDIA CUDA sidecar is only available on Windows",
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn run_rct_inverse(_device_id: u32, _pixels: &mut [i32]) -> Result<(), BackendError> {
     Err(BackendError::Unsupported(
         "NVIDIA CUDA sidecar is only available on Windows",
     ))

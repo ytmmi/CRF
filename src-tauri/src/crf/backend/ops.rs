@@ -92,6 +92,42 @@ fn try_nvidia_rct_forward(pixels: &mut [i32]) -> bool {
     }
 }
 
+#[cfg(feature = "nvidia-cuda")]
+fn try_nvidia_rct_inverse(pixels: &mut [i32]) -> bool {
+    use std::sync::{Mutex, OnceLock};
+    const GPU_THRESHOLD: usize = 1_048_576;
+    if pixels.len() % 3 != 0 || pixels.len() < GPU_THRESHOLD {
+        return false;
+    }
+    enum GpuState {
+        Uninitialized,
+        Ready(crate::crf::backend::gpu::NvidiaCudaBackend),
+        Disabled,
+    }
+    static BACKEND: OnceLock<Mutex<GpuState>> = OnceLock::new();
+    let state = BACKEND.get_or_init(|| Mutex::new(GpuState::Uninitialized));
+    let Ok(mut guard) = state.lock() else {
+        return false;
+    };
+    if matches!(*guard, GpuState::Uninitialized) {
+        *guard = match crate::crf::backend::gpu::NvidiaCudaBackend::new(0) {
+            Some(backend) => GpuState::Ready(backend),
+            None => GpuState::Disabled,
+        };
+    }
+    let GpuState::Ready(backend) = &*guard else {
+        return false;
+    };
+    match backend.rct_inverse(pixels) {
+        Ok(()) => true,
+        Err(_) => {
+            // 将设备/驱动/kernel 失败视为不可恢复，后续调用直接走 CPU。
+            *guard = GpuState::Disabled;
+            false
+        }
+    }
+}
+
 /// YCoCg-R 正向变换（3 分量交织，原地）
 #[inline]
 pub fn rct_forward(pixels: &mut [i32]) {
@@ -105,6 +141,10 @@ pub fn rct_forward(pixels: &mut [i32]) {
 /// YCoCg-R 逆向变换（3 分量交织，原地）
 #[inline]
 pub fn rct_inverse(pixels: &mut [i32]) {
+    #[cfg(feature = "nvidia-cuda")]
+    if try_nvidia_rct_inverse(pixels) {
+        return;
+    }
     crate::crf::backend::cpu::simd::rct_inverse_interleaved(pixels)
 }
 
