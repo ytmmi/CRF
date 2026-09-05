@@ -5,8 +5,9 @@
 //! 二次元插画差分场景特化：RCT 去相关后 Co/Cg 色度平面在赛璐璐
 //! 上色下大面积恒定，独立编码使 RLE 零行程成倍增长。
 
+use rayon::prelude::*;
+
 use crate::crf::error::CrfResult;
-use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
 
 use super::frame::candidate::encode_frame_adaptive;
@@ -197,7 +198,10 @@ pub(crate) fn encode_planar_payload_limited(
         }
     };
 
-    let mut preferred_sub: Option<crate::crf::core::domain::PredictionMode> = None;
+    // P1 首帧加速：去掉子平面间的历史引导（preferred_sub）后，Y/Co/Cg
+    // 三子平面互相独立，可并行编码。历史引导只影响「前一胜出模式移入
+    // top-2 试编码」的候选顺序（candidate.rs），去掉后各子平面按自身 SATD
+    // 排序独立选优——属编码器内部决策，格式与解码语义不变。
     // (平面数据, 平面宽, 平面高)：Y 全分辨率；Co/Cg 视 half_res 而定。
     // P1：子平面数据转为独占所有权（move 而非 clone）——planes[0]/co_enc/cg_enc
     // 此时均已构建完成且循环后不再使用，move 进 ImageData 省去 3 次全帧克隆。
@@ -220,48 +224,52 @@ pub(crate) fn encode_planar_payload_limited(
         Some(y_steps) if !half_res => y_steps.to_vec(),
         _ => Vec::new(),
     };
-    for (pi, (plane, pw, ph)) in owned_planes.into_iter().enumerate() {
-        let sub_span = Span::begin(match pi {
-            0 => "encode.adaptive.planar.subplane_y",
-            1 => "encode.adaptive.planar.subplane_co",
-            _ => "encode.adaptive.planar.subplane_cg",
-        });
-        let pfq = if pi == 0 { fq } else { fq_c };
-        let sub_steps: BandSteps<'_> = if pi == 0 {
-            band_steps
-        } else if !chroma_band.is_empty() {
-            Some(&chroma_band)
-        } else {
-            None
-        };
-        let plane_image = ImageData {
-            width: pw as u16,
-            height: ph as u16,
-            bit_depth: image.bit_depth,
-            color_format: ColorFormat::Gray,
-            pixels: plane,
-        };
-        let sub_out = encode_frame_adaptive(
-            &plane_image,
-            compression_type,
-            block_size.min(pw as u16).max(4),
-            false,
-            pfq,
-            preferred_sub,
-            sub_steps,
-        )?;
-        preferred_sub = sub_out.pred_mode;
-        out.extend_from_slice(&(sub_out.data.len() as u32).to_le_bytes());
-        out.extend_from_slice(&sub_out.data);
-        drop(sub_span);
+    // 三子平面并行编码（P1 首帧加速）：rayon collect 保序，按 Y/Co/Cg 顺序拼接。
+    // 各子平面编码互相独立（各自 CoeffCABAC/重建缓冲局部状态，无跨平面依赖），
+    // 去掉历史引导后无字节依赖。首帧 planar 是串行主瓶颈之一，并行化随线程数缩放。
+    let sub_payloads: Vec<Vec<u8>> = owned_planes
+        .into_par_iter()
+        .enumerate()
+        .map(|(pi, (plane, pw, ph))| -> CrfResult<Vec<u8>> {
+            let pfq = if pi == 0 { fq } else { fq_c };
+            let sub_steps: BandSteps<'_> = if pi == 0 {
+                band_steps
+            } else if !chroma_band.is_empty() {
+                Some(&chroma_band)
+            } else {
+                None
+            };
+            let plane_image = ImageData {
+                width: pw as u16,
+                height: ph as u16,
+                bit_depth: image.bit_depth,
+                color_format: ColorFormat::Gray,
+                pixels: plane,
+            };
+            let sub_out = encode_frame_adaptive(
+                &plane_image,
+                compression_type,
+                block_size.min(pw as u16).max(4),
+                false,
+                pfq,
+                None,
+                sub_steps,
+            )?;
+            let mut payload = Vec::with_capacity(sub_out.data.len() + 4);
+            payload.extend_from_slice(&(sub_out.data.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&sub_out.data);
+            Ok(payload)
+        })
+        .collect::<CrfResult<Vec<_>>>()?;
 
-        // Fast-Fail：剩余子平面每个至少 4(长度前缀)+11(帧头)+1(载荷)=16 字节。
-        // 若已累计体积 + 剩余最小体积已超预算，planar 必败，提前终止。
-        let remaining = 3 - (pi + 1);
-        const MIN_SUB_PLANE_BYTES: usize = 4 + FRAME_HEADER_SIZE + 1;
-        if out.len() + remaining * MIN_SUB_PLANE_BYTES > byte_limit {
-            return Ok(None);
-        }
+    // 后置 Fast-Fail：并行编码完再判预算（与串行版提前终止语义等价——超预算
+    // 即必败，绝不改变胜出候选与最终字节；仅失去「提前终止省时」的微收益）。
+    let total: usize = sub_payloads.iter().map(|p| p.len()).sum();
+    if out.len() + total > byte_limit {
+        return Ok(None);
+    }
+    for payload in sub_payloads {
+        out.extend_from_slice(&payload);
     }
     Ok(Some(out))
 }
