@@ -298,10 +298,11 @@ pub(crate) fn encode_sequence_resolved(
                 // 闭环 per-band 自适应步长：噪声归一化（amp25 失真感知）或
                 // activity masking（空间梯度感知）二选一，由 V2 perceptual 字段决定。
                 let activity_on = tuning.activity_masking_x100 != 100
-                    || tuning.flat_area_protection_x100 != 100;
+                    || tuning.flat_area_protection_x100 != 100
+                    || tuning.edge_protection_x100 != 100;
                 let band_steps: Vec<u8> = if noise_on || activity_on {
                     if activity_on {
-                        // P4.2/P4.3 activity masking：纹理增步长省码率 + 平坦减步长防 banding
+                        // P4.2/P4.3/P4.4 activity masking：纹理增步长 + 平坦/边缘减步长
                         use crate::crf::core::perceptual::noise::estimate_band_activity_steps;
                         estimate_band_activity_steps(
                             &eff_frame.pixels,
@@ -311,6 +312,7 @@ pub(crate) fn encode_sequence_resolved(
                             fq.step,
                             tuning.activity_masking_x100,
                             tuning.flat_area_protection_x100,
+                            tuning.edge_protection_x100,
                         )
                     } else {
                         use crate::crf::core::perceptual::noise::estimate_band_quant_steps;

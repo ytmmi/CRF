@@ -340,7 +340,9 @@ impl StreamingEncoder {
             .as_ref()
             .expect("lossy config resolved before activity check");
         self.lossy_quant_step.is_some()
-            && (tuning.activity_masking_x100 != 100 || tuning.flat_area_protection_x100 != 100)
+            && (tuning.activity_masking_x100 != 100
+                || tuning.flat_area_protection_x100 != 100
+                || tuning.edge_protection_x100 != 100)
             && self.header.color_format.component_count() == 3
     }
 
@@ -414,8 +416,11 @@ fn fq_band_steps(
     components: usize,
     tuning: &crate::crf::core::config::lossy_v2::KernelLossyConfig,
 ) -> Vec<u8> {
-    if tuning.activity_masking_x100 != 100 || tuning.flat_area_protection_x100 != 100 {
-        // P4.2/P4.3 activity masking：空间梯度能量步长
+    if tuning.activity_masking_x100 != 100
+        || tuning.flat_area_protection_x100 != 100
+        || tuning.edge_protection_x100 != 100
+    {
+        // P4.2/P4.3/P4.4 activity masking：空间梯度能量步长
         use crate::crf::core::perceptual::noise::estimate_band_activity_steps;
         estimate_band_activity_steps(
             eff_pixels,
@@ -425,6 +430,7 @@ fn fq_band_steps(
             fq_step,
             tuning.activity_masking_x100,
             tuning.flat_area_protection_x100,
+            tuning.edge_protection_x100,
         )
     } else {
         estimate_band_quant_steps(

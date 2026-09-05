@@ -98,21 +98,36 @@ pub fn estimate_band_quant_steps(
     steps
 }
 
-/// 由差分帧推导**逐条带 activity 自适应量化步长表**（P4.2/P4.3 activity masking）
+/// 质量优先的减步长映射：`protection ≤ 100` 保持基础步长；
+/// `> 100` 时每 25 减 1 步长（下限 1）。
+#[inline]
+fn reduce_step(base_step: u8, protection_x100: u16) -> u8 {
+    if protection_x100 <= 100 {
+        return base_step;
+    }
+    let delta = (((protection_x100 - 100) as u64) / 25).max(1);
+    let floor = (base_step as u64).saturating_sub(1);
+    base_step.saturating_sub(delta.min(floor) as u8).max(1)
+}
+
+/// 由差分帧推导**逐条带 activity 自适应量化步长表**（P4.2/P4.3/P4.4 感知量化）
 ///
 /// 与 [`estimate_band_quant_steps`]（amp25 幅度感知，一阶统计）互补：
-/// 本函数基于**空间梯度能量**（二阶统计）区分「密集纹理」与「平坦渐变」——
-/// 纹理区的量化噪声被纹理自身掩盖，可加宽死区省码率；平坦/渐变区的量化
-/// 噪声以 banding 形式可见，应收窄死区防 banding。amp25 无法区分这两者
-/// （二者都可能有中等幅度残差）。
+/// 本函数基于**空间梯度能量**（二阶统计）做三分分类——
+/// - **纹理**（密集中等梯度）：量化噪声被纹理掩盖 → 加宽死区省码率；
+/// - **边缘**（稀疏大梯度，如线稿/锐边）：量化噪声以 ringing/断裂形式可见 → 收窄死区保护；
+/// - **平坦**（低梯度渐变）：量化噪声以 banding 形式可见 → 收窄死区防 banding。
 ///
-/// 度量：每行 Y 分量水平梯度 `|Y[x] − Y[x−1]|` 的条带均值（Y 主导视觉，
-/// 3 分量交织时取分量 0）。中性参考 = 非零 band 均值的平均。
+/// 度量：每行 Y 分量水平梯度 `|Y[x] − Y[x−1]|` 的条带均值 avg 与
+/// 非零平均梯度 nz_avg = Σ|∇| / #{|∇|>0}（区分「稀疏大梯度边缘」与
+/// 「密集中等梯度纹理」——二者 avg 可能接近，但边缘的 nz_avg 远高）。
+/// 中性参考 = 全帧 avg 均值。
 ///
 /// ```text
-/// 纹理（avg > ref）: Q = base_step + clamp(Δ × (activity_masking−100)/100, 0, Q_BAND_CAP−base_step)
-/// 平坦（avg < ref/2）: Q = max(1, base_step − clamp((flat_area_protection−100)/25, 1, base_step−1))
-/// 其余: Q = base_step
+/// 边缘（nz_avg > 2·ref）: Q = reduce(edge_protection)             # 减步长
+/// 纹理（avg > ref）      : Q = base_step + clamp(Δ·(activity−100)/100, 0, Q_BAND_CAP−base_step)
+/// 平坦（avg < ref/2）    : Q = reduce(flat_area_protection)       # 减步长
+/// 其余                   : Q = base_step
 /// ```
 ///
 /// 解码端无感（与 [`estimate_band_quant_steps`] 相同的自描述残差语义，格式零改动）。
@@ -125,6 +140,7 @@ pub fn estimate_band_activity_steps(
     base_step: u8,
     activity_masking_x100: u16,
     flat_area_protection_x100: u16,
+    edge_protection_x100: u16,
 ) -> Vec<u8> {
     let band_h = BAND_HEIGHT;
     let bands = height.div_ceil(band_h).max(1);
@@ -136,6 +152,7 @@ pub fn estimate_band_activity_steps(
     let stride = width * components;
     let mut grad_sum = vec![0u64; bands];
     let mut grad_cnt = vec![0u64; bands];
+    let mut non_zero_cnt = vec![0u64; bands];
     for (y, row) in pixels.chunks_exact(stride).enumerate() {
         let band = (y / band_h).min(bands - 1);
         // Y 分量水平梯度（相邻像素同分量差，wrapping_sub 避免 debug 溢出 panic）
@@ -145,10 +162,22 @@ pub fn estimate_band_activity_steps(
                 .unsigned_abs() as u64;
             grad_sum[band] += g;
             grad_cnt[band] += 1;
+            if g > 0 {
+                non_zero_cnt[band] += 1;
+            }
         }
     }
     let avg: Vec<u64> = (0..bands)
         .map(|b| if grad_cnt[b] > 0 { grad_sum[b] / grad_cnt[b] } else { 0 })
+        .collect();
+    let non_zero_avg: Vec<u64> = (0..bands)
+        .map(|b| {
+            if non_zero_cnt[b] > 0 {
+                grad_sum[b] / non_zero_cnt[b]
+            } else {
+                0
+            }
+        })
         .collect();
 
     // 中性参考 = 全帧平均梯度（含零 band，稳健区分纹理/平坦）
@@ -159,16 +188,17 @@ pub fn estimate_band_activity_steps(
         if reference == 0 {
             continue; // 全平坦，无 activity 信号
         }
-        if g > reference && activity_masking_x100 > 100 {
+        if non_zero_avg[band] > reference.saturating_mul(2) {
+            // 边缘（稀疏大梯度）：收窄死区防 ringing/断裂（质量优先）
+            steps[band] = reduce_step(base_step, edge_protection_x100);
+        } else if g > reference && activity_masking_x100 > 100 {
             // 纹理：加宽死区省码率（上限 Q_BAND_CAP）
             let delta = (g - reference) * (activity_masking_x100 - 100) as u64 / 100;
             let cap = Q_BAND_CAP.saturating_sub(base_step) as u64;
             steps[band] = base_step.saturating_add(delta.min(cap) as u8);
-        } else if g < reference / 2 && flat_area_protection_x100 > 100 {
-            // 平坦：收窄死区防 banding（质量优先，下限 1）
-            let delta = (((flat_area_protection_x100 - 100) as u64) / 25).max(1);
-            let floor = (base_step as u64).saturating_sub(1);
-            steps[band] = base_step.saturating_sub(delta.min(floor) as u8).max(1);
+        } else if g < reference / 2 {
+            // 平坦：收窄死区防 banding（质量优先）
+            steps[band] = reduce_step(base_step, flat_area_protection_x100);
         }
     }
     steps
@@ -476,13 +506,42 @@ mod tests {
             }
         }
         // activity_masking=200（纹理增步长）+ flat_area_protection=150（平坦减 2 步长）
-        let steps = estimate_band_activity_steps(&px, w, h, comps, base, 200, 150);
+        let steps = estimate_band_activity_steps(&px, w, h, comps, base, 200, 150, 100);
         assert_eq!(steps.len(), 2, "BAND_HEIGHT=32 时 64 行应产生 2 条带");
         assert!(steps[0] < base, "平坦条带应减步长防 banding：{:?}", steps);
         assert!(steps[1] > base, "纹理条带应增步长省码率：{:?}", steps);
     }
 
-    /// activity 步长中性：100/100 保持基础步长（默认不改变既有产物）
+    /// activity 步长边缘保护：稀疏大梯度（线稿边缘）应减步长
+    #[test]
+    fn test_activity_steps_edge_reduces_step() {
+        let w = 64usize;
+        let h = 64usize; // 2 条带
+        let comps = 3;
+        let base = 6u8;
+        let mut px = vec![0i32; w * h * comps];
+        // 条带 0（前 32 行）：均匀中等梯度纹理（Y 交替 ±50，梯度=100）
+        // 条带 1（后 32 行）：稀疏大梯度边缘（每 10 像素一个 200，其余 0）
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * comps;
+                if y >= 32 {
+                    if x % 10 == 0 {
+                        px[idx] = 200;
+                    }
+                } else {
+                    px[idx] = if x % 2 == 0 { 50 } else { -50 };
+                }
+            }
+        }
+        // edge_protection=150（边缘减 2 步长），activity/flat 中性
+        let steps = estimate_band_activity_steps(&px, w, h, comps, base, 100, 100, 150);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0], base, "纹理条带（activity 中性）应保持基础步长");
+        assert!(steps[1] < base, "边缘条带应减步长防 ringing：{:?}", steps);
+    }
+
+    /// activity 步长中性：100/100/100 保持基础步长（默认不改变既有产物）
     #[test]
     fn test_activity_steps_neutral_keeps_base() {
         let w = 64usize;
@@ -497,10 +556,10 @@ mod tests {
                 }
             }
         }
-        let steps = estimate_band_activity_steps(&px, w, h, comps, 6, 100, 100);
+        let steps = estimate_band_activity_steps(&px, w, h, comps, 6, 100, 100, 100);
         assert!(
             steps.iter().all(|&s| s == 6),
-            "中性 100/100 应保持基础步长：{:?}",
+            "中性 100/100/100 应保持基础步长：{:?}",
             steps
         );
     }
@@ -508,9 +567,9 @@ mod tests {
     /// activity 步长估计退化输入：width<2 或空输入返回全基础步长
     #[test]
     fn test_activity_steps_degenerate_inputs() {
-        let empty = estimate_band_activity_steps(&[], 0, 0, 0, 5, 200, 150);
+        let empty = estimate_band_activity_steps(&[], 0, 0, 0, 5, 200, 150, 100);
         assert!(empty.iter().all(|&s| s == 5));
-        let narrow = estimate_band_activity_steps(&[0; 3], 1, 1, 3, 5, 200, 150);
+        let narrow = estimate_band_activity_steps(&[0; 3], 1, 1, 3, 5, 200, 150, 100);
         assert!(narrow.iter().all(|&s| s == 5), "width<2 应保持基础步长");
     }
 
@@ -530,7 +589,7 @@ mod tests {
                 }
             }
         }
-        let steps = estimate_band_activity_steps(&px, w, h, comps, 4, 1000, 100);
+        let steps = estimate_band_activity_steps(&px, w, h, comps, 4, 1000, 100, 100);
         assert!(
             steps.iter().all(|&s| s <= Q_BAND_CAP),
             "步长不应超过 Q_BAND_CAP：{:?}",
