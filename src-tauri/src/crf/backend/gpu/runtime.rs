@@ -20,9 +20,13 @@ use std::sync::{Mutex, OnceLock};
 type DiffFn = unsafe extern "system" fn(u32, *const i32, *const i32, *mut i32, usize) -> i32;
 
 #[cfg(windows)]
+type RctForwardFn = unsafe extern "system" fn(u32, *mut i32, usize) -> i32;
+
+#[cfg(windows)]
 struct Sidecar {
     lib: *mut c_void,
     diff: DiffFn,
+    rct_forward: RctForwardFn,
 }
 
 #[cfg(windows)]
@@ -79,11 +83,34 @@ impl Sidecar {
                 "crf_cuda_diff_i32 export is missing".into(),
             ));
         }
+        let rct_symbol = CString::new("crf_cuda_rct_forward").unwrap();
+        let rct_address = GetProcAddress(lib, rct_symbol.as_ptr());
+        if rct_address.is_null() {
+            FreeLibrary(lib);
+            return Err(BackendError::DeviceError(
+                "crf_cuda_rct_forward export is missing".into(),
+            ));
+        }
         Ok(Self {
             lib,
             diff: std::mem::transmute_copy(&address),
+            rct_forward: std::mem::transmute_copy(&rct_address),
         })
     }
+}
+
+#[cfg(windows)]
+fn with_sidecar<T>(f: impl FnOnce(&Sidecar) -> Result<T, BackendError>) -> Result<T, BackendError> {
+    static SIDECAR: OnceLock<Mutex<Option<Sidecar>>> = OnceLock::new();
+    let lock = SIDECAR.get_or_init(|| Mutex::new(None));
+    let mut guard = lock
+        .lock()
+        .map_err(|_| BackendError::DeviceError("CUDA sidecar lock poisoned".into()))?;
+    if guard.is_none() {
+        *guard = Some(unsafe { Sidecar::load()? });
+    }
+    let sidecar = guard.as_ref().expect("CUDA sidecar initialized");
+    f(sidecar)
 }
 
 #[cfg(windows)]
@@ -96,36 +123,60 @@ pub fn run_diff_i32(device_id: u32, a: &[i32], b: &[i32]) -> Result<Vec<i32>, Ba
             "diff inputs have different lengths",
         ));
     }
-    static SIDECAR: OnceLock<Mutex<Option<Sidecar>>> = OnceLock::new();
-    let lock = SIDECAR.get_or_init(|| Mutex::new(None));
-    let mut guard = lock
-        .lock()
-        .map_err(|_| BackendError::DeviceError("CUDA sidecar lock poisoned".into()))?;
-    if guard.is_none() {
-        *guard = Some(unsafe { Sidecar::load()? });
+    with_sidecar(|sidecar| {
+        let mut output = vec![0i32; a.len()];
+        let code = unsafe {
+            (sidecar.diff)(
+                device_id,
+                a.as_ptr(),
+                b.as_ptr(),
+                output.as_mut_ptr(),
+                a.len(),
+            )
+        };
+        if code == 0 {
+            Ok(output)
+        } else {
+            Err(BackendError::DeviceError(format!(
+                "crf_cuda.dll diff failed with code {code}"
+            )))
+        }
+    })
+}
+
+/// 执行 YCoCg-R 正向变换（3 分量交织，原地）。`pixels` 长度必须是 3 的倍数。
+#[cfg(windows)]
+pub fn run_rct_forward(device_id: u32, pixels: &mut [i32]) -> Result<(), BackendError> {
+    if pixels.len() % 3 != 0 {
+        return Err(BackendError::Unsupported(
+            "rct_forward requires interleaved 3-component pixels",
+        ));
     }
-    let sidecar = guard.as_ref().expect("CUDA sidecar initialized");
-    let mut output = vec![0i32; a.len()];
-    let code = unsafe {
-        (sidecar.diff)(
-            device_id,
-            a.as_ptr(),
-            b.as_ptr(),
-            output.as_mut_ptr(),
-            a.len(),
-        )
-    };
-    if code == 0 {
-        Ok(output)
-    } else {
-        Err(BackendError::DeviceError(format!(
-            "crf_cuda.dll diff failed with code {code}"
-        )))
+    let npix = pixels.len() / 3;
+    if npix == 0 {
+        return Ok(());
     }
+    with_sidecar(|sidecar| {
+        let code = unsafe { (sidecar.rct_forward)(device_id, pixels.as_mut_ptr(), npix) };
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(BackendError::DeviceError(format!(
+                "crf_cuda.dll rct_forward failed with code {code}"
+            )))
+        }
+    })
 }
 
 #[cfg(not(windows))]
 pub fn run_diff_i32(_device_id: u32, _a: &[i32], _b: &[i32]) -> Result<Vec<i32>, BackendError> {
+    Err(BackendError::Unsupported(
+        "NVIDIA CUDA sidecar is only available on Windows",
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn run_rct_forward(_device_id: u32, _pixels: &mut [i32]) -> Result<(), BackendError> {
     Err(BackendError::Unsupported(
         "NVIDIA CUDA sidecar is only available on Windows",
     ))

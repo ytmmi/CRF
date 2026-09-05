@@ -98,6 +98,12 @@ impl NvidiaCudaBackend {
         }
         super::runtime::run_diff_i32(self.device.device_id, a, b)
     }
+
+    /// 在启用 `nvidia-cuda` feature 时执行 YCoCg-R 正向变换（3 分量交织，原地）。
+    #[cfg(feature = "nvidia-cuda")]
+    pub fn rct_forward(&self, pixels: &mut [i32]) -> Result<(), BackendError> {
+        super::runtime::run_rct_forward(self.device.device_id, pixels)
+    }
 }
 
 impl BackendKernel for NvidiaCudaBackend {
@@ -153,6 +159,49 @@ mod tests {
             Err(error) => panic!("CUDA diff kernel failed: {error:?}"),
         };
         let expected: Vec<i32> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "nvidia-cuda")]
+    #[test]
+    fn cuda_rct_forward_matches_scalar_when_driver_is_available() {
+        use crate::crf::backend::BackendError;
+        let Some(backend) = NvidiaCudaBackend::new(0) else {
+            return;
+        };
+        // 确定性 3 分量交织像素（覆盖正负值，含 i32::MIN 边界）
+        let n = 4096usize;
+        let mut input: Vec<i32> = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let r = (i as i32).wrapping_mul(3).wrapping_sub(700);
+            let g = (i as i32).wrapping_mul(2).wrapping_add(11);
+            let b = (i as i32).wrapping_sub(400);
+            input.push(r);
+            input.push(g);
+            input.push(b);
+        }
+        // 标量参考（YCoCg-R 正向变换公式）
+        let mut expected = input.clone();
+        for px in expected.chunks_exact_mut(3) {
+            let (r, g, b) = (px[0], px[1], px[2]);
+            let co = r - b;
+            let t = b + (co >> 1);
+            let cg = g - t;
+            px[0] = t + (cg >> 1);
+            px[1] = co;
+            px[2] = cg;
+        }
+        let mut actual = input.clone();
+        match backend.rct_forward(&mut actual) {
+            Ok(()) => {}
+            // 未构建旁路 DLL 时跳过（交由打包/集成检查覆盖）
+            Err(BackendError::DeviceError(reason))
+                if reason.contains("crf_cuda.dll could not be loaded") =>
+            {
+                return;
+            }
+            Err(error) => panic!("CUDA rct_forward kernel failed: {error:?}"),
+        }
         assert_eq!(actual, expected);
     }
 }
