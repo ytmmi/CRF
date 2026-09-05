@@ -9,10 +9,13 @@
 依赖边界以[《CRF 编码器/解码器分层架构重构规划》](codec-architecture-refactor-plan.md)
 为前置条件。
 
-截至 2026-08-26 的源码规模检查发现 `src-tauri/src/test/mod.rs` 约 1030 行，已违反
-1000 行硬限制；`src-tauri/src/crf/encoder/tests.rs` 约 980 行、
-`src-tauri/src/crf/format/prediction.rs` 约 801 行进入预警区。性能实现不得绕过这项
-准入；上述文件必须先按职责拆分，才能进入后续性能构建轮次。
+截至 2026-08-26 的源码规模检查曾发现 `src-tauri/src/test/mod.rs` 约 1030 行违反
+1000 行硬限制、`src-tauri/src/crf/encoder/tests.rs` 约 980 行、
+`src-tauri/src/crf/format/prediction.rs` 约 801 行进入预警区。该项准入已在分层重构
+（P6 测试+文档收敛）中完成拆分：`test/` 拆为 `batch/mod/probe.rs`，`encoder/tests/`
+拆为 `lossy/roundtrip/rct_bypass/mod.rs`，预测模块迁至 `core/prediction/intra.rs`；
+全项目最大 `.rs` 文件已降至 714 行，无超限文件。性能实现仍不得绕过拆分后各文件的
+1000 行硬限制与 800 行预警区。
 
 ## 1. 目标与边界
 
@@ -784,12 +787,12 @@ buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 端到端 −17%（远超 P1 的 ≥10% 门槛）。剩余首帧串行块（planar 620ms）受
 `preferred_sub` 字节依赖约束无法字节透明并行，留待 P2 SIMD 或格式级重构。
 
-**未完成（架构迁移项，非 P1 纯性能项）**：
-- **batch/streaming resolved config 深层收敛**：`codec::encode` facade 路径
-  仍解析配置两次（报告用 `ResolvedConfig::resolve` + 编码用 `from_options`），
-  streaming 用 `ResolveContext::default()`（缺 components/frame_count）。
-  属规划文档 P3.b「主流程直接消费 ResolvedConfig」的架构迁移项，留待
-  session 拆分时收敛。
+**已闭环（原为架构迁移项，非 P1 纯性能项）**：
+- **batch/streaming resolved config 深层收敛**：`codec::encode` facade 现直接
+  消费 `ResolvedConfig::resolve`（内部唯一 `KernelLossyConfig::from_options`），
+  streaming 首帧 push 时以真实 `components` 补全 `ResolveContext`（`frame_count`
+  在流式语义下保持 `None`）。属规划文档 P3.b「主流程直接消费 ResolvedConfig」，
+  已随分层重构 P3 完成（见 codec-architecture-refactor-plan.md 迁移进度表）。
 
 ### P2：CPU SIMD 扩展
 

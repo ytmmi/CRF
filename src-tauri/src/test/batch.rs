@@ -62,6 +62,8 @@ pub fn run_streaming_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &st
     for (label, quality) in [
         ("streaming_adaptive", None),
         ("streaming_q90", Some(90u8)),
+        ("streaming_q85", Some(85u8)),
+        ("streaming_q80", Some(80u8)),
         ("streaming_q75", Some(75u8)),
     ] {
         let crf_path = format!("{}/{}.crf", crf_out_dir, label);
@@ -161,6 +163,18 @@ pub fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
             mode: crf::PredictionMode::Med,
             adaptive: true,
             quality: Some(90),
+        },
+        Scheme {
+            file: "adaptive_q85",
+            mode: crf::PredictionMode::Med,
+            adaptive: true,
+            quality: Some(85),
+        },
+        Scheme {
+            file: "adaptive_q80",
+            mode: crf::PredictionMode::Med,
+            adaptive: true,
+            quality: Some(80),
         },
         Scheme {
             file: "adaptive_q75",

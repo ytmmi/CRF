@@ -13,4 +13,6 @@ pub mod probe_planar;
 pub mod probe_planar_sub;
 /// probe_first_frame：首帧内部候选阶段 profile 探针
 pub mod probe_first_frame;
+/// probe_monotonicity：DAT.1 跨内容单调性验收探针
+pub mod probe_monotonicity;
 pub mod telemetry;

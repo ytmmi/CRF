@@ -17,14 +17,14 @@
 | 规划阶段 | 总项数 | 已完成 | 部分完成 | 否决/关闭 | 未完成 |
 |---|---:|---:|---:|---:|---:|
 | 首帧规划 P0 闭环语义 | 5 | 5 | 0 | 0 | 0 |
-| 首帧规划 P1 标定 | 6 | 2 | 1 | 1 | 2 |
+| 首帧规划 P1 标定 | 6 | 3 | 1 | 1 | 1 |
 | 首帧规划 P2 intra 路径 | 4 | 3 | 0 | 1（四叉树）| 0 |
 | 首帧规划 P3 系数熵编码 | 7 | 2 | 0 | 1（DC/AC 分离）| 4 |
 | 首帧规划 P4 感知量化 | 7 | 1 | 0 | 0 | 6 |
-| 首帧规划 P5 序列优化 | 7 | 0 | 0 | 0 | 7 |
-| 首帧规划 P6 速度内存 | 6 | 4 | 0 | 0 | 2 |
-| 接口规划 V2 | 7 | 0 | 1 | 0 | 6 |
-| **合计** | **49** | **17** | **2** | **3** | **27** |
+| 首帧规划 P5 序列优化 | 7 | 7 | 0 | 0 | 0 |
+| 首帧规划 P6 速度内存 | 12 | 10 | 0 | 0 | 2 |
+| 接口规划 V2 | 7 | 5 | 1 | 1 | 0 |
+| **合计** | **55** | **36** | **2** | **4** | **13** |
 
 > "部分完成"指阶段内部分子项落地；"否决/关闭"指经实测或架构判定不做。
 
@@ -60,7 +60,7 @@
 | P1.3 | 分离 luma/chroma 步长，解决 130% 截断 | `format/quant.rs` L91 `chroma_step` 升级逻辑 | §10 P1a | ✅ | Q=1×130%→floor=1 时升一级使百分比生效 |
 | P1.4 | 亮度/色度低高频矩阵候选 | — | §11.1 修正 | ❌ 后置 | DCT(type6) 全档零胜出，矩阵工作后置到 P2 落地之后 |
 | P1.5 | 联合搜索 deadzone/矩阵/色度/RDOQ λ | `format/quant.rs` `deadzone_bias`/`chroma_deadzone_bias` | §12/§13/§17 | ◐ 部分 | deadzone 标定完成（luma +4 / chroma -4）；矩阵/RDOQ λ 未做 |
-| P1.6 | 固定目标率失真点 + Q95/Q96/Q97 编号 | — | §19 | ❌ 未完成 | 当前最佳点 q90 +3.8% vs AVIF @ +12.5dB，未到目标率失真点 |
+| P1.6 | 固定目标率失真点 + Q95/Q96/Q97 编号 | — | §19 + §26 视觉标定 + 单调性验收 | ✅ | 视觉标定→Q_target=q90；DAT.1 跨内容单调性验收通过 |
 
 **P1 色度死区偏置标定**（P1.5 子项，已闭环）：
 - `LossyTuning.chroma_deadzone_bias: Option<i8>`（`format/quant.rs`）默认 `Some(-4)`
@@ -296,8 +296,8 @@
 
 已完成项见本文件。未完成项仍保留在原规划文档：
 
-- **首帧优化未完成项**：[first-frame-optimization-plan.md](first-frame-optimization-plan.md) P1.4/P1.6、P3.2/P3.5~P3.7、P4.1~P4.4/P4.6/P4.7、P5 全部、P6 预测 SIMD 泛化/全局内存池
-- **接口规划未完成项**：[lossy-tuning-interface-plan.md](lossy-tuning-interface-plan.md) V2 顶层模型、resolve_without_encoding、兼容适配器、实验工具命名空间、UI 专家面板
+- **首帧优化未完成项**：[first-frame-optimization-plan.md](first-frame-optimization-plan.md) P1.4、P3.2/P3.5~P3.7、P4.1~P4.4/P4.6/P4.7、P6 预测 SIMD 泛化/全局内存池
+- **接口规划未完成项**：[lossy-tuning-interface-plan.md](lossy-tuning-interface-plan.md) §13 项6「逐组接入参数」（部分）——新增算法字段（如 P1.6 Q_target 编号、量化矩阵、RDOQ λ 等）继续分阶段接入；UI 专家面板已提供 `expert_panel_schema()`，前端源码尚不存在
 - **变换域深化未完成项**：frame_type=8 收益验证、CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项）、top-2 试编码、矩形/4×4 块尺寸、Trellis/感知矩阵集成、端到端 CRF 文件级往返测试
 
 ---
@@ -306,13 +306,17 @@
 
 | 文件 | 行数 | 上限 | 状态 |
 |---|---:|---:|---|
-| `encoder/intra_transform.rs` | 266 | 1000 | ✅ |
-| `encoder/coeff_cabac.rs` | 83 | 1000 | ✅ |
-| `decoder/intra_transform.rs` | 231 | 1000 | ✅ |
-| `encoder/intra_probe.rs` | 347 | 1000 | ✅（探针保留为回归锚点）|
-| `encoder/intra_transform_tests.rs` | 95 | 1000 | ✅ |
-| `encoder/tests.rs` | 980 | 1000 | ⚠️ 预警区（未向其追加实质功能）|
-| `test/mod.rs` | ~985 | 1000 | ⚠️ 预警区 |
-| `format/prediction.rs` | 800 | 1000 | ⚠️ 触及预警线 |
+| `core/prediction/intra.rs` | 714 | 1000 | ✅（全项目最大文件）|
+| `encoder/frame/intrabc.rs` | 662 | 1000 | ✅ |
+| `encoder/frame/candidate.rs` | 599 | 1000 | ✅ |
+| `encoder/sequence.rs` | 584 | 1000 | ✅ |
+| `backend/cpu/simd.rs` | 539 | 1000 | ✅ |
+| `encoder/rle_cabac.rs` | 536 | 1000 | ✅ |
+| `core/entropy/context.rs` | 533 | 1000 | ✅ |
+| `encoder/intra_probe.rs` | 335 | 1000 | ✅（探针保留为回归锚点）|
+| `encoder/intra_transform.rs` | 264 | 1000 | ✅ |
+| `decoder/intra_transform.rs` | 214 | 1000 | ✅ |
 
-> 800 行以上预警文件：后续新增测试应建立独立领域文件（参照 `closed_loop_tests.rs` 先例），不得回填。
+> 原预警文件已全部拆分收敛：`encoder/tests.rs`(980) → `encoder/tests/{lossy,roundtrip,rct_bypass,mod}.rs`（≤338）；
+> `test/mod.rs`(~985) → `test/{batch,mod,probe}.rs`（≤252）；`format/prediction.rs`(800) → `core/prediction/intra.rs`(714)。
+> 当前全项目无 ≥800 行文件；后续新增测试仍应建立独立领域文件（参照 `closed_loop_tests.rs` 先例），不得回填。

@@ -97,6 +97,19 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-monotonicity" {
+        // DAT.1 跨内容单调性验收探针（默认扫 test/png 下全部 x-y-z 组）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_monotonicity::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let input_dir = r"E:\CRF\test\png";
     let output_dir = r"E:\CRF\test\output\crf";

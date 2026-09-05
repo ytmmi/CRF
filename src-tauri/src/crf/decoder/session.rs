@@ -151,36 +151,50 @@ impl DecodeSession {
         let mut prev: Option<&ImageData> = None;
         for (i, frame) in result.frames.iter().enumerate() {
             let is_golden = result.frame_golden_refs.get(i).copied().unwrap_or(false);
-            let pixels = if i == 0 {
-                frame.pixels.clone()
-            } else if is_golden {
-                golden_base
+            let restored = if i == 0 {
+                frame.clone()
+            } else {
+                Self::restore_referenced(golden_base, prev, is_golden, frame)
+            };
+            out.push(restored);
+            prev = out.last();
+        }
+        out
+    }
+
+    /// 单帧时间维还原（i>0）：golden 参考叠加 `golden`，链式参考叠加 `prev`。
+    /// `restore_temporal` 与 `decode_bytes_streaming` 共用，保证恢复公式唯一。
+    fn restore_referenced(
+        golden: &ImageData,
+        prev: Option<&ImageData>,
+        is_golden: bool,
+        frame: &ImageData,
+    ) -> ImageData {
+        let pixels = if is_golden {
+            golden
+                .pixels
+                .iter()
+                .zip(&frame.pixels)
+                .map(|(a, b)| a + b)
+                .collect()
+        } else {
+            match prev {
+                Some(p) => p
                     .pixels
                     .iter()
                     .zip(&frame.pixels)
                     .map(|(a, b)| a + b)
-                    .collect()
-            } else {
-                match prev {
-                    Some(p) => p
-                        .pixels
-                        .iter()
-                        .zip(&frame.pixels)
-                        .map(|(a, b)| a + b)
-                        .collect(),
-                    None => frame.pixels.clone(),
-                }
-            };
-            out.push(ImageData {
-                width: frame.width,
-                height: frame.height,
-                bit_depth: frame.bit_depth,
-                color_format: frame.color_format,
-                pixels,
-            });
-            prev = out.last();
+                    .collect(),
+                None => frame.pixels.clone(),
+            }
+        };
+        ImageData {
+            width: frame.width,
+            height: frame.height,
+            bit_depth: frame.bit_depth,
+            color_format: frame.color_format,
+            pixels,
         }
-        out
     }
 
     /// 通过统一帧包走分派层 → 重建层
@@ -193,5 +207,97 @@ impl DecodeSession {
         packet.header.write_bytes(&mut buf)?;
         buf.extend_from_slice(packet.payload);
         dispatch_frame(&buf, header)
+    }
+
+    /// 流式解码 + 时间维还原：逐帧回调还原后的完整帧，不整体持有全部帧。
+    ///
+    /// 与 [`Self::decode_bytes`] + [`Self::restore_temporal`] 语义完全一致，
+    /// 但内存为 O(golden + 单帧)，适用于 >50 帧大序列的逐帧质量度量。
+    /// 回调接收 (帧序号, 还原后的完整帧)；返回 `Err` 即中止解码。
+    pub fn decode_bytes_streaming(
+        data: &[u8],
+        mut on_frame: impl FnMut(usize, &ImageData) -> CrfResult<()>,
+    ) -> CrfResult<()> {
+        if data.len() < HEADER_SIZE {
+            return Err(CrfError::InsufficientData {
+                expected: HEADER_SIZE,
+                actual: data.len(),
+            });
+        }
+
+        let header = CrfHeader::from_bytes(data)?;
+        header.validate()?;
+
+        // 帧索引区（流式解码仅需跳过，逐帧顺序读取）
+        let frames_start = if header.flags.has_index() {
+            HEADER_SIZE + header.frame_count as usize * 8
+        } else {
+            HEADER_SIZE
+        };
+
+        let has_rct = header.flags.has_rct();
+        let skip_first = header.flags.first_frame_no_rct();
+        let components = header.color_format.component_count();
+
+        // 时间维还原状态：golden 基准（还原后的 frame0）+ 前一还原帧
+        let mut golden_base: Option<ImageData> = None;
+        let mut prev: Option<ImageData> = None;
+
+        let mut current_offset = frames_start;
+        for i in 0..header.frame_count as usize {
+            if current_offset + FRAME_HEADER_SIZE > data.len() {
+                return Err(CrfError::InsufficientData {
+                    expected: current_offset + FRAME_HEADER_SIZE,
+                    actual: data.len(),
+                });
+            }
+            let frame_size = u32::from_le_bytes([
+                data[current_offset],
+                data[current_offset + 1],
+                data[current_offset + 2],
+                data[current_offset + 3],
+            ]) as usize;
+            let frame_end = current_offset + FRAME_HEADER_SIZE + frame_size;
+            if frame_end > data.len() {
+                return Err(CrfError::InsufficientData {
+                    expected: frame_end,
+                    actual: data.len(),
+                });
+            }
+
+            let frame_data = &data[current_offset..frame_end];
+            let fh = FrameHeader::from_bytes(frame_data)?;
+            let packet = FramePacket::new(fh, &frame_data[FRAME_HEADER_SIZE..], current_offset);
+            let mut frame = Self::reconstruct_packet(&packet, &header)?;
+
+            // 逆向色彩变换（与 decode_bytes 出口语义一致：frame0 直通时跳过）
+            if has_rct && !(skip_first && i == 0) {
+                frame.pixels =
+                    crate::crf::core::color::rct::rct_inverse(&frame.pixels, components)?;
+            }
+
+            let is_golden = packet.header.is_golden_ref();
+            let restored = if i == 0 {
+                frame.clone()
+            } else if is_golden {
+                Self::restore_referenced(golden_base.as_ref().expect("golden base set"), None, true, &frame)
+            } else {
+                Self::restore_referenced(
+                    golden_base.as_ref().expect("golden base set"),
+                    prev.as_ref(),
+                    false,
+                    &frame,
+                )
+            };
+
+            on_frame(i, &restored)?;
+
+            if i == 0 {
+                golden_base = Some(restored.clone());
+            }
+            prev = Some(restored);
+            current_offset = frame_end;
+        }
+        Ok(())
     }
 }
