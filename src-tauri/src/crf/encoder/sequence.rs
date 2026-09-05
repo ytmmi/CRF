@@ -298,15 +298,30 @@ pub(crate) fn encode_sequence_resolved(
                 // 闭环 per-band 自适应步长（噪声归一化）：失真稠密的条带
                 // 死区加宽，静止为主的条带保持基础步长精细度。
                 let band_steps: Vec<u8> = if noise_on {
-                    use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
-                    estimate_band_quant_steps(
-                        &eff_frame.pixels,
-                        eff_frame.width as usize,
-                        eff_frame.height as usize,
-                        components,
-                        fq.step,
-                        tuning.noise_tau_x100,
-                    )
+                    use crate::crf::core::perceptual::noise::{
+                        band_activity_enabled, estimate_band_activity_steps,
+                        estimate_band_quant_steps,
+                    };
+                    if band_activity_enabled() {
+                        // P4.2 activity masking 探针：空间梯度能量步长（纹理增步长省码率）
+                        estimate_band_activity_steps(
+                            &eff_frame.pixels,
+                            eff_frame.width as usize,
+                            eff_frame.height as usize,
+                            components,
+                            fq.step,
+                            100,
+                        )
+                    } else {
+                        estimate_band_quant_steps(
+                            &eff_frame.pixels,
+                            eff_frame.width as usize,
+                            eff_frame.height as usize,
+                            components,
+                            fq.step,
+                            tuning.noise_tau_x100,
+                        )
+                    }
                 } else {
                     Vec::new()
                 };

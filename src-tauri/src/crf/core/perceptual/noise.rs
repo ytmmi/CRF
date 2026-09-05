@@ -98,6 +98,72 @@ pub fn estimate_band_quant_steps(
     steps
 }
 
+/// 由差分帧推导**逐条带 activity 自适应量化步长表**（P4.2 activity masking 探针）
+///
+/// 与 [`estimate_band_quant_steps`]（amp25 幅度感知，一阶统计）互补：
+/// 本函数基于**空间梯度能量**（二阶统计）区分「密集纹理」与「平坦渐变」——
+/// 纹理区的量化噪声被纹理自身掩盖，可加宽死区省码率；平坦/渐变区的量化
+/// 噪声以 banding 形式可见，保持基础步长精细度。amp25 无法区分这两者
+/// （二者都可能有中等幅度残差）。
+///
+/// 度量：每行 Y 分量水平梯度 `|Y[x] − Y[x−1]|` 的条带均值（Y 主导视觉，
+/// 3 分量交织时取分量 0）。
+///
+/// ```text
+/// Q_eff(band) = clamp(base_step + round(avg_grad × strength_x100/100), base_step, Q_BAND_CAP)
+/// ```
+///
+/// 解码端无感（与 [`estimate_band_quant_steps`] 相同的自描述残差语义，
+/// 格式零改动）。单向增步长（省码率），不减小步长——防 banding 的减步长
+/// 属质量优先语义，另行评估。
+pub fn estimate_band_activity_steps(
+    pixels: &[i32],
+    width: usize,
+    height: usize,
+    components: usize,
+    base_step: u8,
+    strength_x100: u16,
+) -> Vec<u8> {
+    let band_h = BAND_HEIGHT;
+    let bands = height.div_ceil(band_h).max(1);
+    let mut steps = vec![base_step; bands];
+    if components == 0 || pixels.is_empty() || width < 2 {
+        return steps;
+    }
+
+    let stride = width * components;
+    let mut grad_sum = vec![0u64; bands];
+    let mut grad_cnt = vec![0u64; bands];
+    for (y, row) in pixels.chunks_exact(stride).enumerate() {
+        let band = (y / band_h).min(bands - 1);
+        // Y 分量水平梯度（相邻像素同分量差，wrapping_sub 避免 debug 溢出 panic）
+        for x in 1..width {
+            let g = row[x * components]
+                .wrapping_sub(row[(x - 1) * components])
+                .unsigned_abs() as u64;
+            grad_sum[band] += g;
+            grad_cnt[band] += 1;
+        }
+    }
+
+    for band in 0..bands {
+        if grad_cnt[band] == 0 {
+            continue;
+        }
+        let avg_grad = grad_sum[band] / grad_cnt[band];
+        let delta = (avg_grad * strength_x100 as u64 / 100) as u32;
+        let cap = Q_BAND_CAP.saturating_sub(base_step) as u32;
+        steps[band] = base_step.saturating_add(delta.min(cap) as u8);
+    }
+    steps
+}
+
+/// 探针开关：环境变量 `CRF_BAND_ACTIVITY` 非空时启用 activity 步长策略，
+/// 替代默认的 amp25 噪声步长策略（仅实验标定用，不进入正式 V2 语义）。
+pub fn band_activity_enabled() -> bool {
+    std::env::var_os("CRF_BAND_ACTIVITY").is_some()
+}
+
 /// 条带级残差幅度阈值估计（交织多分量，含零中心性门控）
 ///
 /// 每分量统计带符号值直方图（值域 [-256,255]），推导：
@@ -379,5 +445,62 @@ mod tests {
                 assert_eq!(px[idx + 2], 0);
             }
         }
+    }
+
+    /// activity 步长估计：纹理条带（高梯度）步长应大于平坦条带（低梯度）
+    #[test]
+    fn test_activity_steps_texture_larger_than_flat() {
+        let w = 64usize;
+        let h = 64usize; // BAND_HEIGHT=32 → 2 条带
+        let comps = 3;
+        let mut px = vec![0i32; w * h * comps];
+        // 条带 0（前 32 行）：平坦（Y 全零，梯度=0）
+        // 条带 1（后 32 行）：纹理（Y 分量交替 ±100，高梯度）
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * comps;
+                if y >= 32 {
+                    px[idx] = if x % 2 == 0 { 100 } else { -100 };
+                }
+            }
+        }
+        let steps = estimate_band_activity_steps(&px, w, h, comps, 4, 100);
+        assert_eq!(steps.len(), 2, "BAND_HEIGHT=32 时 64 行应产生 2 条带");
+        assert_eq!(steps[0], 4, "平坦条带应保持基础步长");
+        assert!(
+            steps[1] > steps[0],
+            "纹理条带步长应大于平坦条带：{:?}",
+            steps
+        );
+    }
+
+    /// activity 步长估计退化输入：width<2 或空输入返回全基础步长
+    #[test]
+    fn test_activity_steps_degenerate_inputs() {
+        let empty = estimate_band_activity_steps(&[], 0, 0, 0, 5, 100);
+        assert!(empty.iter().all(|&s| s == 5));
+        let narrow = estimate_band_activity_steps(&[0; 3], 1, 1, 3, 5, 100);
+        assert!(narrow.iter().all(|&s| s == 5), "width<2 应保持基础步长");
+    }
+
+    /// activity 步长上限：极端高梯度条带步长不得超过 Q_BAND_CAP
+    #[test]
+    fn test_activity_steps_capped() {
+        let w = 32usize;
+        let h = 32usize;
+        let comps = 3;
+        let mut px = vec![0i32; w * h * comps];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * comps;
+                px[idx] = if x % 2 == 0 { 10000 } else { -10000 };
+            }
+        }
+        let steps = estimate_band_activity_steps(&px, w, h, comps, 4, 1000);
+        assert!(
+            steps.iter().all(|&s| s <= Q_BAND_CAP),
+            "步长不应超过 Q_BAND_CAP：{:?}",
+            steps
+        );
     }
 }
