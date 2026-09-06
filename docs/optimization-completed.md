@@ -1,8 +1,8 @@
 # CRF 优化已完成项清单（代码进度同步）
 
-**同步日期**：2026-08-26
-**基线版本**：v1.15 标定轮（含 P0~P6 + frame_type=8 正式格式化）
-**核对方式**：codegraph + 关键文件 Read + optimization-review.md §9~§23 实施记录交叉验证
+**同步日期**：2026-09-06
+**基线版本**：v1.15 标定轮（含 P0~P6 + frame_type=8 正式格式化 + P4.2/P4.3/P4.4 activity masking 接入 + S0/S1 探针）
+**核对方式**：codegraph + 关键文件 Read + optimization-review.md §9~§28 实施记录交叉验证
 **关联文档**：
 - [首帧优化规划](first-frame-optimization-plan.md)（本文件标注其已完成项，未完成项仍留在原文件）
 - [有损参数接口规划](lossy-tuning-interface-plan.md)（同上）
@@ -16,15 +16,15 @@
 
 | 规划阶段 | 总项数 | 已完成 | 部分完成 | 否决/关闭 | 未完成 |
 |---|---:|---:|---:|---:|---:|
-| 首帧规划 P0 闭环语义 | 5 | 5 | 0 | 0 | 0 |
+| 首帧规划 P0 闭环语义 | 6 | 6 | 0 | 0 | 0 |
 | 首帧规划 P1 标定 | 6 | 3 | 1 | 1 | 1 |
 | 首帧规划 P2 intra 路径 | 4 | 3 | 0 | 1（四叉树）| 0 |
 | 首帧规划 P3 系数熵编码 | 7 | 2 | 0 | 1（DC/AC 分离）| 4 |
-| 首帧规划 P4 感知量化 | 7 | 1 | 0 | 0 | 6 |
+| 首帧规划 P4 感知量化 | 7 | 4 | 0 | 2（P4.6/P4.7） | 1（P4.1 后置） |
 | 首帧规划 P5 序列优化 | 7 | 7 | 0 | 0 | 0 |
 | 首帧规划 P6 速度内存 | 12 | 10 | 0 | 0 | 2 |
 | 接口规划 V2 | 7 | 5 | 1 | 1 | 0 |
-| **合计** | **55** | **36** | **2** | **4** | **13** |
+| **合计** | **56** | **40** | **2** | **6** | **8** |
 
 > "部分完成"指阶段内部分子项落地；"否决/关闭"指经实测或架构判定不做。
 
@@ -44,6 +44,7 @@
 | P0.3 | 批量/streaming/文件解码统一用 decoded frame0 恢复 | `test/mod.rs` verify 改用 CRF 解码 frame0 | §9 P0 修复历史缺陷 | ✅ |
 | P0.4 | 单独报告首帧误差与残差误差 | `encoder/closed_loop_tests.rs` `p0_lossy_golden_no_reference_drift` | §9 P0-4 误差分解 | ✅ |
 | P0.5 | 锁定无损管线回归 | `cargo test` 117→124 passed | §9 全量回归 | ✅ |
+| P0.6 | streaming 首帧有损闭环（G_hat 对齐批量） | `encoder/streaming.rs` 首帧 push 本地重建 G_hat + header.lossy_quant 提前冻结 | §29 | ✅ 有损 golden 下 batch/streaming 逐字节一致（3 项新测试） |
 
 **关键不变量**：无损 golden 时 `G_hat == frames[0]`，产物与旧实现逐字节一致；有损 golden 时误差不再向后续帧传导。
 
@@ -122,14 +123,14 @@
 规划来源：[first-frame-optimization-plan.md §5-P4](first-frame-optimization-plan.md)
 
 | # | 规划项 | 代码位置 | 实施记录 | 状态 |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | P4.1 | luma/chroma 独立矩阵 | — | §11.1 | ❌ 后置（DCT 零胜出）|
-| P4.2 | activity masking | — | — | ❌ 未完成 |
-| P4.3 | 平坦区防 banding | — | — | ❌ 未完成 |
-| P4.4 | 线稿/锐边/文字保护 | — | — | ❌ 未完成 |
+| P4.2 | activity masking | `core/perceptual/noise.rs` `estimate_band_activity_steps` + V2 `perceptual.activityMaskingX100`（batch/streaming 双接入） | §28 前置 | ✅ 内核已接入（默认 100 中性；⚠️ 分类 reference 整数除法失效，见新待办）|
+| P4.3 | 平坦区防 banding | 同上 `flatAreaProtectionX100` | §28 前置 | ✅ 内核已接入（同上）|
+| P4.4 | 线稿/锐边/文字保护 | 同上 `edgeProtectionX100` | §28 前置 | ✅ 内核已接入（同上）|
 | P4.5 | 饱和色边防 bleeding | 色度下采样中值替代均值（边缘感知）| §20 P4 | ✅ |
-| P4.6 | RDOQ λ 与 Q_target 共同标定 | — | — | ❌ 未完成 |
-| P4.7 | 去振铃/去块后处理 | — | — | ❌ 未完成 |
+| P4.6 | RDOQ λ 与 Q_target 共同标定 | `core/transform/rdoq.rs` λ 参数化能力保留 | §28 S1 探针 | ❌ 冻结（DCT 零胜出根因不在 λ，λ 扫描整体收益 ≈0.9%）|
+| P4.7 | 去振铃/去块后处理 | — | §28 S0 探针 | ❌ 冻结（ringing 信号 ⊆ edge 信号，非独立）|
 
 ---
 
@@ -271,12 +272,23 @@
 | P3 | 专用系数熵编码器 | `encoder/coeff_cabac.rs` + `decoder/coeff_cabac.rs` | run-level 嵌入式（§21）|
 | frame_type=8 | 正式格式化 | `encoder/intra_transform.rs` + `decoder/intra_transform.rs` + `encoder/intra_transform_tests.rs` | 接入 adaptive 竞争 |
 
+### v1.15 后置探针轮（§28，2026-09-06）
+
+| 轮次 | 项目 | 代码位置 | 结论 |
+|---|---|---|---|
+| S0 | ringing 信号独立性探针 | `performance/probe_ringing.rs`（`--probe-ringing`） | P4.7 证伪：ringing ⊆ edge，非独立信号 |
+| S1 | RDOQ λ 敏感性探针 | `performance/probe_lambda.rs`（`--probe-lambda`）+ `core/transform/rdoq.rs` λ 参数化 | P4.6 冻结：DCT 零胜出根因不在 λ；附带证伪「λ 两档竞争」待办 |
+| P4.2~P4.4 | activity masking 三旋钮接入 | `core/perceptual/noise.rs` + batch/streaming 双路径 | ✅ 已接入；⚠️ reference 整数除法失效待修复 |
+
 ---
 
 ## 五、关键否决/关闭决策（避免重复投入）
 
 | 决策 | 来源 | 理由 |
-|---|---|---|
+|---|---|---|---|
+| **P4.7 ringing_control 第四分类** | §28 S0 探针 | Laplacian 高响应条带（ringing 风险信号）在真实二次元差分数据中罕见（0~4%），且出现时 100% 落在 edge 信号覆盖内——ringing 非独立信号，不值得第四分类内核；`ringing_control_x100` 冻结为「配置已定义、内核不消费」 |
+| **P4.6 RDOQ λ 标定** | §28 S1 探针 | λ∈[×0.25,×4] 全部扫描点 DCT+Trellis 体积恒大于 adaptive 胜出者；仅 ×0.1 极端档 3/13 帧小胜（整体收益 ≈0.9% < 3% 门槛）——DCT 零胜出根因不在 λ；`rdo_lambda_scale_x1000` 冻结（λ 参数化能力保留待未来重评） |
+| **Trellis λ 两档竞争（850/3400）待办** | §28 S1 探针 | λ≥×0.5 后 Trellis 输出饱和：425/850/1700/3400 四档产物体积完全相同，竞争无意义，从待办移除 |
 | golden_lossless=false 不放开 | §16 | 首帧误差注入残差能量暴增，多数组体积+质量双输；依赖 P2 预测后变换才能成立 |
 | 完整四叉树不做 | §13 R13 | 水平二分探针 −0.46%/−0.25%，条带头翻倍侵蚀收益，增量趋零 |
 | 量化矩阵工作后置 | §11.1 | DCT(type6) 全档零胜出，矩阵标定前提（变换域有竞争力）不成立 |
@@ -289,6 +301,11 @@
 | 量化步长帧级自适应 | §6.1#6 | 与 golden 统一质量语义冲突 |
 | 分层比特流随机访问 type=8（旧提案）| §6.1#7 | 伪需求（帧级 O(1) 已解决）|
 | ML 类全部 | §6.1#8/H14 | 项目规则禁止 |
+| **CoeffCABAC 方向扫描（P3.2）** | §30 合成内容探针 | 零收益——SAD 自适应预测后残差能量已集中低频，zigzag 本就是 8×8 DCT 最优扫描；freq_x/freq_y 主序扫描只重排系数，run-level 总字节不变 |
+| **CoeffCABAC 邻块上下文（P3.5）** | §30 合成内容探针 | ctx_nonzero 单 bit 熵低、单槽位自适应已逼近下限；4 槽位需"邻块 EOB 强相关"而合成内容未提供，唯一微弱信号（水平条纹 −1.3~−1.5%）远低于 3% 门槛 |
+| **activity_masking 纹理掩蔽（P4.2）** | §31 三旋钮标定 | +3.87% 负收益——band_steps None→Some 路径切换代价 + activity 增步长 delta 整数除法≈0（g−ref 仅 1~3），「省码率」从未发生 |
+| **flat_area_protection 平坦防 banding（P4.3）** | §31 三旋钮标定 | +3.87% 负收益——减步长保质量但基线已无 banding 可保护（PSNR +0.006dB），体积白增 |
+| **edge_protection 边缘保护（P4.4）** | §31 三旋钮标定 | +6.30% 负收益——减步长但基线已无 ringing 可保护（PSNR +0.009dB，印证 §28 S0 ringing⊆edge），体积白增 |
 
 ---
 
@@ -296,9 +313,12 @@
 
 已完成项见本文件。未完成项仍保留在原规划文档：
 
-- **首帧优化未完成项**：[first-frame-optimization-plan.md](first-frame-optimization-plan.md) P1.4、P3.2/P3.5~P3.7、P4.1~P4.4/P4.6/P4.7、P6 预测 SIMD 泛化/全局内存池
+- **首帧优化未完成项**：[first-frame-optimization-plan.md](first-frame-optimization-plan.md) P1.4、P3.2/P3.5~P3.7、P4.1、P4.6（已冻结，见否决表）、P4.7（已冻结，见否决表）、P6 预测 SIMD 泛化/全局内存池
+- **activity 分类框架修复（✅ 已闭环，§28）**：`estimate_band_activity_steps` 的 reference 整数除法稀疏差分场景退化缺陷已修复（`.max(1)` + `test_activity_steps_sparse_diff_reference_activates` 回归单测）；默认旋钮 100 中性下产物逐字节不变（函数不被调用）。三旋钮（P4.2/P4.3/P4.4）标定轮已由 §31 完成——**全部证伪关闭**（band_steps 路径切换代价 + delta 整数除法失效 + 基线无 banding/ringing 可保护，见否决表），默认保持 100 中性
+- **P5.1 previous 参考竞争 streaming 缺口（新待办，§29）**：batch 默认 V2 配置（reference_mode Auto→Hybrid）逐帧 previous 竞争（sequence.rs L516-585），streaming 恒 golden——默认配置下 batch/streaming 第 2 帧起可能不同（无损模式不受影响）。previous 竞争移植 streaming（含 previous 链式重建）另行立项
 - **接口规划未完成项**：[lossy-tuning-interface-plan.md](lossy-tuning-interface-plan.md) §13 项6「逐组接入参数」（部分）——新增算法字段（如 P1.6 Q_target 编号、量化矩阵、RDOQ λ 等）继续分阶段接入；UI 专家面板已提供 `expert_panel_schema()`，前端源码尚不存在
 - **变换域深化未完成项**：frame_type=8 收益验证、CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项）、top-2 试编码、矩形/4×4 块尺寸、Trellis/感知矩阵集成、端到端 CRF 文件级往返测试
+  - **其中 P3.2（方向扫描）与 P3.5（邻块上下文）已由 §30 合成内容探针证伪关闭**（收益 ≈0%，见否决表）；P3.6（小系数短码）/ P3.7（tile restart）维持未做、未证伪。
 
 ---
 

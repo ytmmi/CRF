@@ -33,10 +33,7 @@ pub fn run(dir: &str) -> Result<(), String> {
         return Err(format!("{dir}: 首帧非 RGB"));
     }
     println!("=== first-frame candidate probe ===");
-    println!(
-        "group: {dir}  首帧 {}x{}\n",
-        frame.width, frame.height
-    );
+    println!("group: {dir}  首帧 {}x{}\n", frame.width, frame.height);
 
     // 与路径 G 首帧一致：RCT 去相关到 Y/Co/Cg 域。
     let ycocg = rct::rct_forward(&frame.pixels, 3).map_err(|e| e.to_string())?;

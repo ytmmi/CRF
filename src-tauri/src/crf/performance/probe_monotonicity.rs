@@ -96,12 +96,21 @@ pub fn run(root: &str) -> Result<(), String> {
         let psnr_ok = hi.global_psnr >= lo.global_psnr;
         let bytes_flag = if bytes_ok { "✓" } else { "✗" };
         let psnr_flag = if psnr_ok { "✓" } else { "✗" };
-        let verdict = if bytes_ok && psnr_ok { "通过" } else { "倒挂" };
+        let verdict = if bytes_ok && psnr_ok {
+            "通过"
+        } else {
+            "倒挂"
+        };
         println!(
             "q{} → q{}: bytes {} -> {} [{}], global_psnr {:.2} -> {:.2} [{}]  => {verdict}",
-            lo.quality, hi.quality,
-            lo.total_bytes, hi.total_bytes, bytes_flag,
-            lo.global_psnr, hi.global_psnr, psnr_flag,
+            lo.quality,
+            hi.quality,
+            lo.total_bytes,
+            hi.total_bytes,
+            bytes_flag,
+            lo.global_psnr,
+            hi.global_psnr,
+            psnr_flag,
         );
         if !(bytes_ok && psnr_ok) {
             all_ok = false;
@@ -110,7 +119,11 @@ pub fn run(root: &str) -> Result<(), String> {
 
     println!(
         "\n=== 结论: {} ===",
-        if all_ok { "跨内容单调性通过 ✓" } else { "存在单调性倒挂 ✗" }
+        if all_ok {
+            "跨内容单调性通过 ✓"
+        } else {
+            "存在单调性倒挂 ✗"
+        }
     );
     Ok(())
 }
@@ -249,5 +262,8 @@ fn enumerate_groups(root: &str) -> Result<Vec<PathBuf>, String> {
 /// x-y-z 命名判定：三段均非空且全为 ASCII 数字。
 fn is_x_y_z(name: &str) -> bool {
     let parts: Vec<&str> = name.split('-').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }

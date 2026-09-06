@@ -11,8 +11,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
-use crate::crf::encoder::encode_sequence;
 use crate::crf::decoder::decode_from_bytes;
+use crate::crf::encoder::encode_sequence;
 use crate::crf::performance::telemetry;
 
 /// 测量轮数（不含预热）。
@@ -97,7 +97,10 @@ pub fn run(dir: &str) -> Result<(), String> {
         dec_p95.as_secs_f64() * 1000.0,
         megapixels_per_seq / (dec_p50.as_secs_f64().max(1e-9)),
     );
-    println!("bytes: {bytes}  ({:.3} B/像素)", bytes as f64 / (width * height * frame_count) as f64);
+    println!(
+        "bytes: {bytes}  ({:.3} B/像素)",
+        bytes as f64 / (width * height * frame_count) as f64
+    );
 
     let stage_report = telemetry::report();
     if !stage_report.is_empty() {

@@ -457,6 +457,7 @@ pub fn encode_frame_adaptive(
                         block_w,
                         block_h,
                         table,
+                        crate::crf::core::transform::rdoq::DEFAULT_LAMBDA_NUM,
                     );
                     let (payload, k) = rle_cabac::encode_frame_rle_cabac_adaptive(&t_coeff, None)?;
                     let flag_byte = k

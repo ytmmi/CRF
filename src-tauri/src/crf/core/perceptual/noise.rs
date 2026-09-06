@@ -180,8 +180,16 @@ pub fn estimate_band_activity_steps(
         })
         .collect();
 
-    // 中性参考 = 全帧平均梯度（含零 band，稳健区分纹理/平坦）
-    let reference = avg.iter().sum::<u64>() / bands as u64;
+    // 中性参考 = 全帧平均梯度（含零 band，稳健区分纹理/平坦）。
+    //
+    // §28 探针缺陷修复：整数除法 Σavg/bands 在稀疏差分场景（二次元
+    // 表情/口型差分主形态——静止条带占绝大多数、变化条带 avg 仅 1~3）
+    // 下恒退化为 0，触发 `reference == 0` 短路使三分分类整体失效，
+    // P4.2/P4.3/P4.4 三旋钮从未真正激活。修复为 `.max(1)`：reference
+    // 下限 1 保证稀疏差分下分类激活（nz_avg > 2 命中边缘、avg > 1
+    // 命中纹理），密集变化场景 Σavg/bands ≥ 1 时行为与修复前完全一致；
+    // 默认旋钮 100 中性下映射不改变任何产物，逐字节不变。
+    let reference = (avg.iter().sum::<u64>() / bands as u64).max(1);
 
     for band in 0..bands {
         let g = avg[band];
@@ -595,5 +603,42 @@ mod tests {
             "步长不应超过 Q_BAND_CAP：{:?}",
             steps
         );
+    }
+
+    /// §28 缺陷修复回归：稀疏差分场景（二次元表情/口型差分主形态——
+    /// 静止条带占绝大多数、变化条带 avg 仅 1~3）下 reference 不得退化为
+    /// 0，edge 分类必须激活。修复前 Σavg/bands 整数除法 = 0 触发短路、
+    /// 全部条带保持 base_step（分类整体失效）。
+    #[test]
+    fn test_activity_steps_sparse_diff_reference_activates() {
+        let w = 16usize;
+        let h = 57 * 32; // 57 条带（模拟 1000 组 1024×1820 的条带数）
+        let comps = 3;
+        let base = 6u8;
+        let mut px = vec![0i32; w * h * comps];
+        // 条带 3（行 96..128）：低梯度稀疏变化——每行仅 x=1 处一个 30，
+        // 其余全零（avg = 30/15 = 2，nz_avg = 30，稀疏大梯度形态）。
+        // 其余 56 条带完全静止。
+        for y in (3 * 32)..(4 * 32) {
+            let idx = (y * w + 1) * comps;
+            px[idx] = 30;
+        }
+        // 修复前：reference = Σavg/bands = 2/57 = 0 → 分类短路，全 base_step。
+        // 修复后：reference = max(0,1) = 1 → nz_avg=30 > 2 → edge 减步长。
+        let steps = estimate_band_activity_steps(&px, w, h, comps, base, 100, 100, 150);
+        assert_eq!(steps.len(), 57);
+        assert!(
+            steps[3] < base,
+            "稀疏差分变化条带应被 edge 分类保护（减步长），实际 {}",
+            steps[3]
+        );
+        for (band, &s) in steps.iter().enumerate() {
+            if band != 3 {
+                assert_eq!(s, base, "静止条带 {band} 应保持基础步长，实际 {s}");
+            }
+        }
+        // 中性旋钮下修复不改变任何产物（100/100/100 全 base）
+        let neutral = estimate_band_activity_steps(&px, w, h, comps, base, 100, 100, 100);
+        assert!(neutral.iter().all(|&s| s == base));
     }
 }

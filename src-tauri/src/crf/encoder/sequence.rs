@@ -86,12 +86,17 @@ pub(crate) fn encode_sequence_resolved(
     let estimated_bytes = per_frame_bytes
         .checked_mul(frame_count as usize)
         .unwrap_or(usize::MAX);
-    const BATCH_MEM_LIMIT: usize = 1_500_000_000; // 1.5 GB 保守阈值
-    if estimated_bytes > BATCH_MEM_LIMIT {
+    // batch 内存阈值：默认 1.5 GB 保守值，CRF_BATCH_MEM_LIMIT 环境变量可放宽
+    // （标定/基准大图组需要帧级并行时由调用方显式提升；生产默认不变）。
+    let batch_mem_limit: usize = std::env::var("CRF_BATCH_MEM_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1_500_000_000);
+    if estimated_bytes > batch_mem_limit {
         return Err(CrfError::InvalidCodingParams(format!(
-            "batch 接口预估内存 {:.2} GB 超过 {:.1} GB 限制；大图组请用 streaming 路径（CRF_STREAMING=1）",
+            "batch 接口预估内存 {:.2} GB 超过 {:.1} GB 限制；大图组请用 streaming 路径（CRF_STREAMING=1）或调高 CRF_BATCH_MEM_LIMIT",
             estimated_bytes as f64 / 1_000_000_000.0,
-            BATCH_MEM_LIMIT as f64 / 1_000_000_000.0,
+            batch_mem_limit as f64 / 1_000_000_000.0,
         )));
     }
 

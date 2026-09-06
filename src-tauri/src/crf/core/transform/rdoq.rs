@@ -30,7 +30,11 @@ use super::quant::quant_scalar;
 /// （失真 ≥ Q²）换省 1 bit」需 8.5Q² < 100 才成立——即仅 Q≤3 的
 /// 低步长档允许小幅值偏移；±1 级内的半级舍入差（≈Q²/4）则可被
 /// 游程收益吸收。这恢复了 x264 λ≈0.85Q² 在其率模型下的等效行为。
-const LAMBDA_NUM: i64 = 850;
+///
+/// P4.6 探针参数化：`trellis_block` / `trellis_quantize_*` 接受显式
+/// `lambda_num`（默认 850），供 λ 敏感性扫描探针运行时切换；生产
+/// 调用点固定传 850，码流逐字节不变。
+pub const DEFAULT_LAMBDA_NUM: i64 = 850;
 const LAMBDA_DEN: i64 = 100;
 
 /// Golomb-Rice(k=2) 经验位长：商一元码 + 余数固定位
@@ -62,8 +66,9 @@ fn rate_bits(level: i32, prev_zero: bool) -> i64 {
 /// 单块 Trellis DP（Viterbi 三遍式：候选展开 → 前向 → 回溯）
 ///
 /// `block`：块内原始 DCT 系数（行优先）；`qpos`：逐位置有效步长；
+/// `lambda_num`：λ 系数分子（默认 [`DEFAULT_LAMBDA_NUM`]=850）；
 /// 返回优化后的量化系数块（各位置 Q_pos 倍数）。
-fn trellis_block(block: &[i32], qpos: &[i32]) -> Vec<i32> {
+fn trellis_block(block: &[i32], qpos: &[i32], lambda_num: i64) -> Vec<i32> {
     let n = block.len();
 
     // Pass 1：逐位候选集 {near−1, near, near+1, 0} 去重 + 失真预计算
@@ -106,7 +111,7 @@ fn trellis_block(block: &[i32], qpos: &[i32]) -> Vec<i32> {
                     continue;
                 }
                 let total =
-                    c + LAMBDA_NUM * cand_errs[p][ci] + rate_bits(lv, t_src == 1) * LAMBDA_DEN;
+                    c + lambda_num * cand_errs[p][ci] + rate_bits(lv, t_src == 1) * LAMBDA_DEN;
                 if total < ndp[t_new] {
                     ndp[t_new] = total;
                     nparent[t_new] = ((ci as u8) << 1) | (t_src as u8);
@@ -135,6 +140,7 @@ fn trellis_block(block: &[i32], qpos: &[i32]) -> Vec<i32> {
 /// 完整块走 Trellis DP；边界残缺块沿用基础步长平量化，
 /// 与矩阵版量化器的几何透传行为一致。`qm=None` 时退化为 flat 矩阵
 /// 量化（权重恒 ×1.0，无 Trellis——flat 场景收益归零，避免白跑 DP）。
+/// `lambda_num`：λ 系数分子（默认 [`DEFAULT_LAMBDA_NUM`]=850）。
 #[allow(clippy::too_many_arguments)]
 pub fn trellis_quantize_coeffs(
     coeffs: &[i32],
@@ -144,6 +150,7 @@ pub fn trellis_quantize_coeffs(
     qm: Option<&[u32]>,
     block_w: usize,
     block_h: usize,
+    lambda_num: i64,
 ) -> Vec<i32> {
     assert!(
         is_valid_rect(block_w, block_h),
@@ -211,7 +218,7 @@ pub fn trellis_quantize_coeffs(
                             };
                         }
                     }
-                    let quantized = trellis_block(&block, &qpos);
+                    let quantized = trellis_block(&block, &qpos, lambda_num);
                     for r in 0..block_h {
                         for c in 0..block_w {
                             out[(by + r) * width + (bx + c)] = quantized[r * block_w + c];
@@ -228,6 +235,7 @@ pub fn trellis_quantize_coeffs(
 ///
 /// 与 `dct_path::dct_quantize_interleaved_bs(..., use_qm=true)` 的
 /// 解包/变换几何完全一致，仅量化环节替换为 Trellis DP。
+/// `lambda_num`：λ 系数分子（默认 [`DEFAULT_LAMBDA_NUM`]=850）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn trellis_quantize_interleaved(
     pixels: &[i32],
@@ -238,6 +246,7 @@ pub(crate) fn trellis_quantize_interleaved(
     block_w: usize,
     block_h: usize,
     qm_table: &[u32],
+    lambda_num: i64,
 ) -> Vec<i32> {
     let quant_plane = |plane: &[i32]| -> Vec<i32> {
         let coeffs = dct_plane_forward_bs(plane, width, height, block_w, block_h);
@@ -249,6 +258,7 @@ pub(crate) fn trellis_quantize_interleaved(
             Some(qm_table),
             block_w,
             block_h,
+            lambda_num,
         )
     };
 
@@ -277,7 +287,7 @@ mod tests {
     fn test_trellis_q1_identity() {
         let coeffs: Vec<i32> = (-500..500).collect();
         let qm = [64u32; 16];
-        let out = trellis_quantize_coeffs(&coeffs, 40, 25, 1, Some(&qm), 4, 4);
+        let out = trellis_quantize_coeffs(&coeffs, 40, 25, 1, Some(&qm), 4, 4, DEFAULT_LAMBDA_NUM);
         assert_eq!(coeffs, out, "Q=1 时 Trellis 应精确还原");
     }
 
@@ -297,7 +307,7 @@ mod tests {
         }
         let qm = [64u32; 16];
         let baseline = quantize_coeffs_with_matrix(&coeffs, 16, 16, 5, &qm, 4, 4, false);
-        let out = trellis_quantize_coeffs(&coeffs, 16, 16, 5, Some(&qm), 4, 4);
+        let out = trellis_quantize_coeffs(&coeffs, 16, 16, 5, Some(&qm), 4, 4, DEFAULT_LAMBDA_NUM);
         let abs_sum_base: i64 = baseline.iter().map(|&v| v.unsigned_abs() as i64).sum();
         let abs_sum_out: i64 = out.iter().map(|&v| v.unsigned_abs() as i64).sum();
         assert!(
@@ -318,7 +328,7 @@ mod tests {
         let qm = [
             64u32, 68, 80, 96, 68, 80, 96, 112, 80, 96, 112, 128, 96, 112, 128, 144,
         ];
-        let out = trellis_quantize_coeffs(&coeffs, 40, 15, 5, Some(&qm), 4, 4);
+        let out = trellis_quantize_coeffs(&coeffs, 40, 15, 5, Some(&qm), 4, 4, DEFAULT_LAMBDA_NUM);
         for by in (0..h).step_by(4) {
             for bx in (0..w).step_by(4) {
                 // 与实现一致的块级完整性判定：残缺块整块走基础步长

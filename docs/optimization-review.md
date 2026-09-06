@@ -14,7 +14,7 @@
 | 优先级 | 项目 | 说明 |
 |---|---|---|
 | 🔴 高 | IntraBC 差分帧启用 | 排查 planar 场景 type=7 交互缺陷后放开（唯一正确性相关待办） |
-| 🟡 中 | Trellis λ 两档竞争（850/3400）| 解码透明零格式改动，有损再压 1~3% |
+| 🟡 中 | ~~Trellis λ 两档竞争（850/3400）~~ | §28 S1 探针证伪移除：λ≥×0.5 后 Trellis 输出饱和，850/3400 产物体积完全相同 |
 | 🟡 中 | 测试集扩展（赛璐璐/厚涂/像素画 + 差分类型）| 解锁 τ 视觉掩蔽联动（H9）等数据驱动项 |
 | 🟢 低 | SAD 决策 rayon 并行化 | 8 模式并行排序，纯速度优化 |
 | 🟢 低 | MA 树第四属性 \|top_right\| | 边际收益 <1% |
@@ -1558,6 +1558,230 @@ DCT 正逆变换在逐块热路径中的堆分配，不改变变换数学、量�
 **影响**：通用分块路径由每块 2 次堆分配（矩形为 3 次）降为 0；公开兼容
 包装仍保留单次返回值分配。优化只改变缓冲所有权，不改变文件格式。
 
+## 28. 感知四旋钮前置验证：S0 ringing 信号探针 + S1 RDOQ λ 敏感性探针（2026-09-06）
+
+**目标**：在投入 P4.7（ringing 内核）与 P4.6（RDOQ λ 标定）之前，先用
+探针回答两个前置问题——ringing 是否独立于已有 edge 信号、DCT 有损零胜出的
+根因是否在 Trellis λ。两项均为纯探针，不接入生产路径。
+
+**代码支撑**（本轮新增，码流零改动）：
+- `core/transform/rdoq.rs`：λ 参数化——`trellis_block`/`trellis_quantize_coeffs`/
+  `trellis_quantize_interleaved` 增加 `lambda_num` 参数（`DEFAULT_LAMBDA_NUM`=850）；
+  生产调用点（candidate.rs）固定传 850，逐字节一致；trellis 3 项单测通过、
+  `test_1000/2000_group_lossy_encode_decode` + `p0_lossy_golden_no_reference_drift`
+  等 16 项 lossy 回归全部通过。
+- `performance/probe_ringing.rs`（`--probe-ringing`）：差分帧（golden 差分 +
+  RCT，与路径 G 一致）逐条带统计 grad_avg/nz_avg（edge 判定）与 Laplacian
+  响应 P90（ringing 风险信号），输出对照与邻域重叠率。
+- `performance/probe_lambda.rs`（`--probe-lambda`）：q90 生产参数（V2 resolved）
+  下跑完整 adaptive 取胜出体积，复刻 DCT 6 变体竞争 + Trellis λ ∈
+  {85,212,425,850,1700,3400}（×0.1~×4）扫描。
+
+### S0：ringing 信号独立性——P4.7 证伪
+
+| 组 | 条带数 | edge（修复前） | edge（修复后） | edge（f64 对照） | lap_high | lap_high∩edge（修复后） |
+|---|---:|---:|---:|---:|---:|---:|
+| 1000（14 帧） | 741 | **0（0.0%）** | 77（10.4%） | 417（56.3%） | 30（4.0%） | 29（96.7%） |
+| 2-1-2（2 帧） | 128 | **0（0.0%）** | 93（72.7%） | 128（100%） | 0（0.0%） | — |
+| 10-2-14（10 帧） | 2210 | **0（0.0%）** | 1358 见注（61.4%） | — | 0（0.0%） | — |
+
+> 注：修复后重跑 1000/2-1-2 两组完整验证；10-2-14 组 lap_high=0，
+> edge 修复后激活率与 f64 对照一致（61.4%），未单独重跑。
+
+两个结论：
+
+1. **P4.7 ringing_control 第四分类证伪**：ringing 风险信号（Laplacian 高响应
+   条带）在真实二次元差分数据中极其罕见（0~4%），且出现时几乎全部（96.7%，
+   f64 对照语义 100%）落在 edge 信号覆盖范围内。ringing 不是独立于 edge 的
+   第四信号——**不值得为 `ringing_control_x100` 投入第四分类内核**。该字段
+   维持「配置已定义、内核不消费」状态，列入否决表。
+
+2. **附带重大发现——P4.2/P4.3/P4.4 activity 分类 reference 失效（已修复）**：
+   原 `reference = Σavg / bands`（整数除法）在稀疏差分场景（二次元表情/口型
+   差分主形态）下恒退化为 0，触发 `reference == 0` 短路使三分分类整体失效，
+   三旋钮从未真正激活（探针实测修复前 edge 激活率 0%）。
+   **修复（2026-09-06）**：`reference = (Σavg / bands).max(1)` 一行改动——
+   稀疏差分下 reference 下限 1，edge（nz_avg > 2）/纹理（avg > 1）分类激活；
+   密集变化场景（Σavg/bands ≥ 1）行为与修复前逐式一致；**默认旋钮 100 中性
+   下该函数根本不被调用（activity_on 为假），产物逐字节不变**。回归：
+   新增 `test_activity_steps_sparse_diff_reference_activates`（57 条带稀疏
+   差分合成场：修复前全 base、修复后变化条带被 edge 保护），activity 6 项
+   单测全过。修复后 S0 重跑：1000 组 edge 激活率 0%→10.4%，2-1-2 组
+   0%→72.7%，lap_high 96.7% 落在 edge 邻域（P4.7 证伪结论不变）。
+   修复后 S1 重跑：λ 扫描结果逐帧一致（3/13 @×0.1，其余 0），P4.6 冻结
+   结论不变。三旋钮标定轮的前提（分类框架正确激活）自此成立，另行立项。
+
+### S1：RDOQ λ 敏感性——P4.6 冻结
+
+1000 组 q90（step=2，13 个差分帧，winner 全部为 type3 planar，DCT 胜出 0）：
+
+| λ | ×倍率 | DCT(Trellis) 体积 < 胜出者 | 备注 |
+|---|---:|---:|---|
+| 85 | ×0.10 | 3/13（帧 1/2/9，−16%/−3.7%/−3.3%） | 极端失真主导档 |
+| 212 | ×0.25 | 0/13 | |
+| 425 | ×0.50 | 0/13 | |
+| 850 | ×1.00 | 0/13 | 当前默认 |
+| 1700 | ×2.00 | 0/13 | |
+| 3400 | ×4.00 | 0/13 | 与 850 输出完全相同 |
+
+结论：
+
+1. **DCT 零胜出的根因不在 λ**：除 ×0.1 极端值外，全部扫描点 DCT+Trellis
+   体积恒大于 adaptive 胜出者；×0.1 档 3 帧小胜的加权整体收益 ≈0.9%
+   （约 25KB / 2.9MB），远低于 3% 净收益门槛。reference 修复后重跑结果
+   逐帧一致（结论不变）。
+2. **λ ≥ ×0.5 后 Trellis 输出饱和不变**（425/850/1700/3400 四档产物体积
+   完全相同）→ 待办清单「Trellis λ 两档竞争（850/3400）」同被证伪：两档
+   输出相同，竞争无意义，从待办移除。
+3. **P4.6（RDOQ λ 与 Q_target 联合标定）冻结**：λ 标定无法让 DCT 翻盘。
+   `rdo_lambda_scale_x1000` 字段维持「配置已定义、内核不消费」状态；λ 参数化
+   能力保留（`lambda_num` 参数已就位），供未来变换域竞争力变化后重新评估。
+
+### 文档落账
+
+- 否决/关闭：P4.6、P4.7 加入 [optimization-completed.md](optimization-completed.md)
+  否决表；`ringing_control_x100` 与 `rdo_lambda_scale_x1000` 标记为冻结字段；
+- 修复：activity 分类 reference 失效已修复（`.max(1)`，一行改动 + 稀疏差分
+  回归单测）；三旋钮标定轮前提成立，另行立项。
+
+## 29. streaming 首帧有损闭环（P0 对齐，2026-09-06）
+
+**目标**：streaming 路径在有损 golden（V2 `FirstFrameMode` 非 Lossless——
+MatchSequence 默认即如此）下，差分参考必须与批量路径同样使用本地重建 G_hat，
+消除首帧量化误差向全部差分帧传导的漂移。
+
+**缺陷**：streaming `push_frame` 首帧分支保存 `frame.pixels.clone()`（**原始帧**）
+为 golden 差分基准，而解码端用 G_hat 还原——有损 golden 时 `G_hat + residual`
+会把首帧量化误差传导进全部后续帧（P0 闭环在 streaming 缺失；批量路径 §9 两阶段
+闭环已修复，streaming 此前依赖 `first_frame_step=0` 的默认无损档回避了问题）。
+
+**修复**（`encoder/streaming.rs` 首帧分支）：
+1. 首帧编码（RCT 双路竞争）后、重建前：`header.lossy_quant` 提前冻结并
+   `set_has_lossy_quant`（frame_type=8 反量化需要；finish 时重复设置幂等，
+   与批量 resolve 期冻结文件头语义一致）；
+2. 本地闭环重建 `G_hat = reconstruct_frame(&data, &header)`，按
+   `has_rct && !first_frame_no_rct` 判定 rct_inverse（与批量阶段 1c 同式）；
+3. `golden_rgb = G_hat` 替代原始帧；差分帧分支零改动（sub_i32 自动消费）。
+
+**测试**（streaming_tests +3，均以 `reference_mode=Golden` 限定全 golden 语义）：
+- `test_streaming_lossy_golden_closed_loop_matches_batch`：q90 有损 golden 下
+  batch/streaming **逐字节一致**（前提断言首帧确有量化失真——闭环非平凡）；
+- `test_streaming_lossy_golden_decode_semantics`：解码语义——G_hat 有损重建、
+  与批量解码逐像素一致（首帧加非线性尖峰扰动，避免分段线性渐变被空间预测
+  完美吸收导致量化零失真的退化）；
+- `test_streaming_lossy_golden_quality_offset_matches_batch`：首帧 QualityOffset
+  （first_frame_step ≠ global_step）档位分离路径同样逐字节一致。
+
+**回归**：streaming 7/7（4 旧 + 3 新）、closed_loop 5/5（含
+p0_lossy_golden_no_reference_drift）、roundtrip 53/53 全过；码流默认产物
+（first_frame 无损配置）不受影响。
+
+**附带发现——P5.1 previous 参考竞争在 streaming 未实现（新待办）**：
+调试中发现 batch 在默认 V2 配置（`reference_mode` Auto→Hybrid）下会逐帧跑
+previous 参考竞争（sequence.rs L516-585，含 change_mask/场景切换），streaming
+恒 golden。因此**默认配置下 batch/streaming 的第 2 帧起可能不同**（previous 候选
+胜出，data[9] 无 golden 位）——既有缺口，非本次闭环修复引入（无损模式不受影响：
+lossy=None 时 reference_mode=Golden 不触发竞争）。previous 竞争移植到 streaming
+（含 previous 链式重建）另行立项；在此之前 streaming 的有损语义为全 golden。
+
 编解码器目录和职责重构统一见
 [`codec-architecture-refactor-plan.md`](codec-architecture-refactor-plan.md)；在解除
 decoder→encoder 反向依赖、拆分容器/帧管线并通过 P0/P1 回归前，不应把 GPU 后端接入生产路径。
+
+## 30. CoeffCABAC 上下文深化证伪：方向扫描 / 邻块上下文合成内容探针（2026-09-06）
+
+**目标**：在投入 P3.2（方向扫描）/ P3.5（邻块上下文）正式化之前，用**合成内容
+探针**（零外部数据集、零 decoder 改动）验证两个深化方向在系数编码上的字节收益
+是否达到 ≥3% 门槛。对应 §24/§25 遗留的"CoeffCABAC 上下文建模深化（§5-P3 第
+5~7 项）未做"。
+
+**代码支撑**（本轮新增，码流零改动、纯编码端实验）：
+- `performance/coeff_ctx_probe.rs`（`--probe-coeff-ctx`，无参数）：程序生成的 6 类
+  合成内容（水平/垂直/斜向条纹、随机噪声、棋盘混合、渐变+斑块）× 双档量化
+  （step=1/4），跑 frame_type=8 完整闭环（SAD 选 DC/H/V/MED → transform skip/DCT8
+  → 量化 → 系数编码），对比 5 个变体的系数编码字节：
+  - B（基线）：固定 zigzag + 单槽位 ctx_nonzero；
+  - V1a/V1b（方向扫描）：H/V 模式改用 freq_x/freq_y 主序扫描（两种映射）；
+  - V2（邻块上下文）：ctx_nonzero 4 槽位（按左/上块 EOB 索引）；
+  - V3（组合）：方向扫描 + 邻块上下文。
+
+**结果**（256×256 合成平面，字节 vs 基线，双档量化一致）：
+
+| 内容 | 方向扫描 V1a/V1b | 邻块上下文 V2 | 组合 V3 |
+|---|---|---|---|
+| 水平/垂直条纹 | ±0.0% | **−1.3~−1.5%**（唯一微弱信号） | −1.3~−1.5% |
+| 斜向条纹 | +0.0% | +0.0% | +0.0% |
+| 随机噪声 / 棋盘 / 渐变斑块 | −0.1%~+0.0% | +0.0% | −0.1%~+0.0% |
+
+**证伪结论**（两方向均 <3%，实际 ≈0%）：
+
+1. **方向扫描证伪**：即使斜向条纹（残差大、DCT 系数大量非零，B=49355 字节），
+   方向扫描也零收益——根因是块级 SAD 自适应预测已使残差能量集中在低频，zigzag
+   （低频优先对角扫描）本就是 8×8 DCT 的最优扫描；方向性条纹更被预测完美消除
+   （残差≈0）。freq_x/freq_y 主序扫描只是重排系数，run-level 总字节不变。
+
+2. **邻块上下文证伪**：ctx_nonzero 只编码"块是否全零"一个 bit，量化后全零块
+   占比高、该 bit 熵低（高度偏斜），单槽位自适应已逼近理论下限；4 槽位（左/上
+   块 EOB 索引）的增量收益需要"邻块 EOB 强相关"，合成内容（棋盘交替）未提供
+   足够相关性。唯一微弱信号（水平条纹 −1.3~−1.5%）远低于 3% 门槛。
+
+**裁决**：
+1. 方向扫描（P3.2）与邻块上下文（P3.5）在合成内容上均证伪，**不进入正式路径**；
+2. 与项目既有证伪先例一致（R6 噪声感知自动启用、S0 ringing 非独立信号、S1 λ
+   敏感性 ≈0.9%），CoeffCABAC 深化方向就此关闭——合成内容（理论上最易兑现收益的
+   场景）都无 ≥3% 收益，真实二次元数据（帧率更低、分布更分散）更不可能；
+3. 探针保留为回归锚点（`--probe-coeff-ctx`），供未来内容形态变化时复测；
+4. CoeffCABAC 维持 4 上下文最小版（§24 已接入），不再深化。
+
+**门禁**：clippy 零告警（新文件）；probe 4 项单测通过；
+`neighbor_ctx_fixed_index_equals_single_slot` 锁定实验变体与正式编码器逻辑等价。
+
+## 31. P4.2/P4.3/P4.4 activity masking 三旋钮标定：全部证伪（2026-09-06）
+
+**目标**：§28 修复 reference 整数除法后，activity 分类框架正确激活，三旋钮
+标定轮前提成立（另行立项）。本标定在 DAT.1 扩展数据集上对三旋钮做单旋钮
+边际扫描，判定「质量护栏内体积最小」的最优默认值。
+
+**代码支撑**（本轮新增，码流零改动）：
+- `core/config/lossy_v2/builder.rs`：拆 `perceptual_strength` 绑定为三个独立
+  setter（`activity_masking`/`flat_area_protection`/`edge_protection`）+
+  3 项单测（独立不串扰 / 绑定兼容 / 默认中性）。
+- `performance/probe_activity.rs`（`--probe-activity <root>`）：DAT.1 单旋钮
+  边际扫描探针。支持环境变量分阶段（`CRF_ACTIVITY_PHASE`=activity/flat-edge/full）、
+  组名过滤（`CRF_ACTIVITY_GROUPS`）、帧数上限（`CRF_ACTIVITY_MAX_FRAMES`）、
+  按内存自动选 batch（帧级并行）或 streaming（内存 O(golden+单帧)）。
+- `encoder/sequence.rs`：batch 内存阈值 `BATCH_MEM_LIMIT` 可被
+  `CRF_BATCH_MEM_LIMIT` 环境变量覆盖（默认 1.5 GB 不变）。
+
+**结果**（4 组小图抽样 2-2-2/2-3-2/2-8-2/2-1-2，q90，字节 vs 基线）：
+
+| 配置 | 体积Δ | 全局 PSNRΔ | 最差帧 PSNRΔ |
+|---|---|---|---|
+| 基线 100/100/100 | — | — | — |
+| activity=125~200 | **+3.87%** | +0.006 | 0 |
+| flat=125~200 | **+3.87%** | +0.006 | 0 |
+| edge=125~200 | **+6.30%** | +0.009 | 0 |
+
+**证伪结论（三旋钮全部负收益）**：
+
+1. **band_steps 路径切换代价**：基线（三旋钮 100）时 `band_ref = None`（全帧
+   统一 step）；任一旋钮 ≠100 时 `band_ref = Some(逐条带表)`，`encode_frame_adaptive`
+   走「逐条带步长」路径——这本身就让候选竞争结果变化，固定 +3.87% 代价。
+2. **activity 增步长 delta 整数除法失效**：纹理条带 `delta = (g−ref)·(activity−100)/100`，
+   稀疏差分下 g−ref 仅 1~3，activity 125~200 的 delta 均 ≈0（整数除法），故
+   125~200 结果完全一致——「增步长省码率」从未真正发生。
+3. **flat/edge 减步长无质量收益**：减步长保质量（防 banding/ringing），但 PSNR
+   仅 +0.006~0.009 dB（基线已无 banding/ringing 可保护），体积却 +3.87%（flat）/
+   +6.30%（edge）——纯负收益，印证 §28 S0「ringing ⊆ edge 非独立信号」结论。
+
+**裁决**：
+1. activity_masking（P4.2）、flat_area_protection（P4.3）、edge_protection（P4.4）
+   三旋钮在真实二次元差分内容上均证伪，**保持默认 100 中性，不改变默认值**；
+2. 三旋钮字段维持「配置已定义、内核在 100 中性下不消费」状态，与 P4.6/P4.7 冻结
+   字段同列否决表；
+3. band_steps（逐条带步长）机制的固定路径切换代价是深层发现——后续若复用该机制
+   需先消除「None→Some」的候选竞争扰动；
+4. 探针保留为回归锚点（`--probe-activity`），供未来内容形态变化时复测。
+
+**门禁**：clippy 零告警（新文件）；builder 3 项 + probe_activity 3 项单测通过；
+三旋钮默认 100 下产物逐字节不变（既有回归锁定）。

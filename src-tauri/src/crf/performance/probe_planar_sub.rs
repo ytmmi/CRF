@@ -105,11 +105,8 @@ pub fn run(dir: &str) -> Result<(), String> {
         let co_adj = apply_cfl(&planes[1], &planes[0], alpha_c);
         let cg_adj = apply_cfl(&planes[2], &planes[0], alpha_g);
 
-        let plane_refs: [(&[i32], usize, usize); 3] = [
-            (&planes[0], w, h),
-            (&co_adj, w, h),
-            (&cg_adj, w, h),
-        ];
+        let plane_refs: [(&[i32], usize, usize); 3] =
+            [(&planes[0], w, h), (&co_adj, w, h), (&cg_adj, w, h)];
         let mut preferred = None;
         for (pi, (plane, pw, ph)) in plane_refs.iter().enumerate() {
             let img = ImageData {

@@ -125,7 +125,9 @@ pub fn report() -> String {
     }
 
     let mut out = String::new();
-    out.push_str("stage                          count     total       mean        p50        p95\n");
+    out.push_str(
+        "stage                          count     total       mean        p50        p95\n",
+    );
     for (name, mut durations) in groups {
         durations.sort_unstable();
         let count = durations.len();

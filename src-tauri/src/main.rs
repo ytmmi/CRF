@@ -110,6 +110,53 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-ringing" {
+        // P4.7 前置验证：ringing 信号与 edge 分类独立性探针（S0）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::probe_ringing::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-lambda" {
+        // P4.6 前置验证：RDOQ Trellis λ 敏感性扫描探针（S1）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::probe_lambda::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-coeff-ctx" {
+        // P3 前置验证：CoeffCABAC 方向扫描/邻块上下文合成内容能力探针（无参数）
+        if let Err(e) = crf::performance::coeff_ctx_probe::run() {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-activity" {
+        // P4.2/P4.3/P4.4 activity masking 三旋钮标定探针（默认扫 test/png 下全部 x-y-z 组）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_activity::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let input_dir = r"E:\CRF\test\png";
     let output_dir = r"E:\CRF\test\output\crf";

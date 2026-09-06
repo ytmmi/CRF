@@ -7,12 +7,23 @@
 //! - [`bench`]：端到端编解码基准（`--bench` CLI 分派）。
 
 pub mod bench;
+/// coeff_ctx_probe：P3 前置验证——CoeffCABAC 方向扫描 / 邻块上下文
+/// 深化在合成内容上的系数编码字节收益探针（零外部数据集）
+pub mod coeff_ctx_probe;
+/// probe_activity：P4.2/P4.3/P4.4 activity masking 三旋钮标定探针
+/// （DAT.1 单旋钮边际扫描，体积/PSNR 对照）
+pub mod probe_activity;
+/// probe_first_frame：首帧内部候选阶段 profile 探针
+pub mod probe_first_frame;
+/// probe_lambda：P4.6 前置验证——RDOQ Trellis λ 敏感性扫描探针（S1）
+pub mod probe_lambda;
+/// probe_monotonicity：DAT.1 跨内容单调性验收探针
+pub mod probe_monotonicity;
 /// probe_planar：planar 剪枝信号（色度平坦度）的 profile 验证探针
 pub mod probe_planar;
 /// probe_planar_sub：planar 子平面次级候选胜出频率探针（profile 验证）
 pub mod probe_planar_sub;
-/// probe_first_frame：首帧内部候选阶段 profile 探针
-pub mod probe_first_frame;
-/// probe_monotonicity：DAT.1 跨内容单调性验收探针
-pub mod probe_monotonicity;
+/// probe_ringing：P4.7 前置验证——ringing 信号（Laplacian 高响应）与
+/// edge 分类的独立性探针（S0）
+pub mod probe_ringing;
 pub mod telemetry;
