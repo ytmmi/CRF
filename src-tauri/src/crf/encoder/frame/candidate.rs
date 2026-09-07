@@ -238,15 +238,20 @@ pub fn encode_frame_adaptive(
         // 首帧自然图像与差分帧的重复纹理特化（服装花纹/背景图案的精确
         // 8×8 重复，hash 链搜索 + LZ 式贪心命中）；全 PRED 退化路径的开销
         // 由字节竞争兜底淘汰，单调不劣化保持。
-        // v1.11 差分帧启用：因果完备性修复（PRED 候选剔除 DC/TopRight、
-        // 残差流一次性解码）后，差分帧的块级 COPY 同样安全。
+        // D3 差分帧剪枝（2026-09-08）：`--probe-rest-frames` 实测 44/44 帧
+        // 差分帧（RCT 残差域）intrabc 胜出 0 次、176 次调用累计 49.3s——
+        // 差分残差经 RCT 去相关后已无 8×8 精确重复纹理（同一纹理差分后
+        // 归一为像素差，块签名不再命中），IntraBC 从不 `len < best`。
+        // 跳过不改变任何候选的 `best`、不影响后续候选 Fast-Fail 上限链，
+        // 字节逐字节一致（探针保留为回归锚点）。首帧（原始插画、重复花纹
+        // 密集）保留——那是 IntraBC 的专属场景。
         let enable_itbc = std::env::var("CRF_ITBC").map(|v| v == "1").unwrap_or(true);
         let itbc_span = Span::begin("encode.adaptive.intrabc");
         // P1b 子平面剪枝：单分量（planar 子平面，生产路径唯一 components==1
         // 场景）经 RCT+CfL 去相关后已无 8×8 精确重复纹理，IntraBC 的块复制
         // 命中率为零。探针实测全部测试组子平面 intrabc 胜出 0 次——跳过不
         // 改变任何候选的 `best`（它从不 set best），字节透明。
-        if enable_itbc && components > 1 {
+        if enable_itbc && is_first_frame && components > 1 {
             let payload_itbc =
                 super::intrabc::encode_intrabc_payload(&image.pixels, width, height, components)?;
             let itbc = assemble_frame(&payload_itbc, image, 0, 7)?;

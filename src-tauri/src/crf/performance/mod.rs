@@ -34,4 +34,6 @@ pub mod probe_palette;
 /// probe_ringing：P4.7 前置验证——ringing 信号（Laplacian 高响应）与
 /// edge 分类的独立性探针（S0）
 pub mod probe_ringing;
+/// probe_rest_frames：差分帧候选 profile 探针（胜出率 + 阶段耗时分离）
+pub mod probe_rest_frames;
 pub mod telemetry;
