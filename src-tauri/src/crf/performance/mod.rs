@@ -21,6 +21,8 @@ pub mod probe_first_frame;
 pub mod probe_first_frame_bypass;
 /// probe_lambda：P4.6 前置验证——RDOQ Trellis λ 敏感性扫描探针（S1）
 pub mod probe_lambda;
+/// probe_lic：LIC 整帧乘加照明补偿收益探针（§9 建议 6 采纳探索前置验证）
+pub mod probe_lic;
 /// probe_monotonicity：DAT.1 跨内容单调性验收探针
 pub mod probe_monotonicity;
 /// probe_planar：planar 剪枝信号（色度平坦度）的 profile 验证探针
