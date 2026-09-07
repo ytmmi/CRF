@@ -53,6 +53,8 @@ pub fn fq_for_index(
 /// 路径 C（链式差分）的逐帧量化配置
 ///
 /// 关键帧间隔边界走无损刷新（阻断误差累积），其余帧用全局档位。
+/// 色度半分辨率与亮度步长解耦（P1a 遗留项）：与路径 G 的 [`fq_for_index`]
+/// 一致，直接由 `tuning.chroma_half_res` 决定，不再受 `gq > 1` 隐式阻断。
 pub fn fq_for_chain_index(
     i: usize,
     lossy_quant_step: Option<u8>,
@@ -68,7 +70,7 @@ pub fn fq_for_chain_index(
         bias: base_bias,
         chroma_step: tuning.chroma_step(gq),
         chroma_bias: tuning.chroma_deadzone_bias,
-        chroma_half_res: gq > 1 && tuning.chroma_half_res,
+        chroma_half_res: tuning.chroma_half_res,
         q1_matrix_scale: false,
     }
 }
@@ -112,4 +114,51 @@ pub fn assemble_crf_output(
     output.extend_from_slice(&FOOTER_MAGIC);
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 缺陷回归：路径 C 的色度半分辨率曾被 `gq > 1` 隐式阻断，
+    /// 与路径 G（P1a 已解耦）不一致。q95（gq=1）下半分辨率应同样
+    /// 由 `tuning.chroma_half_res` 决定。
+    #[test]
+    fn fq_for_chain_index_chroma_half_res_decoupled_from_step() {
+        let mut tuning = KernelLossyConfig::lossless();
+        tuning.enabled = true;
+        tuning.global_step = 1;
+        tuning.anchor_interval = 5; // 避免 max(1) 把全部帧当锚点边界
+        tuning.chroma_half_res = true;
+
+        // q95（gq=1）：修复前 `gq > 1 &&` 使其为 false，修复后为 true
+        let fq_q95 = fq_for_chain_index(1, Some(1), &tuning, 0);
+        assert!(
+            fq_q95.chroma_half_res,
+            "gq=1（q95）路径 C 半分辨率应跟随 tuning.chroma_half_res（不再被 gq>1 阻断）"
+        );
+
+        // q90（gq=2）：保持 true
+        let fq_q90 = fq_for_chain_index(1, Some(2), &tuning, 0);
+        assert!(fq_q90.chroma_half_res, "gq=2 路径 C 半分辨率应开启");
+
+        // 显式关闭
+        tuning.chroma_half_res = false;
+        let fq_off = fq_for_chain_index(1, Some(2), &tuning, 0);
+        assert!(!fq_off.chroma_half_res, "chroma_half_res=false 时应关闭");
+    }
+
+    /// 路径 C 锚点边界（interval 倍数帧）强制无损刷新
+    #[test]
+    fn fq_for_chain_index_anchor_boundary_lossless() {
+        let mut tuning = KernelLossyConfig::lossless();
+        tuning.enabled = true;
+        tuning.global_step = 2;
+        tuning.anchor_interval = 5;
+
+        let fq_anchor = fq_for_chain_index(5, Some(2), &tuning, 0);
+        assert_eq!(fq_anchor.step, 0, "锚点边界帧应为无损刷新");
+        let fq_normal = fq_for_chain_index(3, Some(2), &tuning, 0);
+        assert_eq!(fq_normal.step, 2, "非边界帧使用全局档位");
+    }
 }
