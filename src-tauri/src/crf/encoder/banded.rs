@@ -92,6 +92,12 @@ fn encode_one_band_with_scratch(
             y_end,
         );
         // 条带内数据量小（≤96K 像素），SAD 直接精确统计
+        // ⚠ D6 已回退（2026-09-08）：曾接入 `sad_abs_sum` AVX2 求和——
+        // 实测 encode p50 7315ms vs 标量 7056ms（+3.7% 变慢），与 §33
+        //「预测/求和是内存带宽瓶颈，AVX2 减少指令数但无法突破带宽」
+        // 结论一致。SAD 求和保持标量（紧凑行缓冲线性读已近带宽极限）；
+        // `backend::cpu::simd::sad_abs_sum` 保留为已对拍能力（同 §33
+        // components==1 预测 SIMD「能力保留」先例）。
         let sad = residuals
             .iter()
             .map(|&value| value.unsigned_abs() as u64)

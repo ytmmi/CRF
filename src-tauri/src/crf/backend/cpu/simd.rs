@@ -374,6 +374,53 @@ unsafe fn cfl_add_avx2(plane: &mut [i32], y: &[i32], alpha: i32) {
     }
 }
 
+// ===== SAD 绝对值求和 =====
+
+/// Σ|values[i]|（SAD 预筛求和），与标量 `unsigned_abs().sum()` 逐位一致。
+///
+/// 用于 banded 条带候选 SAD 统计（原本逐元素 `unsigned_abs` 求和）。
+/// 补码绝对值对 i32::MIN 保留 0x80000000 位模式——作为 u32 解释即
+/// 2147483648，与 `unsigned_abs()` 语义一致（不饱和、不溢出），
+/// 因此 AVX2 路径与标量逐位等价。
+pub fn sad_abs_sum(values: &[i32]) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if has_avx2() {
+            // SAFETY: avx2 已检测；切片边界内操作
+            return unsafe { sad_abs_sum_avx2(values) };
+        }
+    }
+    values.iter().map(|&v| v.unsigned_abs() as u64).sum()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn sad_abs_sum_avx2(values: &[i32]) -> u64 {
+    use std::arch::x86_64::*;
+    let mut acc_lo = _mm256_setzero_si256(); // 低 4 个 u64 累加器
+    let mut acc_hi = _mm256_setzero_si256(); // 高 4 个 u64 累加器
+    let mut i = 0usize;
+    while i + 8 <= values.len() {
+        let v = _mm256_loadu_si256(values.as_ptr().add(i).cast::<__m256i>());
+        // 补码绝对值：(v ^ (v>>31)) - (v>>31)
+        let sign = _mm256_srai_epi32(v, 31);
+        let abs = _mm256_sub_epi32(_mm256_xor_si256(v, sign), sign);
+        // 拆低 4 高 4，零扩展为 u64 各累加
+        let lo = _mm256_castsi256_si128(abs);
+        let hi = _mm256_extracti128_si256(abs, 1);
+        acc_lo = _mm256_add_epi64(acc_lo, _mm256_cvtepu32_epi64(lo));
+        acc_hi = _mm256_add_epi64(acc_hi, _mm256_cvtepu32_epi64(hi));
+        i += 8;
+    }
+    let acc = _mm256_add_epi64(acc_lo, acc_hi);
+    let lanes: [u64; 4] = std::mem::transmute(acc);
+    let mut sum = lanes.iter().sum::<u64>();
+    for &v in &values[i..] {
+        sum = sum.wrapping_add(v.unsigned_abs() as u64);
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +489,31 @@ mod tests {
         let mut values = [i32::MIN, -3, 3, 9];
         soft_threshold_plane(&mut values, 3);
         assert_eq!(values, [i32::MIN, 0, 0, 9]);
+    }
+
+    /// sad_abs_sum 与标量 `unsigned_abs().sum()` 逐位一致（含 i32::MIN、
+    /// 非对齐长度、大数组溢出路径）。
+    #[test]
+    fn test_sad_abs_sum_matches_scalar() {
+        let mut state: u64 = 0xDEAD_BEEF_0123_4567;
+        let next = |state: &mut u64| -> i32 {
+            *state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // 覆盖全 i32 值域：高位随机符号 + 低位随机幅度（含 MIN 边界）
+            (*state >> 33) as i32
+        };
+
+        let lengths: [usize; 6] = [0, 1, 7, 8, 31, 1003];
+        for &len in &lengths {
+            let values: Vec<i32> = (0..len).map(|_| next(&mut state)).collect();
+            let expected: u64 = values.iter().map(|&v| v.unsigned_abs() as u64).sum();
+            assert_eq!(sad_abs_sum(&values), expected, "len={len}");
+        }
+
+        // i32::MIN 显式用例（补码绝对值为 0x8000_0000 → 2147483648）
+        let min_case = [i32::MIN, 0, -1, 1, 5, -5];
+        assert_eq!(sad_abs_sum(&min_case), 2147483648u64 + 0 + 1 + 1 + 5 + 5);
     }
 
     #[test]

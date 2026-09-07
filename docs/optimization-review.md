@@ -2334,3 +2334,29 @@ MA 树（深度 3、最多 8 叶）叶数充足且各叶分布有重叠；若树
 3. 与 §16（golden_lossless=false 首帧误差注入差分帧暴增）机制不同但
    结论同向：首帧必须无损，误差不可分离——两层编码必然冗余；
 4. 维持现状：golden 首帧强制无损（默认 true），未来不再投入该方向。
+
+## 48. D6 banded SAD 求和 SIMD 尝试与回退：带宽瓶颈互证（2026-09-08）
+
+**尝试**：banded 条带 SAD 求和改走 AVX2 批量 kernel（`backend/cpu/simd.rs`
+新增 `sad_abs_sum`——补码绝对值与标量 `unsigned_abs` 逐位一致，含 i32::MIN
+的 0x8000_0000 语义；`test_sad_abs_sum_matches_scalar` 对拍 6 种长度 + MIN 用例）。
+
+**失败信号**：同工具链 A/B 对比（1000 组 release）：
+
+| 版本 | encode p50 | banded mean |
+|---|---:|---:|
+| HEAD（标量求和） | **7056ms** | 371ms |
+| D6（SAD SIMD） | 7315ms | 388ms |
+
+**根因**：与 §33 结论互证——SAD 求和是**内存带宽瓶颈**：残差缓冲
+`residuals` 已由紧凑行布局生成，标量 `unsigned_abs().sum()` 线性读已逼近
+带宽极限；AVX2 减少指令数但无法突破读带宽，且补码绝对值+零扩展的额外
+指令开销（拆 lane、cvtepu32、u64 累加）反而拖慢。
+
+**裁决——回退 banded 接入，kernel 保留为能力**：
+1. banded.rs 恢复标量 `unsigned_abs().sum()`（注释记录 D6 教训）；
+2. `sad_abs_sum` 保留在 simd.rs（已对拍、未接入生产路径），同 §33
+   components==1 预测 SIMD「能力保留待内容自动兑现」先例——若未来
+   出现「残差缓冲非带宽瓶颈」的调用场景可复用，避免重复实现；
+3. 速度优化继续应聚焦「减少像素重复读取」或「减少候选数量」，
+   而非对已生成的残差流再做 SIMD 求和。
