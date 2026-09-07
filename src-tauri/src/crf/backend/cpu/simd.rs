@@ -10,7 +10,7 @@
 //! `backend/cpu/simd`。`format/simd.rs` 保留为 `pub use` 转发层。
 
 #[cfg(target_arch = "x86_64")]
-fn has_avx2() -> bool {
+pub(crate) fn has_avx2() -> bool {
     static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *F.get_or_init(|| std::arch::is_x86_feature_detected!("avx2"))
 }

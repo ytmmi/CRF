@@ -265,6 +265,23 @@ fn apply_prediction_range_into(
         return;
     }
 
+    // components==1 且整帧范围（y_start==0，紧凑缓冲==整帧缓冲）：走 AVX2
+    // 批量预测（Horizontal/Vertical/Average/DC）。不支持的模式由内核返回
+    // false，回退下方标量循环，字节逐位一致。
+    if components == 1
+        && y_start == 0
+        && crate::crf::backend::cpu::simd_predict::predict_plane_avx2(
+            pixels,
+            residuals,
+            width,
+            mode as u8,
+            y_start,
+            y_end,
+        )
+    {
+        return;
+    }
+
     for y in y_start..y_end {
         for x in 0..width {
             for c in 0..components {
@@ -386,6 +403,22 @@ pub(crate) fn apply_prediction_band_into(
     }
     if mode == PredictionMode::None {
         out.copy_from_slice(&pixels[y_start * stride..y_end * stride]);
+        return;
+    }
+
+    // components==1：走 AVX2 批量预测（Horizontal/Vertical/Average/DC），
+    // 紧凑缓冲（out 长度 = (y_end-y_start)*stride）与内核契约一致。不支持的
+    // 模式回退下方标量循环，字节逐位一致。
+    if components == 1
+        && crate::crf::backend::cpu::simd_predict::predict_plane_avx2(
+            pixels,
+            out,
+            width,
+            mode as u8,
+            y_start,
+            y_end,
+        )
+    {
         return;
     }
 

@@ -1825,3 +1825,54 @@ V2 配置（reference_mode Auto→Hybrid）下逐帧 previous 竞争，streaming
 **附带**：批量路径的 previous 竞争本身（`sequence.rs` L517-590）为既有实现，
 未改动；本修复仅使 streaming 与之对称。默认配置（Auto→Hybrid）与显式
 Hybrid 经 `resolve_auto` 等价，`test_streaming_hybrid_matches_batch` 即覆盖默认语义。
+
+## 33. 平面空间预测 SIMD（components==1，P2 预测代价向量化，2026-09-07）
+
+**目标**：performance-optimization-plan.md §P2「固定预测代价」——planar 子平面与
+灰度帧（components==1）的空间预测是纯因果位移/算术，无递推依赖（无损域 pred 仅读
+原始像素），可安全 AVX2 批量；Horizontal/Vertical/Average/DC 四模式入 SIMD，
+Med/Paeth/斜向/多参考等分支密集模式保持标量 `predict_at`。
+
+**实现**（码流零改动，`backend/cpu/simd_predict.rs` 新模块）：
+- `predict_plane_avx2(pixels, out, width, mode, y_start, y_end) -> bool` 统一入口，
+  按模式分派四个 AVX2 内核，返回 false 由调用方回退标量；
+- 四内核覆盖 `apply_prediction_band_into`（紧凑缓冲）与 `apply_prediction_range_into`
+  （整帧，y_start=0 时紧凑==整帧）两条预测路径；
+- 向零除法（Average `/2`、DC `/4`）用「负值加偏置」修正
+  `(x + (x<0 ? (1<<k)-1 : 0)) >> k`，与 Rust 整数除法截断舍入逐位一致
+  （SIMD 仅算术右移 floor 语义）；
+- 边界语义（每行首元素 / 绝对首行 / DC 四邻居边界）与 `predict_at` 逐位一致。
+
+**验证**：
+- `test_predict_plane_matches_scalar`：9 组尺寸（含 width=1/2/7、非对齐 33/37、
+  条带起点 y_start=5、首行/尾行）× 4 模式，AVX2 与标量逐位一致；
+- `test_trunc_div_bias_formula`：向零除法偏置公式逐值对拍；
+- 全量 `cargo test` 185 passed / 0 failed（+2 项新测试）；
+- 1000 组 bench 字节 11,090,743 逐字节不变（正确性保证）。
+
+**性能结果（1000 组 release，三次 bench）**：
+
+| 指标 | SIMD 前 | SIMD 后 | 变化 |
+|---|---:|---:|---:|
+| encode p50 | 7541ms | 7574~7597ms | ≈0（噪声内） |
+| planar mean | 1595ms | 1395ms | −12.5% |
+| planar.subplane_y | 474ms | 360ms | **−24.1%** |
+| planar.subplane_co | 497ms | 429ms | −13.7% |
+| planar.subplane_cg | 598ms | 578ms | −3.3% |
+| banded mean | 418ms | 377ms | −9.8% |
+
+**裁决——能力保留，不宣称正式接入**：
+
+1. **热点收益真实但端到端被稀释**：subplane_y −24.1%（接近 §4.6 的 25% 门槛），
+   planar −12.5%、banded −9.8%；但 planar 仅占 encode 约 21%（首帧 56% ×
+   首帧占比 37%），planar −12.5% → 端到端仅约 −2.6%，落在测量噪声内（±2%），
+   三次 bench encode p50 7541→7574~7597 无法稳定分辨。
+2. **根因——预测为内存带宽瓶颈**：预测是逐像素「读 pixels + 写 residuals」，
+   AVX2 减少指令数但无法突破内存带宽；SIMD 化 SAD 求和（同为带宽瓶颈）或
+   合并 8 候选遍历（减少 pixels 重复读取）才有机会兑现端到端收益，属后续方向。
+3. **保留理由**：字节逐位一致（正确性零风险）、热点有真实收益、建立
+   `simd_predict` 模块为 components==3 预测 SIMD 与「合并遍历」铺路；
+   与既有「能力保留待内容自动兑现」先例（无损 DCT 候选、V2/H2 预测）同列。
+4. 若要兑现端到端收益，下一步应评估 components==3 交织布局的预测 SIMD
+   （顶层 trial_encode/cabac/banded 的预测）与「一次遍历 8 候选」的内存合并，
+   而非继续单点向量化。

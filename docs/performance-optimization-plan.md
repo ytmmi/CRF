@@ -825,6 +825,14 @@ buffer 统一、嵌套线程池治理）或 P2 SIMD 才能兑现。
 - 并行实现 AArch64 NEON；
 - 所有路径保留标量回退和对拍。
 
+**状态（2026-09-07，部分）**：diff/RCT/软阈值/CfL/死区量化已向量化
+（`backend/cpu/simd.rs`）；**固定预测代价**新增 components==1 平面预测 SIMD
+（`backend/cpu/simd_predict.rs`：Horizontal/Vertical/Average/DC 四模式 AVX2，
+覆盖 planar 子平面与灰度帧）。实测 1000 组：planar −12.5%、subplane_y −24.1%，
+但端到端 encode ≈0（预测为内存带宽瓶颈，收益被稀释）——定位「能力保留」，
+未达 §4.6 的端到端 ≥10% 或热点 ≥25% 门槛；DCT/量化 SIMD、components==3 预测
+SIMD 与「一次遍历合并 8 候选」仍待后续。详见 [optimization-review.md §33](optimization-review.md)。
+
 ### P3：GPU 抽象与 Hybrid 探针
 
 - 先实现 capability/scheduler/memory 的窄边界，不接入正式默认；
