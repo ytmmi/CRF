@@ -71,95 +71,142 @@ fn apply_cfl(chroma: &[i32], y: &[i32], alpha: i32) -> Vec<i32> {
     out
 }
 
-/// 运行探针。`dir` 为图像组目录。
+/// 运行探针。`dir` 为图像组目录或 test/png 根目录（后者自动遍历全部子组）。
 pub fn run(dir: &str) -> Result<(), String> {
-    let frames = load_frames(dir)?;
-    if frames.is_empty() {
-        return Err(format!("{dir}: no images"));
+    // 收集组目录:传入 root 时遍历子目录,传入单组时直接用自身
+    let mut groups: Vec<std::path::PathBuf> = Vec::new();
+    let p = std::path::Path::new(dir);
+    if p.is_dir() {
+        let subdirs: Vec<_> = std::fs::read_dir(p)
+            .map_err(|e| format!("{dir}: {e}"))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.path())
+            .collect();
+        if subdirs.is_empty() {
+            groups.push(p.to_path_buf());
+        } else {
+            groups.extend(subdirs);
+        }
+    } else {
+        return Err(format!("{dir}: not a directory"));
     }
-    println!("=== planar sub-plane candidate probe ===");
-    println!("group: {dir}  ({} frames)\n", frames.len());
+    groups.sort();
 
-    // 聚合：sub[子平面下标][frame_type] = 胜出次数
-    const NSUB: usize = 3;
-    let mut sub_wins: [[usize; 9]; NSUB] = [[0; 9]; NSUB];
+    let mut groups_seen = 0usize;
+    let mut sub_wins_total: [[usize; 9]; 3] = [[0; 9]; 3];
     let mut total_sub = 0usize;
 
-    for (fi, frame) in frames.iter().enumerate() {
-        if frame.color_format != ColorFormat::Rgb {
+    for dir in &groups {
+        let frames = load_frames(&dir.to_string_lossy())?;
+        if frames.is_empty() {
             continue;
         }
-        // 与真实管线一致：RCT 去相关到 Y/Co/Cg 域。
-        let ycocg = rct::rct_forward(&frame.pixels, 3).map_err(|e| e.to_string())?;
-        let w = frame.width as usize;
-        let h = frame.height as usize;
-        let n = w * h;
-        let mut planes: [Vec<i32>; 3] = std::array::from_fn(|_| Vec::with_capacity(n));
-        for px in ycocg.chunks_exact(3) {
-            planes[0].push(px[0]);
-            planes[1].push(px[1]);
-            planes[2].push(px[2]);
-        }
-        let alpha_c = search_alpha(&planes[0], &planes[1]);
-        let alpha_g = search_alpha(&planes[0], &planes[2]);
-        let co_adj = apply_cfl(&planes[1], &planes[0], alpha_c);
-        let cg_adj = apply_cfl(&planes[2], &planes[0], alpha_g);
+        // 默认每组前 2 帧（快速扫描，与 probe_rest_frames 口径一致）；
+        // CRF_PROBE_ALL_FRAMES=1 覆盖全部帧（多组时可能超时，建议单组使用）。
+        let all_frames = std::env::var("CRF_PROBE_ALL_FRAMES").map(|v| v == "1").unwrap_or(false);
+        let frame_take = if all_frames { usize::MAX } else { 2 };
+        groups_seen += 1;
+        // 聚合：sub[子平面下标][frame_type] = 胜出次数
+        const NSUB: usize = 3;
+        let mut sub_wins: [[usize; 9]; NSUB] = [[0; 9]; NSUB];
 
-        let plane_refs: [(&[i32], usize, usize); 3] =
-            [(&planes[0], w, h), (&co_adj, w, h), (&cg_adj, w, h)];
-        let mut preferred = None;
-        for (pi, (plane, pw, ph)) in plane_refs.iter().enumerate() {
-            let img = ImageData {
-                width: *pw as u16,
-                height: *ph as u16,
-                bit_depth: frame.bit_depth,
-                color_format: ColorFormat::Gray,
-                pixels: plane.to_vec(),
-            };
-            let out = encode_frame_adaptive(
-                &img,
-                CompressionType::GolombRice,
-                8,
-                false,
-                FrameQuant::lossless(),
-                preferred,
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-            preferred = out.pred_mode;
-            let ft = out.data.get(8).copied().unwrap_or(0);
-            if (ft as usize) < 9 {
-                sub_wins[pi][ft as usize] += 1;
+        for frame in frames.iter().take(frame_take) {
+            if frame.color_format != ColorFormat::Rgb {
+                continue;
             }
-            total_sub += 1;
+            // 与真实管线一致：RCT 去相关到 Y/Co/Cg 域。
+            let ycocg = rct::rct_forward(&frame.pixels, 3).map_err(|e| e.to_string())?;
+            let w = frame.width as usize;
+            let h = frame.height as usize;
+            let n = w * h;
+            let mut planes: [Vec<i32>; 3] = std::array::from_fn(|_| Vec::with_capacity(n));
+            for px in ycocg.chunks_exact(3) {
+                planes[0].push(px[0]);
+                planes[1].push(px[1]);
+                planes[2].push(px[2]);
+            }
+            let alpha_c = search_alpha(&planes[0], &planes[1]);
+            let alpha_g = search_alpha(&planes[0], &planes[2]);
+            let co_adj = apply_cfl(&planes[1], &planes[0], alpha_c);
+            let cg_adj = apply_cfl(&planes[2], &planes[0], alpha_g);
+
+            let plane_refs: [(&[i32], usize, usize); 3] =
+                [(&planes[0], w, h), (&co_adj, w, h), (&cg_adj, w, h)];
+            let mut preferred = None;
+            for (pi, (plane, pw, ph)) in plane_refs.iter().enumerate() {
+                let img = ImageData {
+                    width: *pw as u16,
+                    height: *ph as u16,
+                    bit_depth: frame.bit_depth,
+                    color_format: ColorFormat::Gray,
+                    pixels: plane.to_vec(),
+                };
+                let out = encode_frame_adaptive(
+                    &img,
+                    CompressionType::GolombRice,
+                    8,
+                    false,
+                    FrameQuant::lossless(),
+                    preferred,
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+                preferred = out.pred_mode;
+                let ft = out.data.get(8).copied().unwrap_or(0);
+                if (ft as usize) < 9 {
+                    sub_wins[pi][ft as usize] += 1;
+                }
+                total_sub += 1;
+            }
         }
-        let _ = fi;
+
+        let names = ["Y", "Co", "Cg"];
+        let nframes = frames.len();
+        println!("组 {dir:?}（{nframes} 帧）子平面胜出:");
+        for pi in 0..NSUB {
+            let line: Vec<String> = (0..9)
+                .filter(|&t| sub_wins[pi][t] > 0)
+                .map(|t| format!("{}={}", frame_type_name(t as u8), sub_wins[pi][t]))
+                .collect();
+            let display = if line.is_empty() {
+                "(无胜出)".to_string()
+            } else {
+                line.join(", ")
+            };
+            println!("  {} 平面: {}", names[pi], display);
+            for t in 0..9 {
+                sub_wins_total[pi][t] += sub_wins[pi][t];
+            }
+        }
     }
 
+    println!("\n=== 全组汇总（{groups_seen} 组, {total_sub} 子平面）===");
     let names = ["Y", "Co", "Cg"];
-    let nframes = frames.len();
-    println!("sub-plane 胜出 frame_type 分布（共 {total_sub} 子平面 = {nframes} 帧 × 3）:\n");
-    for pi in 0..NSUB {
+    let per_plane: [usize; 3] = std::array::from_fn(|pi| {
+        (0..9).map(|t| sub_wins_total[pi][t]).sum()
+    });
+    for pi in 0..3 {
         println!("  {} 平面:", names[pi]);
         for t in 0..9 {
-            let c = sub_wins[pi][t];
+            let c = sub_wins_total[pi][t];
             if c > 0 {
                 println!(
                     "    {:<14} {:>3}  ({:>5.1}%)",
                     frame_type_name(t as u8),
                     c,
-                    c as f64 / nframes.max(1) as f64 * 100.0
+                    c as f64 / per_plane[pi].max(1) as f64 * 100.0
                 );
             }
         }
     }
 
-    // 次级候选（banded/palette/intrabc/cabac/dct/intra_transform）合计胜出
+    // 次级候选（banded/palette/intrabc/cabac/dct/intra_transform）合计
     println!("\n次级候选胜出汇总（banded/palette/intrabc/cabac/dct/intra_transform）:");
     const SECONDARY: [usize; 6] = [2, 4, 5, 6, 7, 8];
-    for pi in 0..NSUB {
-        let sum: usize = SECONDARY.iter().map(|&t| sub_wins[pi][t]).sum();
-        println!("  {} 平面: {sum} / {}", names[pi], frames.len());
+    for pi in 0..3 {
+        let sum: usize = SECONDARY.iter().map(|&t| sub_wins_total[pi][t]).sum();
+        println!("  {} 平面: {sum}", names[pi]);
     }
     Ok(())
 }
