@@ -7,6 +7,12 @@
 //! 1. 胜出 frame_type 分布（剪切决策：从不胜出的高成本候选可字节透明剪枝）；
 //! 2. 各候选独占耗时（确定下一性能轮目标）。
 //!
+//! ⚠ **采样完整性限制（D4 教训）**：本探针每组仅取前 2 差分帧（`take(2)`）。
+//! 「某候选 0 胜出」只在该采样内成立，**不能**外推为全组/全数据集的
+//! 「从不胜出」——dct 在 2-12-4 后续帧真实胜出，按探针剪枝致字节 +2.2%
+//! 已回退（见 optimization-review §42）。任何基于本探针的剪枝必须：
+//! ① 覆盖组内全部差分帧；② 剪枝后与 HEAD 同工具链逐字节对拍全部组。
+//!
 //! 零外部数据集，仅扫 test/png。由 `--probe-rest-frames <root>` CLI 分派。
 
 use crate::crf::core::color::rct;
@@ -62,7 +68,11 @@ pub fn run(root: &str) -> Result<(), String> {
         let width = frames[0].width as usize;
         let height = frames[0].height as usize;
 
-        for frame in frames.iter().skip(1).take(2) {
+        // 默认每组前 2 差分帧（快速）；CRF_PROBE_ALL_FRAMES=1 覆盖全部差分帧。
+        // D4 教训：剪枝决策必须基于全帧采样，`take(2)` 结果不可外推。
+        let all_frames = std::env::var("CRF_PROBE_ALL_FRAMES").map(|v| v == "1").unwrap_or(false);
+        let diff_take = if all_frames { usize::MAX } else { 2 };
+        for frame in frames.iter().skip(1).take(diff_take) {
             if frame.pixels.len() != golden.len() || components != 3 {
                 continue;
             }

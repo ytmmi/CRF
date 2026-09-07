@@ -360,6 +360,11 @@ pub fn encode_frame_adaptive(
     // 0 次（cabac 对残差流已最优）。跳过不改变 `best`（DCT 从不 set best），
     // 字节透明。有损单分量（色度 chroma_step 量化）仍保留 DCT——量化下
     // 变换域可能真实胜出，无探针证据，不剪。
+    //
+    // ⚠ D4 已回退（2026-09-08）：曾尝试对无损差分帧剪 dct——`--probe-rest-frames`
+    // 每组仅采样前 2 差分帧，dct 表面 0 胜出；但 2-12-4 后续帧 dct 真实胜出，
+    // 剪枝后该组字节 +2.2%。探针采样不完整，dct 不满足「从不 set best」前提，
+    // 维持原状（首帧+差分帧均参与竞争，单调不劣化由竞争兜底）。
     let skip_dct_subplane = components == 1 && !fq.is_lossy();
     if compression_type == CompressionType::GolombRice && dct_worth && !skip_dct_subplane {
         const TRELLIS_FLAG_BIT: u8 = 0x10;
