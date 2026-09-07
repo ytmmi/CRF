@@ -1,8 +1,8 @@
 # CRF 优化已完成项清单（代码进度同步）
 
-**同步日期**：2026-09-06
-**基线版本**：v1.15 标定轮（含 P0~P6 + frame_type=8 正式格式化 + P4.2/P4.3/P4.4 activity masking 接入 + S0/S1 探针）
-**核对方式**：codegraph + 关键文件 Read + optimization-review.md §9~§28 实施记录交叉验证
+**同步日期**：2026-09-08
+**基线版本**：v0.3.2.7（含 v1.15 标定轮 P0~P6 + §39~§48 速度优化/决策轮：palette 像素级预筛、差分帧 intrabc 剪枝、LIC/误差分离/直方图共享/MA 树关闭、D4/D5/D6 回退）
+**核对方式**：codegraph + 关键文件 Read + optimization-review.md §9~§48 实施记录交叉验证
 **关联文档**：
 - [首帧优化规划](first-frame-optimization-plan.md)（本文件标注其已完成项，未完成项仍留在原文件）
 - [有损参数接口规划](lossy-tuning-interface-plan.md)（同上）
@@ -167,6 +167,7 @@
 | P6.9 | 帧/条带 Scratch Buffer | `encoder/scratch.rs` + `FrameScratch`/Rayon `map_init` 条带缓冲 | §23 未执行项 / 性能规划 §4.4 | ✅ | 帧候选复用整帧 residual/recon；条带任务复用 8 候选容量，无全局锁 |
 | P6.10 | DCT 块级栈缓冲 | `core/transform/{dct4,dct8,rect,reconstruct}.rs` + 编解码 DCT 热路径 | 性能规划 §4.4 | ✅ | 新增兼容 `*_into` 内核；4×4/8×8/矩形正逆变换热路径每块零堆分配，码流不变 |
 | P6.11 | palette 像素级抽样预筛 | `encoder/frame/candidate.rs` `palette_plausible` | optimization-review §39 | ✅ | palette span −33%（30.7s→20.5s）；bytes 逐字节不变；探针 `--probe-palette` 保留 |
+| P6.12 | 差分帧 intrabc 字节透明剪枝 | `encoder/frame/candidate.rs` `enable_itbc && is_first_frame` | optimization-review §41（D3） | ✅ | 差分帧（RCT 残差域）44/44 帧 intrabc 胜出 0 次、176 次调用累计 49.3s→0.047ms；encode p50 −3.1%；首帧保留；bytes 逐字节不变；探针 `--probe-rest-frames` 保留 |
 | — | SIMD 预测泛化 | — | §6.2 S3 | ❌ 中长期 | Med/Paeth 分支向量化复杂 |
 | — | 内存池零分配 | — | §6.2 S4 | ❌ 暂缓 | 待性能剖析后定向 |
 
@@ -281,6 +282,21 @@
 | S1 | RDOQ λ 敏感性探针 | `performance/probe_lambda.rs`（`--probe-lambda`）+ `core/transform/rdoq.rs` λ 参数化 | P4.6 冻结：DCT 零胜出根因不在 λ；附带证伪「λ 两档竞争」待办 |
 | P4.2~P4.4 | activity masking 三旋钮接入 | `core/perceptual/noise.rs` + batch/streaming 双路径 | ✅ 已接入；⚠️ reference 整数除法失效待修复 |
 
+### 2026-09-08 速度优化与决策轮（§39~§48）
+
+| 轮次 | 项目 | 代码位置 | 结论 |
+|---|---|---|---|
+| §39 | palette 像素级抽样预筛 | `encoder/frame/candidate.rs` `palette_plausible` | ✅ palette span −33%（30.7s→20.5s），bytes 逐字节不变；探针 `--probe-palette` 保留 |
+| §40 | LIC 收益探针 | `performance/probe_lic.rs`（`--probe-lic`） | ❌ 关闭：整体 2.2% < 3% 门槛；光照渐变组 −30% 印证模型有效，待内容分层扩充复测 |
+| §41 | 差分帧 intrabc 字节透明剪枝 | `encoder/frame/candidate.rs` `is_first_frame` 门控 | ✅ 差分帧 intrabc 44/44 帧 0 胜出、49.3s→0.047ms，encode −3.1%；首帧保留；探针 `--probe-rest-frames` |
+| §42 | 差分帧 dct 剪枝尝试与回退 | `performance/probe_rest_frames.rs` + candidate.rs 回退 | ❌ 回退：探针采样不完整（dct 在 2-12-4 后续帧胜出，字节 +2.2%）；教训——剪枝需全帧采样 + 全组逐字节对拍 |
+| §43 | banded 合并 SAD 遍历 | banded.rs 回退 | ❌ 回退：encode +30%（每像素 8 次 predict_at 分支开销）；紧凑行缓冲布局更优 |
+| §44 | planar 子平面全组胜出分布 | `performance/probe_planar_sub.rs` 增强 | 数据确认 banded 必须保留（33 胜出）；palette 156 子平面 0 胜出但能力保留（低色数未来可胜出） |
+| §45 | banded preferred_mode 缺陷记录 | banded.rs（不修复） | 记录：注释声称已实现的条带试编码偏好实际未使用；纳入试编码集需速度+33% 权衡，留待专项 |
+| §46 | MA 树叶数分布探针 | `performance/probe_ma_tree.rs`（`--probe-ma-tree`） | ❌ 关闭直方图共享：平均叶数 3.8 < 4，叶使用极端偏斜 |
+| §47 | 首帧误差分离探针 | `performance/probe_error_separation.rs`（`--probe-error-separation`） | ❌ 关闭：有损+E 较无损 +25~40%（误差层体积爆炸），两层冗余确凿 |
+| §48 | banded SAD 求和 SIMD | `backend/cpu/simd.rs` `sad_abs_sum`（能力保留）+ banded.rs 回退 | ❌ 回退：encode +3.7%（带宽瓶颈互证）；kernel 保留为能力 |
+
 ---
 
 ## 五、关键否决/关闭决策（避免重复投入）
@@ -309,6 +325,12 @@
 | **edge_protection 边缘保护（P4.4）** | §31 三旋钮标定 | +6.30% 负收益——减步长但基线已无 ringing 可保护（PSNR +0.009dB，印证 §28 S0 ringing⊆edge），体积白增 |
 | **首帧 RGB 直通内容门控跳过** | §34 首帧 RCT 双路探针 | 直通胜出 3/24（12.5%），但胜出组 G 零值占比 0.000~0.001——「G 恒零才直通」假设不成立（真实原因是 RGB 通道低相关），G 零值无法预测胜出；且 1000 组 bypass 仅比 rct 大 4.4%，Fast-Fail 上限过松。首帧 RCT 双路竞争维持现状 |
 | **banded 64 行档剪枝** | §35 banded 条带高度探针 | 64 行档胜出 15/44（34.1%）、累计省 9639 字节——64 行档有真实字节收益（印证 A4 条带高度自适应），剪枝会损失 34% 帧的收益；32/64 两档竞争维持现状 |
+| **LIC 整帧乘加照明补偿** | §40 LIC 收益探针 | 整体 SAD 下降 2.2% < 3% 门槛——7/44 帧受益（光照渐变组 −30% 印证模型有效），但高色数插画差分帧 0 收益；2 字节信令+编解码对称成本无性价比；探针 `--probe-lic` 保留，未来扩充光照内容分层时复测 |
+| **差分帧 dct 剪枝** | §42 D4 探针采样教训 | 探针（每组前 2 帧）表面 dct 0 胜出，但 2-12-4 后续帧真实胜出、剪枝后字节 +2.2%——胜出率探针采样必须覆盖全部差分帧且剪枝后与 HEAD 逐字节对拍；dct 维持竞争（单调不劣化由兜底） |
+| **banded 合并 SAD 遍历** | §43 D5 负优化 | 单遍合并 8 候选 SAD 实测 encode +30%（每像素 8 次 predict_at 分支开销远超省下的残差写入）；紧凑行缓冲布局更优，维持原逻辑 |
+| **MA 树直方图共享（§8.2）** | §46 叶数分布探针 | 平均叶数 3.8（<4）、21.2% 帧退化 1 叶、叶使用极端偏斜（最小非零叶占比 0.11%）——共享收益窗口小且稀释主导叶精度；N_CTX=60 独立槽位维持现状 |
+| **首帧误差分离（§9 建议 3/10）** | §47 误差分离探针 | 有损 q90 全序列 + 误差层 E vs 无损：10-1-10 +40.5%、10-1-16 +25.1%——E 体积爆炸（±1~2 分布广 RLE 无法压缩），两层冗余确凿；JPEG2000 嵌入式前提（精化层逐步细化同系数）在 CRF 无损语义下不存在 |
+| **banded SAD 求和 SIMD** | §48 D6 带宽瓶颈互证 | sad_abs_sum AVX2（含 i32::MIN 语义对拍）接入后 encode +3.7%（7315 vs 7056ms）——SAD 求和是内存带宽瓶颈，AVX2 无法突破；kernel 保留为能力（同 §33 components==1 先例），banded 维持标量 |
 
 ---
 
@@ -344,6 +366,11 @@
 | `encoder/intra_probe.rs` | 335 | 1000 | ✅（探针保留为回归锚点）|
 | `encoder/intra_transform.rs` | 264 | 1000 | ✅ |
 | `decoder/intra_transform.rs` | 214 | 1000 | ✅ |
+| `performance/probe_lic.rs` | ~160 | 1000 | ✅（§40 探针锚点）|
+| `performance/probe_rest_frames.rs` | ~130 | 1000 | ✅（§41/§42 探针锚点）|
+| `performance/probe_planar_sub.rs` | ~210 | 1000 | ✅（§44 探针锚点）|
+| `performance/probe_ma_tree.rs` | ~160 | 1000 | ✅（§46 探针锚点）|
+| `performance/probe_error_separation.rs` | ~150 | 1000 | ✅（§47 探针锚点）|
 
 > 原预警文件已全部拆分收敛：`encoder/tests.rs`(980) → `encoder/tests/{lossy,roundtrip,rct_bypass,mod}.rs`（≤338）；
 > `test/mod.rs`(~985) → `test/{batch,mod,probe}.rs`（≤252）；`format/prediction.rs`(800) → `core/prediction/intra.rs`(714)。
