@@ -25,6 +25,8 @@ pub mod probe_lambda;
 pub mod probe_lic;
 /// probe_ma_tree：MA 树叶数分布与直方图共享(§8.2)可行性探针
 pub mod probe_ma_tree;
+/// probe_error_separation：首帧误差分离(§9 建议 3/10,JPEG2000 嵌入式)收益探针
+pub mod probe_error_separation;
 /// probe_monotonicity：DAT.1 跨内容单调性验收探针
 pub mod probe_monotonicity;
 /// probe_planar：planar 剪枝信号（色度平坦度）的 profile 验证探针
