@@ -27,6 +27,8 @@ pub mod probe_monotonicity;
 pub mod probe_planar;
 /// probe_planar_sub：planar 子平面次级候选胜出频率探针（profile 验证）
 pub mod probe_planar_sub;
+/// probe_palette：palette 色数分布（分量级/像素级 + RCT 残差域可行性）探针
+pub mod probe_palette;
 /// probe_ringing：P4.7 前置验证——ringing 信号（Laplacian 高响应）与
 /// edge 分类的独立性探针（S0）
 pub mod probe_ringing;

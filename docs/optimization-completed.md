@@ -166,6 +166,7 @@
 | P6.8 | quant_scalar 批量 SIMD | `backend/cpu/simd.rs` AVX2 4-lane f64 精确除法 + scalar 极值/尾部回退 | §23 未执行项 | ✅ | frame_type=8 skip/DCT 每块 64 系数批量量化 |
 | P6.9 | 帧/条带 Scratch Buffer | `encoder/scratch.rs` + `FrameScratch`/Rayon `map_init` 条带缓冲 | §23 未执行项 / 性能规划 §4.4 | ✅ | 帧候选复用整帧 residual/recon；条带任务复用 8 候选容量，无全局锁 |
 | P6.10 | DCT 块级栈缓冲 | `core/transform/{dct4,dct8,rect,reconstruct}.rs` + 编解码 DCT 热路径 | 性能规划 §4.4 | ✅ | 新增兼容 `*_into` 内核；4×4/8×8/矩形正逆变换热路径每块零堆分配，码流不变 |
+| P6.11 | palette 像素级抽样预筛 | `encoder/frame/candidate.rs` `palette_plausible` | optimization-review §39 | ✅ | palette span −33%（30.7s→20.5s）；bytes 逐字节不变；探针 `--probe-palette` 保留 |
 | — | SIMD 预测泛化 | — | §6.2 S3 | ❌ 中长期 | Med/Paeth 分支向量化复杂 |
 | — | 内存池零分配 | — | §6.2 S4 | ❌ 暂缓 | 待性能剖析后定向 |
 

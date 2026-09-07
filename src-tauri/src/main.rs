@@ -7,9 +7,18 @@ use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 
+/// 项目正式版本号(四位 `a.b.c.d`),规则见 docs/project-standards.md §13。
+/// Cargo.toml 的三位 semver(`a.b.c`)与 `d` 段(bug 修复位)合并而来;
+/// 升级时须与 Cargo.toml 及项目标准同步。
+pub const APP_VERSION: &str = "0.3.1.0";
+
 fn main() {
     // 检查命令行参数，决定运行模式
     let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "--version" {
+        println!("crf-viewer {APP_VERSION}");
+        return;
+    }
     let cli_lossy = cli_config::parse(&args).unwrap_or_else(|e| {
         eprintln!("Configuration error: {e}");
         std::process::exit(2);
@@ -165,6 +174,19 @@ fn main() {
     if args.len() > 1 && args[1] == "--probe-coeff-ctx" {
         // P3 前置验证：CoeffCABAC 方向扫描/邻块上下文合成内容能力探针（无参数）
         if let Err(e) = crf::performance::coeff_ctx_probe::run() {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-palette" {
+        // palette 色数分布探针：分量级/像素级唯一值 + RCT 残差域可行性
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_palette::run(&dir) {
             eprintln!("Probe error: {e}");
             std::process::exit(1);
         }

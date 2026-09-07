@@ -219,7 +219,7 @@ pub fn encode_frame_adaptive(
         // 二次元插画纯色块/低色数数据特化；planar 子平面经递归同样受益。
         // v2 载荷启用 copy-above token 化（coding_params.bit0=1 标记）。
         let palette_span = Span::begin("encode.adaptive.palette");
-        if palette_plausible(&image.pixels) {
+        if palette_plausible(&image.pixels, components) {
             match encode_palette_payload(&image.pixels, width) {
                 Some(Ok(payload)) => {
                     let pal = assemble_frame(&payload, image, 0x01, 4)?;
@@ -521,14 +521,41 @@ pub fn encode_frame_adaptive(
 /// 调色板最大颜色数
 const PALETTE_MAX_COLORS: usize = 256;
 
+/// 像素级抽样唯一色数上限：palette 的竞争力来自「低色数 + 平坦区 RLE 长行程」。
+/// 当像素级(三元组)唯一色数超过此宽松上界时，索引流需要 log2(N) 位/像素、
+/// 且表体积随 N 增长，在真实插画（数万~百万色）中必然劣于预测+熵编码候选。
+/// 抽样阶段超过即快速放弃（探针 K1：真实差分帧分量级唯一 320~506 全部 >256，
+/// 首帧恰 =256 使旧实现每帧完整执行全帧 HashMap + 索引流编码，而 palette 在
+/// 这些数据上从不参与竞争）。阈值取宽松上界、仅剪「从分量级与像素级角度均
+/// 无可能胜出」的帧，误放行由精确阶段兜底，产物字节由端到端锚点锁定。
+const PALETTE_SAMPLE_PIXEL_LIMIT: usize = 4096;
+
 /// 抽样快速判断数据是否可能为低色数（粗筛；误放行由精确阶段兜底）
-fn palette_plausible(pixels: &[i32]) -> bool {
+fn palette_plausible(pixels: &[i32], components: usize) -> bool {
     use std::collections::HashSet;
     let mut set: HashSet<i32> = HashSet::with_capacity(300);
-    for v in pixels.iter().step_by(7) {
-        if set.insert(*v) && set.len() > PALETTE_MAX_COLORS {
+    // 像素级抽样三元组集合（仅 components>1 时启用）
+    let mut px_set: HashSet<u64> = HashSet::with_capacity(256);
+    let px_stride = components.max(1);
+    let mut i = 0usize;
+    while i < pixels.len() {
+        let v = pixels[i];
+        if set.insert(v) && set.len() > PALETTE_MAX_COLORS {
             return false;
         }
+        if px_stride > 1 && i % px_stride == 0 {
+            // 当前像素起点：取 px_stride 个分量编码为 u64 键（低 16 位线性组合）
+            let mut key = 0u64;
+            for &c in pixels[i..].iter().take(px_stride).take(4) {
+                key = key
+                    .wrapping_mul(0x1_0000_01B3)
+                    .wrapping_add(c as u64 & 0xFFFF);
+            }
+            if px_set.insert(key) && px_set.len() > PALETTE_SAMPLE_PIXEL_LIMIT {
+                return false;
+            }
+        }
+        i += 7;
     }
     true
 }
