@@ -13,6 +13,8 @@ pub mod coeff_ctx_probe;
 /// probe_activity：P4.2/P4.3/P4.4 activity masking 三旋钮标定探针
 /// （DAT.1 单旋钮边际扫描，体积/PSNR 对照）
 pub mod probe_activity;
+/// probe_banded_alt：banded 条带高度自适应（32 vs 64 行）胜出率探针
+pub mod probe_banded_alt;
 /// probe_first_frame：首帧内部候选阶段 profile 探针
 pub mod probe_first_frame;
 /// probe_first_frame_bypass：首帧 RCT 双路竞争的 RGB 直通胜出率 + G 零值特征探针

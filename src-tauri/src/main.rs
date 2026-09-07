@@ -110,6 +110,19 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-banded-alt" {
+        // banded 条带高度自适应（32 vs 64 行）胜出率探针
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_banded_alt::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.len() > 1 && args[1] == "--probe-monotonicity" {
         // DAT.1 跨内容单调性验收探针（默认扫 test/png 下全部 x-y-z 组）
         let dir = if args.len() > 2 {
