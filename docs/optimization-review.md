@@ -1785,3 +1785,43 @@ decoder→encoder 反向依赖、拆分容器/帧管线并通过 P0/P1 回归前
 
 **门禁**：clippy 零告警（新文件）；builder 3 项 + probe_activity 3 项单测通过；
 三旋钮默认 100 下产物逐字节不变（既有回归锁定）。
+
+## 32. streaming previous 参考竞争补齐：change_mask + rct_inverse 条件修正（2026-09-07）
+
+**目标**：消除 §29 记录的「P5.1 previous 参考竞争 streaming 缺口」——batch 在默认
+V2 配置（reference_mode Auto→Hybrid）下逐帧 previous 竞争，streaming 恒 golden，
+默认配置下 batch/streaming 第 2 帧起可能不同。缺口由 3 项 streaming 一致性测试锁定
+（`test_streaming_previous_matches_batch` / `test_streaming_hybrid_matches_batch` /
+`test_streaming_previous_quality_offset_matches_batch`，基线 3 failed）。
+
+**根因**：streaming 的 previous 竞争骨架（`previous_rgb` 链式参考 + golden/previous
+双候选 + 场景切换 + force_previous/字节竞争）此前已落地，但与批量路径
+（`sequence.rs` L517-590）存在两处语义偏差：
+
+1. **缺失 change_mask 稀疏变化掩码**（`sequence.rs` L537-544）。`change_mask` 默认
+   `ToolMode::Auto`（不被 `resolve_auto` 改写为 On/Off），批量路径
+   `!matches!(change_mask, Off)` 恒真 → previous 差分静止 tile 写零；
+   streaming 缺失该步，previous 差分未稀疏化，编码产物偏大/不同。
+2. **差分帧重建 rct_inverse 条件误用 `first_in_rct`**。streaming 差分帧重建
+   （previous 更新链）用 `has_rct && !first_frame_no_rct` 判定 rct_inverse，而
+   差分帧恒为 RCT 编码（`rct_forward` 无条件），应像批量路径一样用 `has_rct`
+   （对应 `sequence.rs` L572 的 `use_rct`）；`first_frame_no_rct` 只影响首帧，
+   不影响差分帧。首帧直通（bit3=1）内容下该偏差会使差分帧重建缺一次
+   rct_inverse，破坏 previous 链式参考。
+
+**修复**（`encoder/streaming.rs` 差分帧分支，码流零改动）：
+1. previous 差分 `sub_i32` 后、场景切换检测前插入 change_mask 处理
+   （tile 阈值 `fq_base.step / 2`、`block_size.max(4)` 分块，与批量路径逐参对齐）；
+2. previous 更新链的差分帧重建 rct_inverse 条件由
+   `has_rct && !first_frame_no_rct` 改为 `has_rct`。
+
+**验证**：
+- streaming_tests 10/10 通过（含此前 3 failed → now pass）；
+- 全量 `cargo test` 183 passed / 0 failed（基线 180 passed + 3 failed）；
+- clippy 无新增告警（76 项为基线既有）；
+- 无损路径零影响（previous 竞争仅在 `reference_mode != Golden` 时有损触发，
+  lossless 恒 Golden）。
+
+**附带**：批量路径的 previous 竞争本身（`sequence.rs` L517-590）为既有实现，
+未改动；本修复仅使 streaming 与之对称。默认配置（Auto→Hybrid）与显式
+Hybrid 经 `resolve_auto` 等价，`test_streaming_hybrid_matches_batch` 即覆盖默认语义。

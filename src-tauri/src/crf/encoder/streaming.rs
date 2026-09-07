@@ -299,11 +299,36 @@ impl StreamingEncoder {
                     let previous = self.previous_rgb.as_ref().expect("previous_rgb must be set after first frame");
                     let mut diff_previous = vec![0i32; frame.pixels.len()];
                     crate::crf::backend::ops::sub_i32(&frame.pixels, &previous.pixels, &mut diff_previous);
-                    
+
+                    // P5.2 稀疏变化 mask（与批量路径 sequence.rs L537-544 对齐）：
+                    // 静止 tile 直接写零——解码透明的残差优化。Auto 语义（未显式
+                    // Off）与批量路径一致地启用；此前 streaming 缺失该步，导致
+                    // previous/hybrid 模式 batch/streaming 产物不一致（§29 已知缺口）。
+                    let tuning = self.tuning.as_ref().expect("tuning must be set");
+                    if !matches!(tuning.change_mask, crate::crf::core::config::lossy_v2::ToolMode::Off) {
+                        let ts = self.header.block_size.max(4) as usize;
+                        let mask = super::sequence_tools::change_mask(
+                            &frame.pixels,
+                            &previous.pixels,
+                            width,
+                            height,
+                            components,
+                            ts,
+                            if fq_base.step > 0 { (fq_base.step / 2) as i32 } else { 0 },
+                        );
+                        super::sequence_tools::apply_change_mask(
+                            &mut diff_previous,
+                            &mask,
+                            width,
+                            height,
+                            components,
+                            ts,
+                        );
+                    }
+
                     // 场景切换检测（与批量路径对齐）
                     // 注意：self.frames_written 是当前帧的索引（0-based），
                     // 批量路径中 i 是从 1 开始的（跳过首帧），所以这里用 self.frames_written + 1
-                    let tuning = self.tuning.as_ref().expect("tuning must be set");
                     let frame_index = self.frames_written + 1; // 跳过首帧
                     let periodic_anchor = tuning.anchor_interval > 0
                         && frame_index.is_multiple_of(tuning.anchor_interval as usize);
@@ -383,8 +408,11 @@ impl StreamingEncoder {
                 {
                     let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&final_data, &self.header)?;
                     let mut rgb = recon.pixels;
-                    let first_in_rct = self.header.flags.has_rct() && !self.header.flags.first_frame_no_rct();
-                    if first_in_rct {
+                    // 差分帧恒为 RCT 编码（has_rct 下 rct_forward 无条件），其重建
+                    // 必须 rct_inverse 转 RGB——与批量路径的 `use_rct` 判断对齐
+                    //（批量路径在此处用 use_rct 而非 first_in_rct，见 sequence.rs
+                    // 第 572 行；first_frame_no_rct 只影响首帧，不影响差分帧）。
+                    if self.header.flags.has_rct() {
                         rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?;
                     }
                     
