@@ -15,6 +15,8 @@ pub mod coeff_ctx_probe;
 pub mod probe_activity;
 /// probe_first_frame：首帧内部候选阶段 profile 探针
 pub mod probe_first_frame;
+/// probe_first_frame_bypass：首帧 RCT 双路竞争的 RGB 直通胜出率 + G 零值特征探针
+pub mod probe_first_frame_bypass;
 /// probe_lambda：P4.6 前置验证——RDOQ Trellis λ 敏感性扫描探针（S1）
 pub mod probe_lambda;
 /// probe_monotonicity：DAT.1 跨内容单调性验收探针

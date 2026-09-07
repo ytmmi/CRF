@@ -306,6 +306,7 @@
 | **activity_masking 纹理掩蔽（P4.2）** | §31 三旋钮标定 | +3.87% 负收益——band_steps None→Some 路径切换代价 + activity 增步长 delta 整数除法≈0（g−ref 仅 1~3），「省码率」从未发生 |
 | **flat_area_protection 平坦防 banding（P4.3）** | §31 三旋钮标定 | +3.87% 负收益——减步长保质量但基线已无 banding 可保护（PSNR +0.006dB），体积白增 |
 | **edge_protection 边缘保护（P4.4）** | §31 三旋钮标定 | +6.30% 负收益——减步长但基线已无 ringing 可保护（PSNR +0.009dB，印证 §28 S0 ringing⊆edge），体积白增 |
+| **首帧 RGB 直通内容门控跳过** | §34 首帧 RCT 双路探针 | 直通胜出 3/24（12.5%），但胜出组 G 零值占比 0.000~0.001——「G 恒零才直通」假设不成立（真实原因是 RGB 通道低相关），G 零值无法预测胜出；且 1000 组 bypass 仅比 rct 大 4.4%，Fast-Fail 上限过松。首帧 RCT 双路竞争维持现状 |
 
 ---
 
