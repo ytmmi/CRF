@@ -319,8 +319,13 @@
 - **activity 分类框架修复（✅ 已闭环，§28）**：`estimate_band_activity_steps` 的 reference 整数除法稀疏差分场景退化缺陷已修复（`.max(1)` + `test_activity_steps_sparse_diff_reference_activates` 回归单测）；默认旋钮 100 中性下产物逐字节不变（函数不被调用）。三旋钮（P4.2/P4.3/P4.4）标定轮已由 §31 完成——**全部证伪关闭**（band_steps 路径切换代价 + delta 整数除法失效 + 基线无 banding/ringing 可保护，见否决表），默认保持 100 中性
 - **P5.1 previous 参考竞争 streaming 缺口（✅ 已闭环，§32）**：原缺口——batch 默认 V2 配置（reference_mode Auto→Hybrid）逐帧 previous 竞争，streaming 恒 golden，默认配置下 batch/streaming 第 2 帧起可能不同。已修复：streaming previous 竞争补齐 change_mask 稀疏变化掩码（§29 缺口根因 1）+ 差分帧重建 rct_inverse 条件修正为 `has_rct`（原误用 `has_rct && !first_frame_no_rct`，根因 2），batch/streaming 在 previous/hybrid 模式逐字节一致（3 项新测试锁定）
 - **接口规划未完成项**：[lossy-tuning-interface-plan.md](lossy-tuning-interface-plan.md) §13 项6「逐组接入参数」（部分）——新增算法字段（如 P1.6 Q_target 编号、量化矩阵、RDOQ λ 等）继续分阶段接入；UI 专家面板已提供 `expert_panel_schema()`，前端源码尚不存在
-- **变换域深化未完成项**：frame_type=8 收益验证、CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项）、top-2 试编码、矩形/4×4 块尺寸、Trellis/感知矩阵集成、端到端 CRF 文件级往返测试
+- **变换域深化未完成项**：frame_type=8 收益验证、CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项）、top-2 试编码、矩形/4×4 块尺寸、Trellis/感知矩阵集成、端到端 CRF 文件级往返测试（✅ 端到端往返已补齐，§37 F3）
   - **其中 P3.2（方向扫描）与 P3.5（邻块上下文）已由 §30 合成内容探针证伪关闭**（收益 ≈0%，见否决表）；P3.6（小系数短码）/ P3.7（tile restart）维持未做、未证伪。
+- **遗留缺陷修复（✅ 已闭环，§37）**：①type8 解码端 chroma_step 传参错误
+  （`(q_step,q_step)`）→ type8 载荷自包含 luma/chroma 步长信令，解码端不再依赖
+  文件头 lossy_quant；②路径 C `fq_for_chain_index` 色度半分辨率未解耦
+  （`gq>1 &&`）→ 移除阻断，与路径 G 一致；③type8 有损文件级端到端往返测试
+  → `test_lossy_frame_type8_file_roundtrip` 补齐。
 
 ---
 

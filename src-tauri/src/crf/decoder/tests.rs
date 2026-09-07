@@ -217,3 +217,135 @@ fn test_lossy_golden_sequence_roundtrip() {
         max_err_all
     );
 }
+
+/// 缺陷回归（文件级）：含 frame_type=8 有损帧的完整 CRF 文件端到端往返。
+///
+/// 历史缺陷（optimization-review §24/§25）：有损档 frame_type=8 只有载荷级
+/// 测试，缺端到端 CRF 文件级往返；且解码端曾以 `(q_step, q_step)` 反量化，
+/// chroma_step != q_step（chroma_scale>1000 / 显式 chroma_step）时色度步长
+/// 错误。修复后 type8 载荷自包含 luma/chroma 步长。
+///
+/// 本测试手动组装 2 帧文件：
+/// - frame0 = type8 无损 golden（luma=1, chroma=1），RGB 直通（has_rct=false）；
+/// - frame1 = type8 有损差分（luma=2, chroma=3）；
+/// 走 decode_from_bytes → restore_temporal 全链路（文件头/索引/帧头/CRC/分派）。
+#[test]
+fn test_lossy_frame_type8_file_roundtrip() {
+    use crate::crf::checksum::crc32;
+    use crate::crf::core::bitstream::constants::{
+        FOOTER_MAGIC, FRAME_HEADER_SIZE, HEADER_SIZE,
+    };
+    use crate::crf::core::bitstream::header::CrfHeader;
+    use crate::crf::core::domain::{CompressionType, Flags, PredictionMode};
+    use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
+
+    let w = 32u16;
+    let h = 24u16;
+    let make_img = |shift: i32| -> ImageData {
+        let mut px = Vec::with_capacity(w as usize * h as usize * 3);
+        for y in 0..h {
+            for x in 0..w {
+                px.push((((x as i32 * 5 + y as i32 * 3 + shift) % 200) + 28) as i32);
+                px.push(((x as i32 * 7 - y as i32 * 2 + shift).rem_euclid(180) + 40) as i32);
+                px.push(((x as i32 * 3 + y as i32 * 11) % 220 + 20) as i32);
+            }
+        }
+        ImageData {
+            width: w,
+            height: h,
+            bit_depth: 8,
+            color_format: ColorFormat::Rgb,
+            pixels: px,
+        }
+    };
+    let img0 = make_img(0);
+    let img1 = make_img(17);
+
+    // frame0：type8 无损（q=1），RGB 直通域
+    let frame0_payload = encode_intra_transform_payload(
+        &img0,
+        CompressionType::GolombRice,
+        1,
+        0,
+        1,
+        0,
+    )
+    .expect("frame0 encode failed");
+    let frame0_buf = crate::crf::encoder::assemble_frame(&frame0_payload, &img0, 0, 8).unwrap();
+
+    // frame1：type8 有损差分（luma=2, chroma=3）；golden 参考位 bit7=1
+    let diff: Vec<i32> = img1
+        .pixels
+        .iter()
+        .zip(&img0.pixels)
+        .map(|(a, b)| a - b)
+        .collect();
+    let diff_img = ImageData {
+        width: w,
+        height: h,
+        bit_depth: 8,
+        color_format: ColorFormat::Rgb,
+        pixels: diff,
+    };
+    let frame1_payload = encode_intra_transform_payload(
+        &diff_img,
+        CompressionType::GolombRice,
+        2,
+        0,
+        3,
+        0,
+    )
+    .expect("frame1 encode failed");
+    let frame1_buf =
+        crate::crf::encoder::assemble_frame(&frame1_payload, &diff_img, 0x80, 8).unwrap();
+
+    // 文件头：2 帧、RGB、GolombRice、无 RCT（RGB 直通）、含帧索引
+    let mut header = CrfHeader::new(2, w, h, 8, ColorFormat::Rgb, CompressionType::GolombRice);
+    header.flags.set_has_index(true);
+    header.flags.set_has_rct(false);
+    header.lossy_quant = 2; // 全局亮度步长（frame1 有损）
+
+    // 组装文件：header + index(2×8B) + frames + CRC32 + footer
+    let frames_start = HEADER_SIZE + 2 * 8;
+    let mut out = Vec::new();
+    header.write_bytes(&mut out).unwrap();
+    out.extend_from_slice(&(frames_start as u32).to_le_bytes());
+    out.extend_from_slice(&(frame0_buf.len() as u32).to_le_bytes());
+    out.extend_from_slice(&((frames_start + frame0_buf.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&(frame1_buf.len() as u32).to_le_bytes());
+    out.extend_from_slice(&frame0_buf);
+    out.extend_from_slice(&frame1_buf);
+    let crc = crc32(&out);
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&FOOTER_MAGIC);
+
+    // 端到端文件解码 + 时间维还原
+    let result = decode_from_bytes(&out).expect("file decode failed");
+    assert_eq!(result.frames.len(), 2);
+    let restored = crate::crf::decoder::session::DecodeSession::restore_temporal(&result);
+
+    // frame0：golden 无损基准，必须逐位一致
+    assert_eq!(
+        restored[0].pixels, img0.pixels,
+        "frame0 无损 golden 必须逐位一致"
+    );
+
+    // frame1：golden 差分还原（luma=2 / chroma=3），误差受控
+    let max_err = restored[1]
+        .pixels
+        .iter()
+        .zip(&img1.pixels)
+        .map(|(a, b)| (a - b).unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_err < 100,
+        "frame1 type8 有损还原 max_err={} 应 <100",
+        max_err
+    );
+
+    // 载荷级复核：frame1 确实携带步长信令（chroma=3 != luma=2）
+    assert_eq!(frame1_payload[0] & 0b110, 0b110, "type8 载荷必须自包含步长");
+    assert_eq!(frame1_payload[1], 2, "luma_step 应为 2");
+    assert_eq!(frame1_payload[2], 3, "chroma_step 应为 3");
+}

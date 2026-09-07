@@ -790,7 +790,9 @@ q95 帧0 两版均为 107.15 dB / max_err=1（轻滤语义未变）。
 **附带修复**：发现 .gitignore 裸 `test/` 规则误排除
 `src-tauri/src/test/mod.rs`（fresh clone 无法编译），规则改为根锚定
 `/test/` 并补录模块（commit 6163a64）。路径 C（fq_for_chain_index）的
-半分辨率条件暂未同步解耦，留待预设统一标定时处理。
+半分辨率条件暂未同步解耦。**✅ 已修复（v1.14.1，见 §37）**：
+`fq_for_chain_index` 的 `chroma_half_res` 移除 `gq > 1` 阻断，与路径 G 一致，
+直接由 `tuning.chroma_half_res` 决定（q95 路径 C 首次真实启用 4:2:0）。
 
 ### 11.1 补充：帧类型胜出分布及其对 P1 第二轮的定向（2026-08-25）
 
@@ -1346,7 +1348,10 @@ intra_transform_tests.rs 95 均合规。
 
 **未执行项及原因**：
 1. frame_type=8 端到端 CRF 文件级往返测试（现仅载荷级
-   intra_transform_tests）——verify 路径需覆盖 type=8 全链路；
+   intra_transform_tests）——verify 路径需覆盖 type=8 全链路。
+   **✅ 已补齐（v1.14.1，见 §37）**：`test_lossy_frame_type8_file_roundtrip`
+   手动组装含 type8 无损 golden + type8 有损差分帧的完整 CRF 文件，
+   走 decode_from_bytes → restore_temporal 全链路（文件头/索引/帧头/CRC/分派）。
 2. frame_type=8 接入竞争后的真实胜出率/体积统计未单独记录（§23 预筛
    间接显示低胜出）；
 3. CoeffCABAC 上下文建模深化（§5-P3 第 5~7 项完整投入）未做——当前 4
@@ -1455,7 +1460,10 @@ PNG1000 端到端 10/10 PASS；clippy 零告警。
 - "解码端 decode_intra_transform 签名未含 deadzone/chroma_bias"——无损
   bias=0 不受影响；有损时 chroma_step 传参错误（decoder/mod.rs L131 传
   q_step,q_step 而非 q_step,chroma_step）是有损 frame_type=8 的潜在缺陷，
-  但有损档 frame_type=8 零胜出未暴露，留待有损深化时修复。
+  但有损档 frame_type=8 零胜出未暴露。**✅ 已修复（v1.14.1，见 §37）**：
+  type8 载荷改为自包含 `[flags][luma_step][chroma_step]` 步长信令，解码端
+  反量化完全从载荷读取，不再依赖文件头 lossy_quant；同时消除"无损 type8
+  帧出现在有损文件（lossy_quant>0）时亮度步长错误"的同类隐患。
 
 ## 26. P1.6 第一步：低质量档位 PNG1000 对标 AVIF（2026-08-26）
 
@@ -1967,3 +1975,53 @@ RCT 域与 RGB 直通两路 `encode_frame_adaptive`，输出各自字节、直�
 冒险改动有损语义。当前 encode 端到端瓶颈的其余候选（components==3 预测 SIMD、
 「一次遍历合并 8 候选」）同属内存带宽/线程预算范畴，收益均需实测，一并留待
 专项性能轮。
+
+## 37. v1.14.1 遗留缺陷修复轮：type8 步长信令 + 路径 C 色度解耦 + 文件级往返（2026-09-07）
+
+**目标**：闭环 §24/§25/§11 记录的三个遗留缺陷（均为「有损 type8 零胜出未暴露 / 路径 C 未同步解耦」的潜在正确性项），并补齐文档空白。
+
+### F1：type8 载荷自包含 luma/chroma 步长信令（§25 遗留）
+
+- **根因**：解码端 `decode_intra_transform` 由调用方传 `(q_step, q_step)`
+  （`decoder/mod.rs` 旧 L131），色度反量化步长恒等于亮度步长。默认
+  `chroma_scale_x1000=1000` 时二者相同、缺陷被掩盖；`chroma_scale>1000`
+  （q90 的 130%→chroma=3≠2）或显式 `chroma_step` 配置下色度步长错误。
+  且**同类隐患**：无损 type8 帧出现在有损文件（lossy_quant>0）时，
+  解码端用 lossy_quant 反量化其亮度平面也会错误。
+- **修复**（`encoder/intra_transform.rs` + `decoder/intra_transform.rs` +
+  `decoder/reconstruct/mod.rs`）：type8 载荷改为无条件自包含
+  `[flags u8][luma_step u8][chroma_step u8]`（flags bit1/bit2 present 恒设）。
+  解码端反量化（`level×q`）完全从载荷读取，不再依赖文件头 lossy_quant。
+- **产物影响**：每 type8 帧载荷 +2 字节（步长信令）。无损路径 chroma_scale=1000
+  时步长仍为 (1,1)，解码结果不变；字节变化仅影响 type8 胜出帧，全量回归核对。
+- **测试**：`frame_type8_step_signaling_self_contained`（信令字节断言 +
+  往返）、`frame_type8_luma_chroma_equal_steps`（步长相等场景）;
+  既有 3 个往返测试同步到新签名。
+
+### F2：路径 C 色度半分辨率解耦（§11 遗留）
+
+- **根因**：`fq_for_chain_index`（路径 C 链式差分）的 `chroma_half_res`
+  为 `gq > 1 && tuning.chroma_half_res`，q95（gq=1）被隐式阻断；路径 G
+  已在 P1a 解耦（`fq_for_index` 直接用 `tuning.chroma_half_res`）。
+- **修复**（`encoder/session/batch.rs`）：移除 `gq > 1` 条件，与路径 G 一致。
+- **测试**：`fq_for_chain_index_chroma_half_res_decoupled_from_step` +
+  `fq_for_chain_index_anchor_boundary_lossless`。
+
+### F3：type8 文件级端到端往返测试（§24 未执行项 1）
+
+- **背景**：有损 type8 在真实 encode 竞争中有损档零胜出，无法通过常规
+  encode→decode 覆盖；手动组装是唯一确定路径。
+- **实现**（`decoder/tests.rs` `test_lossy_frame_type8_file_roundtrip`）：
+  手动组装 2 帧完整 CRF（文件头+索引+帧头+CRC+footer）：
+  frame0=type8 无损 golden（luma=1, chroma=1，RGB 直通 has_rct=false），
+  frame1=type8 有损差分（luma=2, chroma=3，golden 位 bit7=1），
+  走 `decode_from_bytes` → `restore_temporal` 全链路验证：frame0 逐位一致、
+  frame1 误差受控（<100）。
+
+**门禁**：`cargo test` 相关模块全过（intra_transform 5/5、decoder 文件级 2/2、
+fq_for_chain_index 2/2）；clippy 无新增告警。
+**文档**：`crf格式标准.md` 补充 frame_type=8 帧类型行 + 载荷布局小节（v1.14.1
+步长信令）；`optimization-review.md` §11/§24/§25 遗留记录标记闭环。
+**遗留**：decode 端 `q_step` 不再来自 lossy_quant 后，`header.lossy_quant`
+对 type8 帧仅作诊断用途；QualityOffset/anchor-offset 下非 type8 帧（planar/
+banded/cabac）的步长分歧不在本修复范围（无反量化逻辑，不依赖该字段）。
