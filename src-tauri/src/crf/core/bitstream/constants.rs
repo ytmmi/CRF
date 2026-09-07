@@ -18,8 +18,12 @@ pub const FOOTER_MAGIC: [u8; 4] = [0x43, 0x52, 0x46, 0xFF];
 /// 文件头大小（字节）
 pub const HEADER_SIZE: usize = 64;
 
-/// 帧头大小（字节）：frame_size(u32) + pixel_count(u32) + frame_type(u8) + coding_params(u8) + pred_mode(u8)
-pub const FRAME_HEADER_SIZE: usize = 11;
+/// 帧头大小（字节）：frame_size(u32) + pixel_count(u32) + frame_type(u8) + coding_params(u8) + pred_mode(u8) + reference_type(u8)
+///
+/// v1.15 破坏式更新：新增第 6 字段 `reference_type`（0=golden / 1=previous /
+/// 2=prev2 / 3=保留），替代 coding_params.bit7 的 golden 单 bit 语义，
+/// 支持多参考帧（previous 之外的前前帧 prev2）。11 → 12 字节。
+pub const FRAME_HEADER_SIZE: usize = 12;
 
 /// 条带级自适应预测的条带高度（行数）
 ///
@@ -40,7 +44,10 @@ pub const MAX_FRAMES: u16 = 65535;
 pub const VERSION_MAJOR: u16 = 1;
 
 /// 当前次版本号
-pub const VERSION_MINOR: u16 = 3;
+///
+/// v1.15（2026-09-07 破坏式更新）：帧头 11→12 字节（新增 reference_type 字段，
+/// 多参考帧 prev2 信令）。旧文件（v1.14 及以下）不再兼容。
+pub const VERSION_MINOR: u16 = 4;
 
 /// 用户数据最大长度（字节）
 pub const USER_DATA_MAX_LEN: usize = 40;

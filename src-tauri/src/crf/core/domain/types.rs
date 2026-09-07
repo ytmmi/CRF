@@ -262,6 +262,10 @@ pub struct FrameHeader {
     pub coding_params: u8,
     /// 本帧预测模式：0xFF=跟随文件头全局模式，其他值见 PredictionMode
     pub pred_mode: u8,
+    /// v1.15：参考类型（0=golden / 1=previous / 2=prev2 / 3=保留）。
+    /// 替代旧 coding_params.bit7 的单 bit golden 语义，支持多参考帧
+    /// （golden 首帧差分、前帧还原 prev、前前帧还原 prev2）。
+    pub reference_type: u8,
 }
 
 impl FrameHeader {
@@ -274,6 +278,7 @@ impl FrameHeader {
             frame_type: 0,
             coding_params,
             pred_mode: PredictionMode::PRED_MODE_UNSET,
+            reference_type: 0, // 默认 golden
         }
     }
 
@@ -285,6 +290,7 @@ impl FrameHeader {
             frame_type,
             coding_params,
             pred_mode: PredictionMode::PRED_MODE_UNSET,
+            reference_type: 0, // 默认 golden
         }
     }
 
@@ -302,11 +308,8 @@ impl FrameHeader {
             pixel_count: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
             frame_type: data[8],
             coding_params: data[9],
-            pred_mode: if data.len() > 10 {
-                data[10]
-            } else {
-                PredictionMode::PRED_MODE_UNSET
-            },
+            pred_mode: data[10],
+            reference_type: data[11],
         })
     }
 
@@ -317,31 +320,31 @@ impl FrameHeader {
         writer.write_all(&[self.frame_type])?;
         writer.write_all(&[self.coding_params])?;
         writer.write_all(&[self.pred_mode])?;
+        writer.write_all(&[self.reference_type])?;
         Ok(())
     }
 
-    /// 帧是否以首帧（golden）为差分参考基准
+    /// 帧是否以首帧（golden）为差分参考基准（reference_type == 0）
     ///
-    /// 判定：frame_type ∈ {1,2,4,5} 且 coding_params.bit7=1。
-    /// frame_type=0（块级 k，仅用于无参考关键帧）不参与该语义。
-    /// coding_params 各帧类型的高位占用核查：k≤6 / BAND_HEIGHT=32 / 0，
-    /// bit7 恒空闲，安全。
+    /// v1.15：golden 语义从 coding_params.bit7 迁移到独立 reference_type 字段，
+    /// 帧类型 0~8 均可承载参考语义（不再有 frame_type=0 例外）。
     pub fn is_golden_ref(&self) -> bool {
-        self.frame_type != 0 && (self.coding_params & 0x80 != 0)
+        self.reference_type == 0
     }
 
-    /// 读取 Golomb k 值（屏蔽 coding_params.bit7 的 golden 标志位）
+    /// 帧是否以前前帧（prev2）为差分参考基准（reference_type == 2）
+    pub fn is_prev2_ref(&self) -> bool {
+        self.reference_type == 2
+    }
+
+    /// 读取 Golomb k 值（coding_params.bit7 已不再承载 golden 标志，mask 保留防御）
     pub fn golomb_k(&self) -> u8 {
         self.coding_params & 0x7F
     }
-    /// 设置/清除 golden 参考标志（写入 coding_params.bit7）
+    /// 设置参考类型（0=golden / 1=previous / 2=prev2）
     #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
-    pub fn set_golden_ref(&mut self, golden: bool) {
-        if golden {
-            self.coding_params |= 0x80;
-        } else {
-            self.coding_params &= !0x80;
-        }
+    pub fn set_reference_type(&mut self, reference_type: u8) {
+        self.reference_type = reference_type;
     }
 }
 
@@ -384,13 +387,17 @@ pub struct DecodeResult {
     pub frame_index: Vec<FrameIndexEntry>,
     /// 解码后的帧数据
     ///
-    /// 语义由 `frame_golden_refs` 决定：
-    /// - golden=false（链式）：该帧为相对前一帧的残差，需累加还原；
-    /// - golden=true（首帧参考）：该帧数据加首帧像素即为还原帧。
+    /// 语义由 `frame_golden_refs` / `frame_prev2_refs` 决定：
+    /// - golden=true（首帧参考）：该帧数据加首帧像素即为还原帧；
+    /// - prev2=true（前前帧参考）：该帧数据加前前帧还原像素；
+    /// - 均 false（链式）：该帧为相对前一帧的残差，需累加还原。
     pub frames: Vec<ImageData>,
     /// 每帧的差分参考模式（与 frames 一一对应）：
-    /// false = 链式参考（前帧），true = 首帧参考（golden）
+    /// true = 首帧参考（golden）；false = 见 frame_prev2_refs
     pub frame_golden_refs: Vec<bool>,
+    /// v1.15：每帧是否以前前帧（prev2）为参考（与 frames 一一对应）。
+    /// 仅当 frame_golden_refs[i]==false 时有意义：true=prev2，false=previous。
+    pub frame_prev2_refs: Vec<bool>,
 }
 
 /// 编码参数

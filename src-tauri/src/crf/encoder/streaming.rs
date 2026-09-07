@@ -15,14 +15,16 @@
 //! 每帧码流与一次性编码逐字节一致。
 
 use crate::crf::checksum::crc32;
-use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE};
+use crate::crf::core::bitstream::constants::{
+    FOOTER_MAGIC, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE,
+};
 use crate::crf::core::bitstream::header::CrfHeader;
 use crate::crf::core::domain::{CompressionType, EncodeParams, ImageData};
+use crate::crf::error::{CrfError, CrfResult};
 
 use super::frame::candidate::encode_frame_adaptive;
-use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
 use super::FrameQuant;
+use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
 
 /// 流式帧数上限（u16 索引容量）
 pub const STREAMING_MAX_FRAMES: usize = 65535;
@@ -49,12 +51,16 @@ pub struct StreamingEncoder {
     golden_rgb: Option<ImageData>,
     /// P5.1 previous 参考帧（**RGB 域**）——链式参考使用，用于 previous/hybrid 模式
     previous_rgb: Option<ImageData>,
+    /// v1.15 prev2 参考帧（**RGB 域**）——前前帧重建，用于 hybrid 模式（周期动作）
+    prev2_rgb: Option<ImageData>,
     /// 已编码帧体（各帧 [flags][(tree)][stream] 拼接）
     body: Vec<u8>,
     /// 每帧在 body 内的相对偏移与大小（finish 时换算为绝对偏移）
     frame_layout: Vec<(usize, usize)>,
-    /// 每帧的 golden 标志（用于 previous 竞争时设置 bit7）
+    /// 每帧的 golden 标志（reference_type==0；v1.15 前为 coding_params.bit7）
     frame_golden_flags: Vec<bool>,
+    /// v1.15 每帧的 prev2 标志（reference_type==2）
+    frame_prev2_flags: Vec<bool>,
     frames_written: usize,
     finished: bool,
 }
@@ -94,9 +100,11 @@ impl StreamingEncoder {
             interval: 0,
             golden_rgb: None,
             previous_rgb: None,
+            prev2_rgb: None,
             body: Vec::new(),
             frame_layout: Vec::new(),
             frame_golden_flags: Vec::new(),
+            frame_prev2_flags: Vec::new(),
             frames_written: 0,
             finished: false,
         })
@@ -163,7 +171,10 @@ impl StreamingEncoder {
                         height: frame.height,
                         bit_depth: frame.bit_depth,
                         color_format: frame.color_format,
-                        pixels: crate::crf::core::color::rct::rct_forward(&frame.pixels, components)?,
+                        pixels: crate::crf::core::color::rct::rct_forward(
+                            &frame.pixels,
+                            components,
+                        )?,
                     }
                 } else {
                     ImageData {
@@ -209,6 +220,7 @@ impl StreamingEncoder {
                 // P5.1：初始化 previous 为 G_hat（与 golden 相同），用于 previous/hybrid 模式
                 self.previous_rgb = Some(g_hat_img);
                 self.frame_golden_flags.push(false); // 首帧不是 golden 差分
+                self.frame_prev2_flags.push(false);
                 self.append_frame(data);
             }
             Some(golden) => {
@@ -219,7 +231,9 @@ impl StreamingEncoder {
                         actual: (frame.width, frame.height),
                     });
                 }
-                let reference_mode = self.tuning.as_ref()
+                let reference_mode = self
+                    .tuning
+                    .as_ref()
                     .map(|t| t.reference_mode)
                     .unwrap_or(crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden);
                 let use_previous = matches!(
@@ -227,12 +241,12 @@ impl StreamingEncoder {
                     crate::crf::core::config::lossy_v2::ReferenceModeV2::Previous
                         | crate::crf::core::config::lossy_v2::ReferenceModeV2::Hybrid
                 );
-                
+
                 // golden 差分候选（与批量路径阶段 2 对齐，使用 band_ref）
                 let mut diff_golden = vec![0i32; frame.pixels.len()];
                 crate::crf::backend::ops::sub_i32(&frame.pixels, &golden.pixels, &mut diff_golden);
                 crate::crf::core::color::rct::rct_forward_in_place(&mut diff_golden, components)?;
-                
+
                 let fq_band_golden: Vec<u8> = if self.noise_on() || self.activity_on() {
                     fq_band_steps(
                         fq_base.step,
@@ -252,7 +266,7 @@ impl StreamingEncoder {
                 } else {
                     Some(&fq_band_golden)
                 };
-                
+
                 let data_golden = if self.params.adaptive_prediction {
                     encode_frame_adaptive(
                         &ImageData {
@@ -287,25 +301,34 @@ impl StreamingEncoder {
                         None,
                     )?
                 };
-                
-                // golden 参考标志（coding_params.bit7）：与批量路径路径 G 对齐
-                let mut data_golden_with_flag = data_golden.clone();
-                if data_golden_with_flag.len() > FRAME_HEADER_SIZE {
-                    data_golden_with_flag[9] |= 0x80;
-                }
-                
-                // P5.1: previous 竞争逻辑（与批量路径 sequence.rs 第 512-588 行对齐）
-                let (final_data, is_golden) = if use_previous {
-                    let previous = self.previous_rgb.as_ref().expect("previous_rgb must be set after first frame");
-                    let mut diff_previous = vec![0i32; frame.pixels.len()];
-                    crate::crf::backend::ops::sub_i32(&frame.pixels, &previous.pixels, &mut diff_previous);
 
-                    // P5.2 稀疏变化 mask（与批量路径 sequence.rs L537-544 对齐）：
-                    // 静止 tile 直接写零——解码透明的残差优化。Auto 语义（未显式
-                    // Off）与批量路径一致地启用；此前 streaming 缺失该步，导致
-                    // previous/hybrid 模式 batch/streaming 产物不一致（§29 已知缺口）。
+                // v1.15：golden 参考由帧头 reference_type=0 表达（assemble_frame
+                // 默认值），不再写 coding_params.bit7。
+                let data_golden = data_golden;
+
+                // P5.1 + v1.15 prev2：重建参考竞争（golden / previous / prev2）。
+                // 与批量路径 sequence.rs 三候选逻辑对齐（change_mask / scene_cut /
+                // force_previous / 最小字节胜出）。
+                let mut ref_type: u8 = 0; // 0=golden
+                let mut final_data = data_golden;
+                if use_previous {
+                    let previous = self
+                        .previous_rgb
+                        .as_ref()
+                        .expect("previous_rgb must be set after first frame");
+                    let mut diff_previous = vec![0i32; frame.pixels.len()];
+                    crate::crf::backend::ops::sub_i32(
+                        &frame.pixels,
+                        &previous.pixels,
+                        &mut diff_previous,
+                    );
+
+                    // P5.2 稀疏变化 mask（与批量路径对齐）：静止 tile 直接写零。
                     let tuning = self.tuning.as_ref().expect("tuning must be set");
-                    if !matches!(tuning.change_mask, crate::crf::core::config::lossy_v2::ToolMode::Off) {
+                    if !matches!(
+                        tuning.change_mask,
+                        crate::crf::core::config::lossy_v2::ToolMode::Off
+                    ) {
                         let ts = self.header.block_size.max(4) as usize;
                         let mask = super::sequence_tools::change_mask(
                             &frame.pixels,
@@ -314,7 +337,11 @@ impl StreamingEncoder {
                             height,
                             components,
                             ts,
-                            if fq_base.step > 0 { (fq_base.step / 2) as i32 } else { 0 },
+                            if fq_base.step > 0 {
+                                (fq_base.step / 2) as i32
+                            } else {
+                                0
+                            },
                         );
                         super::sequence_tools::apply_change_mask(
                             &mut diff_previous,
@@ -326,34 +353,67 @@ impl StreamingEncoder {
                         );
                     }
 
-                    // 场景切换检测（与批量路径对齐）
-                    // 注意：self.frames_written 是当前帧的索引（0-based），
-                    // 批量路径中 i 是从 1 开始的（跳过首帧），所以这里用 self.frames_written + 1
-                    let frame_index = self.frames_written + 1; // 跳过首帧
+                    // 场景切换检测（与批量路径对齐；self.frames_written 为当前帧
+                    // 0-based 索引，批量路径 i 从 1 起 → frame_index = written + 1）
+                    let frame_index = self.frames_written + 1;
                     let periodic_anchor = tuning.anchor_interval > 0
                         && frame_index.is_multiple_of(tuning.anchor_interval as usize);
-                    let scene_cut = periodic_anchor || (
-                        !matches!(tuning.scene_cut, crate::crf::core::config::lossy_v2::SceneCutModeV2::Off)
-                            && (diff_previous.iter().map(|v| v.unsigned_abs() as u64).sum::<u64>()
-                                / diff_previous.len().max(1) as u64)
-                                > ((tuning.scene_cut_threshold_x1000 as u64 * 255) / 1000)
+                    let scene_cut = periodic_anchor
+                        || (!matches!(
+                            tuning.scene_cut,
+                            crate::crf::core::config::lossy_v2::SceneCutModeV2::Off
+                        ) && (diff_previous
+                            .iter()
+                            .map(|v| v.unsigned_abs() as u64)
+                            .sum::<u64>()
+                            / diff_previous.len().max(1) as u64)
+                            > ((tuning.scene_cut_threshold_x1000 as u64 * 255) / 1000));
+                    let force_previous = matches!(
+                        reference_mode,
+                        crate::crf::core::config::lossy_v2::ReferenceModeV2::Previous
                     );
-                    
-                    let data_previous = if scene_cut {
-                        Vec::new() // 场景切换时不进行 previous 竞争
-                    } else {
-                        crate::crf::core::color::rct::rct_forward_in_place(&mut diff_previous, components)?;
-                        
-                        // previous 竞争时不使用 band_ref（与批量路径 sequence.rs 第 552-558 行对齐）
-                        if self.params.adaptive_prediction {
-                            encode_frame_adaptive(
-                                &ImageData {
-                                    width: frame.width,
-                                    height: frame.height,
-                                    bit_depth: frame.bit_depth,
-                                    color_format: frame.color_format,
-                                    pixels: diff_previous,
+                    let use_prev2 = matches!(
+                        reference_mode,
+                        crate::crf::core::config::lossy_v2::ReferenceModeV2::Hybrid
+                    );
+
+                    // 参考候选编码（闭包）：diff vs 参考 → change_mask → RCT → 编码。
+                    let encode_ref = |ref_pixels: &[i32]| -> crate::crf::error::CrfResult<Vec<u8>> {
+                        let mut diff = vec![0i32; frame.pixels.len()];
+                        crate::crf::backend::ops::sub_i32(&frame.pixels, ref_pixels, &mut diff);
+                        if !matches!(
+                            tuning.change_mask,
+                            crate::crf::core::config::lossy_v2::ToolMode::Off
+                        ) {
+                            let ts = self.header.block_size.max(4) as usize;
+                            let mask = super::sequence_tools::change_mask(
+                                &frame.pixels,
+                                ref_pixels,
+                                width,
+                                height,
+                                components,
+                                ts,
+                                if fq_base.step > 0 {
+                                    (fq_base.step / 2) as i32
+                                } else {
+                                    0
                                 },
+                            );
+                            super::sequence_tools::apply_change_mask(
+                                &mut diff, &mask, width, height, components, ts,
+                            );
+                        }
+                        crate::crf::core::color::rct::rct_forward_in_place(&mut diff, components)?;
+                        let eff = ImageData {
+                            width: frame.width,
+                            height: frame.height,
+                            bit_depth: frame.bit_depth,
+                            color_format: frame.color_format,
+                            pixels: diff,
+                        };
+                        if self.params.adaptive_prediction {
+                            Ok(encode_frame_adaptive(
+                                &eff,
                                 self.compression_type,
                                 self.header.block_size,
                                 false,
@@ -361,90 +421,101 @@ impl StreamingEncoder {
                                 None,
                                 None,
                             )?
-                            .data
+                            .data)
                         } else {
-                            super::encode_frame(
-                                &ImageData {
-                                    width: frame.width,
-                                    height: frame.height,
-                                    bit_depth: frame.bit_depth,
-                                    color_format: frame.color_format,
-                                    pixels: diff_previous,
-                                },
+                            Ok(super::encode_frame(
+                                &eff,
                                 self.compression_type,
                                 self.header.block_size,
                                 self.header.prediction_mode,
                                 false,
                                 fq_base,
                                 None,
-                            )?
+                            )?)
                         }
                     };
-                    
-                    // previous 标志为 bit7=0；golden 候选保留 bit7=1
-                    // force_previous 时直接使用 previous，否则比较大小
-                    let force_previous = matches!(
-                        reference_mode,
-                        crate::crf::core::config::lossy_v2::ReferenceModeV2::Previous
-                    );
-                    
-                    // 比较时使用原始 golden 帧（不含标志），与批量路径对齐
-                    let mut data_previous_with_flag = data_previous;
-                    // previous 候选不设置 golden 标志（bit7=0）
-                    
-                    if !data_previous_with_flag.is_empty() && (force_previous || data_previous_with_flag.len() < data_golden.len()) {
-                        (data_previous_with_flag, false) // previous 胜出
-                    } else {
-                        (data_golden_with_flag, true) // golden 胜出
-                    }
-                } else {
-                    (data_golden_with_flag, true) // golden 模式
-                };
-                
-                // 更新 previous 参考帧为当前帧的重建
-                // 与批量路径 sequence.rs 第 565-582 行逻辑对齐：
-                // - 竞争成功：previous = previous + rgb（前一帧重建 + 当前差分重建）
-                // - 竞争失败：previous = base + rgb（首帧重建 + 当前差分重建）
-                {
-                    let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&final_data, &self.header)?;
-                    let mut rgb = recon.pixels;
-                    // 差分帧恒为 RCT 编码（has_rct 下 rct_forward 无条件），其重建
-                    // 必须 rct_inverse 转 RGB——与批量路径的 `use_rct` 判断对齐
-                    //（批量路径在此处用 use_rct 而非 first_in_rct，见 sequence.rs
-                    // 第 572 行；first_frame_no_rct 只影响首帧，不影响差分帧）。
-                    if self.header.flags.has_rct() {
-                        rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?;
-                    }
-                    
-                    // 根据竞争结果更新 previous
-                    if is_golden {
-                        // 竞争失败（使用 golden 参考）：从首帧重新计算 base
-                        if let Some(g) = &self.golden_rgb {
-                            let new_previous: Vec<i32> = g.pixels.iter().zip(rgb.iter()).map(|(a, b)| a + b).collect();
-                            self.previous_rgb = Some(ImageData {
-                                width: frame.width,
-                                height: frame.height,
-                                bit_depth: frame.bit_depth,
-                                color_format: frame.color_format,
-                                pixels: new_previous,
-                            });
+
+                    if !scene_cut {
+                        // previous 候选（reference_type=1）
+                        let data_previous = encode_ref(&previous.pixels)?;
+                        if !data_previous.is_empty()
+                            && (force_previous || data_previous.len() < final_data.len())
+                        {
+                            final_data = data_previous;
+                            ref_type = 1;
                         }
-                    } else {
-                        // 竞争成功（使用 previous 参考）：previous = previous + rgb
-                        if let Some(prev) = &self.previous_rgb {
-                            let new_previous: Vec<i32> = prev.pixels.iter().zip(rgb.iter()).map(|(a, b)| a + b).collect();
-                            self.previous_rgb = Some(ImageData {
-                                width: frame.width,
-                                height: frame.height,
-                                bit_depth: frame.bit_depth,
-                                color_format: frame.color_format,
-                                pixels: new_previous,
-                            });
+                        // prev2 候选（reference_type=2，仅 Hybrid；Previous 模式
+                        // 保持纯 previous 链的误差累积语义）
+                        if use_prev2 && ref_type != 1 {
+                            if let Some(p2) = &self.prev2_rgb {
+                                let data_p2 = encode_ref(&p2.pixels)?;
+                                if !data_p2.is_empty() && data_p2.len() < final_data.len() {
+                                    final_data = data_p2;
+                                    ref_type = 2;
+                                }
+                            }
                         }
                     }
                 }
-                
-                self.frame_golden_flags.push(is_golden);
+
+                // 写入帧头 reference_type（v1.15）
+                if final_data.len() > FRAME_HEADER_SIZE {
+                    final_data[FRAME_HEADER_SIZE - 1] = ref_type;
+                }
+
+                // 更新参考重建链（prev2 = 旧 previous；previous = 参考基准 + 当前差分重建）
+                // 还原公式与解码端 restore_temporal 一致（基准 + rgb）。
+                {
+                    let recon = crate::crf::decoder::reconstruct::reconstruct_frame(
+                        &final_data,
+                        &self.header,
+                    )?;
+                    let mut rgb = recon.pixels;
+                    if self.header.flags.has_rct() {
+                        rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?;
+                    }
+                    let base: Option<Vec<i32>> = if ref_type == 2 {
+                        // prev2 参考：prev2 + rgb
+                        self.prev2_rgb.as_ref().map(|p2| {
+                            p2.pixels
+                                .iter()
+                                .zip(rgb.iter())
+                                .map(|(a, b)| a + b)
+                                .collect()
+                        })
+                    } else if ref_type == 1 {
+                        // previous 参考：旧 previous + rgb
+                        self.previous_rgb.as_ref().map(|p| {
+                            p.pixels
+                                .iter()
+                                .zip(rgb.iter())
+                                .map(|(a, b)| a + b)
+                                .collect()
+                        })
+                    } else {
+                        // golden 参考：golden + rgb
+                        self.golden_rgb.as_ref().map(|g| {
+                            g.pixels
+                                .iter()
+                                .zip(rgb.iter())
+                                .map(|(a, b)| a + b)
+                                .collect()
+                        })
+                    };
+                    self.prev2_rgb = self.previous_rgb.take();
+                    if let Some(b) = base {
+                        self.previous_rgb = Some(ImageData {
+                            width: frame.width,
+                            height: frame.height,
+                            bit_depth: frame.bit_depth,
+                            color_format: frame.color_format,
+                            pixels: b,
+                        });
+                    }
+                }
+
+                self.frame_golden_flags.push(ref_type == 0);
+                self.frame_prev2_flags.push(ref_type == 2);
                 self.append_frame(final_data);
             }
         }

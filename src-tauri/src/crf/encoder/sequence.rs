@@ -12,9 +12,9 @@
 
 use rayon::prelude::*;
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
 use crate::crf::core::domain::{EncodeParams, ImageData};
+use crate::crf::error::{CrfError, CrfResult};
 
 use super::frame::candidate::encode_frame_adaptive;
 use super::frame::{encode_frame, FrameQuant};
@@ -246,9 +246,11 @@ pub(crate) fn encode_sequence_resolved(
         // 最终文件头上下文（flags 含 has_rct / first_frame_no_rct /
         // lossy_quant），保证编码端本地重建与文件自包含解码逐位一致——
         // 这是闭环语义的定义本身。不直接调用 decoder 容器/session 层。
-        let mut g_hat_img = crate::crf::decoder::reconstruct::reconstruct_frame(&data_first, &header)?;
+        let mut g_hat_img =
+            crate::crf::decoder::reconstruct::reconstruct_frame(&data_first, &header)?;
         if header.flags.has_rct() && !header.flags.first_frame_no_rct() {
-            g_hat_img.pixels = crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
+            g_hat_img.pixels =
+                crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
         }
         let g_hat = g_hat_img.pixels; // RGB 域重建首帧
         drop(first_span);
@@ -333,8 +335,11 @@ pub(crate) fn encode_sequence_resolved(
                 } else {
                     Vec::new()
                 };
-                let band_ref: super::frame::BandSteps<'_> =
-                    if noise_on || activity_on { Some(&band_steps) } else { None };
+                let band_ref: super::frame::BandSteps<'_> = if noise_on || activity_on {
+                    Some(&band_steps)
+                } else {
+                    None
+                };
                 let mut data = if params.adaptive_prediction {
                     encode_frame_adaptive(
                         &eff_frame,
@@ -357,11 +362,8 @@ pub(crate) fn encode_sequence_resolved(
                         None,
                     )?
                 };
-                // golden 参考标志（coding_params.bit7）：全 golden 架构下所有
-                // 差分帧均参考首帧
-                if data.len() > FRAME_HEADER_SIZE {
-                    data[9] |= 0x80;
-                }
+                // v1.15：golden 参考由帧头 reference_type=0 表达（assemble_frame
+                // 默认值），不再写 coding_params.bit7——差分帧恒参考首帧。
                 Ok((data, None, true))
             })
             .collect::<Result<Vec<_>, CrfError>>()?;
@@ -510,82 +512,186 @@ pub(crate) fn encode_sequence_resolved(
         }
 
         let mut all: Vec<(Vec<u8>, Option<u8>, bool)> = vec![(first_data, first_pm, false)];
-        all.extend(rest.into_iter().map(|(d, pm)| (d, pm, false)));
+        // 路径 C 为预差分序列：帧 i 存储的即差分数据，解码端以链式（previous）
+        // 还原 F[i] = F[i-1] + 帧 i。v1.15：帧头 reference_type 显式标记为 1。
+        all.extend(rest.into_iter().map(|(mut d, pm)| {
+            if d.len() > FRAME_HEADER_SIZE {
+                d[FRAME_HEADER_SIZE - 1] = 1; // previous 链式参考
+            }
+            (d, pm, false)
+        }));
         all
     };
 
-    // P5.1/P5.2/P5.5: 可选的 reconstructed previous 竞争。
+    // P5.1/P5.2/P5.5/P5.7: 可选的重建参考竞争（golden / previous / prev2，v1.15）。
     // 默认保持 Golden 旧语义；显式选择 Previous/Hybrid 时逐帧比较码字长度，
     // 并仅使用已重建帧作为参考。Hybrid 在场景切换时回到 golden（新 anchor
-    // 的码流语义与 golden 相同，因而兼容旧解码器）。
+    // 的码流语义与 golden 相同）。
+    //
+    // v1.15 多参考帧（prev2）：Hybrid 模式在 previous 之外增加前前帧（prev2）
+    // 候选，应对周期动作/遮挡重现（帧 N 与 N−2 更相似）。信令为帧头
+    // reference_type：0=golden / 1=previous / 2=prev2。Previous 模式保持纯
+    // previous 链（不引入 prev2，避免改变其误差累积设计语义）。
     let all_results = if params.input_original_frames
-        && !matches!(tuning.reference_mode, crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden)
+        && !matches!(
+            tuning.reference_mode,
+            crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden
+        )
         && !all_results.is_empty()
     {
         let mut out = all_results;
         let first_recon = crate::crf::decoder::reconstruct::reconstruct_frame(&out[0].0, &header)?;
         let first_in_rct = use_rct && !header.flags.first_frame_no_rct();
-        let mut previous = if first_in_rct {
+        // golden_rgb：首帧重建（RGB 域），previous/prev2 链的初始基准
+        let golden_rgb = if first_in_rct {
             crate::crf::core::color::rct::rct_inverse(&first_recon.pixels, components)?
-        } else { first_recon.pixels };
+        } else {
+            first_recon.pixels
+        };
+        // previous = recon[i-1]（RGB 域）；prev2 = recon[i-2]（RGB 域，可选）
+        let mut previous = golden_rgb.clone();
+        let mut prev2: Option<Vec<i32>> = None;
+        let force_previous = matches!(
+            tuning.reference_mode,
+            crate::crf::core::config::lossy_v2::ReferenceModeV2::Previous
+        );
         for i in 1..out.len() {
             let frame = &frames[i];
             let fq = fq_for_index(i);
-            let mut diff = vec![0i32; frame.pixels.len()];
-            crate::crf::backend::ops::sub_i32(&frame.pixels, &previous, &mut diff);
-            // 稀疏变化 mask：静止 tile 直接写零；这是解码透明的残差优化。
-            if !matches!(tuning.change_mask, crate::crf::core::config::lossy_v2::ToolMode::Off) {
-                let ts = header.block_size.max(4) as usize;
-                let mask = super::sequence_tools::change_mask(
-                    &frame.pixels, &previous, frame.width as usize, frame.height as usize,
-                    components, ts, if fq.step > 0 { (fq.step / 2) as i32 } else { 0 });
-                super::sequence_tools::apply_change_mask(
-                    &mut diff, &mask, frame.width as usize, frame.height as usize, components, ts);
-            }
-            let eff = crate::crf::core::color::rct::rct_forward(&diff, components)?;
-            let eff_frame = ImageData { width: frame.width, height: frame.height, bit_depth: frame.bit_depth, color_format: frame.color_format, pixels: eff };
-            // 场景切换检测：残差均值超过阈值时视为新 anchor，跳过 previous
-            // 候选，使用 golden 参考保持随机访问与误差隔离。
-            let periodic_anchor = tuning.anchor_interval > 0
-                && i.is_multiple_of(tuning.anchor_interval as usize);
-            let scene_cut = periodic_anchor || (
-                !matches!(tuning.scene_cut, crate::crf::core::config::lossy_v2::SceneCutModeV2::Off)
-                    && (diff.iter().map(|v| v.unsigned_abs() as u64).sum::<u64>()
-                        / diff.len().max(1) as u64)
-                        > ((tuning.scene_cut_threshold_x1000 as u64 * 255) / 1000)
-            );
-            let mut candidate = if scene_cut {
-                Vec::new()
-            } else if params.adaptive_prediction {
-                encode_frame_adaptive(&eff_frame, compression_type, header.block_size, false, fq, None, None)?.data
-            } else {
-                encode_frame(&eff_frame, compression_type, header.block_size, header.prediction_mode, false, fq, None)?
-            };
-            // previous 标志为 bit7=0；golden 候选保留 bit7=1。
-            let force_previous = matches!(
-                tuning.reference_mode,
-                crate::crf::core::config::lossy_v2::ReferenceModeV2::Previous
-            );
-            if !candidate.is_empty() && (force_previous || candidate.len() < out[i].0.len()) {
-                let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&candidate, &header)?;
-                let mut rgb = recon.pixels;
-                if use_rct { rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?; }
-                previous = previous.iter().zip(rgb.iter()).map(|(a,b)| a + b).collect();
-                out[i] = (candidate, None, false);
-            } else {
-                // 竞争失败时，仍更新 previous 为实际胜出的重建帧。
-                let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&out[i].0, &header)?;
-                let mut rgb = recon.pixels;
-                if use_rct { rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?; }
-                previous = if first_in_rct {
-                    let base = crate::crf::decoder::reconstruct::reconstruct_frame(&out[0].0, &header)?;
-                    let base = crate::crf::core::color::rct::rct_inverse(&base.pixels, components)?;
-                    base.iter().zip(rgb.iter()).map(|(a,b)| a + b).collect()
-                } else {
-                    let base = crate::crf::decoder::reconstruct::reconstruct_frame(&out[0].0, &header)?;
-                    base.pixels.iter().zip(rgb.iter()).map(|(a,b)| a + b).collect()
+            // 场景切换检测基于 previous 差分（与旧逻辑一致）：
+            // 残差均值超过阈值时视为新 anchor，跳过 prev/prev2 候选，
+            // 使用 golden 参考保持随机访问与误差隔离。
+            let mut diff_prev = vec![0i32; frame.pixels.len()];
+            crate::crf::backend::ops::sub_i32(&frame.pixels, &previous, &mut diff_prev);
+            let periodic_anchor =
+                tuning.anchor_interval > 0 && i.is_multiple_of(tuning.anchor_interval as usize);
+            let scene_cut = periodic_anchor
+                || (!matches!(
+                    tuning.scene_cut,
+                    crate::crf::core::config::lossy_v2::SceneCutModeV2::Off
+                ) && (diff_prev
+                    .iter()
+                    .map(|v| v.unsigned_abs() as u64)
+                    .sum::<u64>()
+                    / diff_prev.len().max(1) as u64)
+                    > ((tuning.scene_cut_threshold_x1000 as u64 * 255) / 1000));
+
+            // 参考候选编码（闭包）：diff vs 参考 → 稀疏变化 mask → RCT → 编码。
+            // 与路径 G 阶段 2 的差分帧处理逐参对齐（change_mask / band 语义）。
+            let encode_ref = |ref_pixels: &[i32]| -> crate::crf::error::CrfResult<Vec<u8>> {
+                let mut diff = vec![0i32; frame.pixels.len()];
+                crate::crf::backend::ops::sub_i32(&frame.pixels, ref_pixels, &mut diff);
+                if !matches!(
+                    tuning.change_mask,
+                    crate::crf::core::config::lossy_v2::ToolMode::Off
+                ) {
+                    let ts = header.block_size.max(4) as usize;
+                    let mask = super::sequence_tools::change_mask(
+                        &frame.pixels,
+                        ref_pixels,
+                        frame.width as usize,
+                        frame.height as usize,
+                        components,
+                        ts,
+                        if fq.step > 0 { (fq.step / 2) as i32 } else { 0 },
+                    );
+                    super::sequence_tools::apply_change_mask(
+                        &mut diff,
+                        &mask,
+                        frame.width as usize,
+                        frame.height as usize,
+                        components,
+                        ts,
+                    );
+                }
+                let eff = crate::crf::core::color::rct::rct_forward(&diff, components)?;
+                let eff_frame = ImageData {
+                    width: frame.width,
+                    height: frame.height,
+                    bit_depth: frame.bit_depth,
+                    color_format: frame.color_format,
+                    pixels: eff,
                 };
+                if params.adaptive_prediction {
+                    Ok(encode_frame_adaptive(
+                        &eff_frame,
+                        compression_type,
+                        header.block_size,
+                        false,
+                        fq,
+                        None,
+                        None,
+                    )?
+                    .data)
+                } else {
+                    Ok(encode_frame(
+                        &eff_frame,
+                        compression_type,
+                        header.block_size,
+                        header.prediction_mode,
+                        false,
+                        fq,
+                        None,
+                    )?)
+                }
+            };
+
+            // 三候选竞争：golden（out[i] 已生成，reference_type=0）为初始最优。
+            let mut best_len = out[i].0.len();
+            let mut adopted: Option<(Vec<u8>, u8)> = None; // (data, reference_type)
+            if !scene_cut {
+                // previous 候选（reference_type=1）
+                let cand_prev = encode_ref(&previous)?;
+                if !cand_prev.is_empty() && (force_previous || cand_prev.len() < best_len) {
+                    best_len = cand_prev.len();
+                    adopted = Some((cand_prev, 1));
+                }
+                // prev2 候选（reference_type=2，仅 Hybrid——Previous 模式
+                // 保持纯 previous 链的误差累积语义）
+                if !force_previous {
+                    if let Some(p2) = &prev2 {
+                        let cand_p2 = encode_ref(p2)?;
+                        if !cand_p2.is_empty() && cand_p2.len() < best_len {
+                            best_len = cand_p2.len();
+                            adopted = Some((cand_p2, 2));
+                        }
+                    }
+                }
             }
+            if let Some((data, ref_type)) = adopted {
+                let mut d = data;
+                if d.len() > FRAME_HEADER_SIZE {
+                    d[FRAME_HEADER_SIZE - 1] = ref_type; // reference_type 字段
+                }
+                out[i] = (d, None, false);
+            }
+
+            // 更新重建链：以实际胜出帧重建为新的 previous；prev2 = 旧 previous。
+            // 还原公式与解码端 restore_temporal 一致（参考基准 + 差分重建）。
+            let recon = crate::crf::decoder::reconstruct::reconstruct_frame(&out[i].0, &header)?;
+            let mut rgb = recon.pixels;
+            if use_rct {
+                rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?;
+            }
+            let ref_type = if out[i].0.len() > FRAME_HEADER_SIZE {
+                out[i].0[FRAME_HEADER_SIZE - 1]
+            } else {
+                0
+            };
+            let base: Option<Vec<i32>> = if ref_type == 2 {
+                // prev2 参考：recon[i-2] + rgb
+                prev2
+                    .as_ref()
+                    .map(|p2| p2.iter().zip(&rgb).map(|(a, b)| a + b).collect())
+            } else if ref_type == 1 {
+                // previous 参考：recon[i-1]（旧 previous）+ rgb
+                Some(previous.iter().zip(&rgb).map(|(a, b)| a + b).collect())
+            } else {
+                // golden 参考：首帧重建 + rgb
+                Some(golden_rgb.iter().zip(&rgb).map(|(a, b)| a + b).collect())
+            };
+            prev2 = Some(previous);
+            previous = base.unwrap_or_else(|| rgb.clone());
         }
         out
     } else {
@@ -600,11 +706,8 @@ pub(crate) fn encode_sequence_resolved(
 
     // 组装文件（使用 session::batch::assemble_crf_output，P3 架构迁移）
     let assemble_span = Span::begin("encode.assemble");
-    let output = super::session::batch::assemble_crf_output(
-        &header,
-        frames_start,
-        &encoded_frames,
-    )?;
+    let output =
+        super::session::batch::assemble_crf_output(&header, frames_start, &encoded_frames)?;
     drop(assemble_span);
 
     // P5.6 码率护栏：目标由配置层以定点整数表达，编码结果不得静默突破硬上限。
@@ -614,7 +717,8 @@ pub(crate) fn encode_sequence_resolved(
         if let Some(max) = rate.max_bytes {
             if size > max {
                 return Err(CrfError::InvalidCodingParams(format!(
-                    "sequence exceeds max_bytes ({} > {})", size, max
+                    "sequence exceeds max_bytes ({} > {})",
+                    size, max
                 )));
             }
         }
@@ -623,7 +727,8 @@ pub(crate) fn encode_sequence_resolved(
             // （>125%）时返回错误，避免对旧调用造成意外失败。
             if size > target.saturating_mul(5) / 4 {
                 return Err(CrfError::InvalidCodingParams(format!(
-                    "sequence target_bytes infeasible ({} > {})", size, target
+                    "sequence target_bytes infeasible ({} > {})",
+                    size, target
                 )));
             }
         }

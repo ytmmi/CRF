@@ -26,10 +26,10 @@
 
 use std::collections::HashMap;
 
-use crate::crf::error::CrfResult;
 use crate::crf::core::domain::PredictionMode;
-use crate::crf::core::prediction::intra::predict_at;
 use crate::crf::core::prediction::cost::satd_for_mode_sampled;
+use crate::crf::core::prediction::intra::predict_at;
+use crate::crf::error::CrfResult;
 
 /// 块边长（像素）
 const BS: usize = 8;
@@ -382,8 +382,8 @@ pub(crate) fn encode_intrabc_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crf::encoder::encode_sequence;
     use crate::crf::core::domain::{ColorFormat, EncodeParams, PredictionMode};
+    use crate::crf::encoder::encode_sequence;
     use crate::crf::ImageData;
 
     /// 安全取像素（越界返回 -9，仅诊断用）
@@ -509,7 +509,7 @@ mod tests {
     /// 数据构造，dump 帧头类型与失配位置。
     #[test]
     fn debug_itbc_diff_frame_e2e() {
-        use crate::crf::core::bitstream::constants::HEADER_SIZE;
+        use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
         let frames: Vec<ImageData> = (0..3)
             .map(|fi| {
                 let pixels: Vec<i32> = (0..64 * 64 * 3)
@@ -552,7 +552,7 @@ mod tests {
                 data[off + 10],
                 fsz
             );
-            off += 11 + fsz;
+            off += FRAME_HEADER_SIZE + fsz;
         }
 
         // 手算预期：type=7 差分帧的解码输出经外层 rct_inverse 后应为

@@ -75,7 +75,7 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | :-- | :-- | :-- | :-- |
 | 0 | 4 | `magic` | 固定 `"CRF\x00"`（0x43 0x52 0x46 0x00） |
 | 4 | 2 | `version_major` | 主版本号，当前 **1** |
-| 6 | 2 | `version_minor` | 次版本号，当前 **2** |
+| 6 | 2 | `version_minor` | 次版本号，当前 **4**（v1.15） |
 | 8 | 2 | `frame_count` | 帧总数，范围 2～50 |
 | 10 | 2 | `width` | 图像宽度 |
 | 12 | 2 | `height` | 图像高度 |
@@ -107,7 +107,7 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | 4 | `offset` | 该帧起始偏移（自文件头起算） |
 | 4 | `size` | 该帧总大小（含帧头） |
 
-### 3.5 帧头（Frame Header，11 字节）
+### 3.5 帧头（Frame Header，12 字节，v1.15）
 
 | 偏移 | 长度 | 字段 | 说明 |
 | :-- | :-- | :-- | :-- |
@@ -116,6 +116,25 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | 8 | 1 | `frame_type` | 熵编码/打包类型，见 3.6 |
 | 9 | 1 | `coding_params` | 语义随 frame_type：k 值 / 条带高度 / 保留(0) |
 | 10 | 1 | `pred_mode` | 本帧预测模式；`0xFF`=未指定（回退文件头全局设置） |
+| 11 | 1 | `reference_type` | **v1.15**：时间参考类型，见 3.5.1 |
+
+> **v1.15 破坏式更新（2026-09-07）**：帧头 11 → 12 字节，新增 `reference_type`
+> 字段，golden 参考语义从 `coding_params.bit7` 迁移至独立字段。旧文件（v1.14 及
+> 以下）不再兼容；`coding_params.bit7` 恒为 0（banded 高度 mask `& 0x7F` 保留防御）。
+
+#### 3.5.1 参考类型（reference_type）
+
+| 值 | 名称 | 还原公式（解码端 `restore_temporal`） |
+| :-- | :-- | :-- |
+| 0 | golden | 固定基准 = 解码首帧 `G_hat` + 本帧残差 |
+| 1 | previous | 前一还原帧 + 本帧残差（链式） |
+| 2 | prev2 | **v1.15**：前前还原帧 + 本帧残差（周期动作/遮挡重现场景，帧 N 与 N−2 更相似） |
+| 3 | 保留 | — |
+
+编码端在 `reference_mode=Hybrid` 下对 golden/previous/prev2 三候选逐帧编码，
+字节最小者胜出（单调不劣化）；`Previous` 模式保持纯 previous 链（不启用 prev2）；
+`Golden` 模式全 golden。场景切换检测命中时跳过 previous/prev2 候选回退 golden。
+首帧（i==0）reference_type 恒为 0（golden 基准自身，解码端特判不叠加）。
 
 ### 3.6 帧类型（frame_type）
 
@@ -129,7 +148,7 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | 5 | RLE+CABAC 算术编码 | 与 frame_type=1 位流语法同构，escape/前缀位改由自适应算术编码承载；v3 三模式上下文分类器竞争（MA 树 / 固定梯度 / 全帧统一） | 全帧 k 值 |
 | 6 | DCT 变换域量化 | 分块 lifting DCT（形状 {4×4, 8×8, 8×4, 4×8}，v1.12 矩形泛化）→ 死区量化（flat/感知矩阵/Trellis）→ CABAC（有损路径专用，无空间预测） | 全帧 k 值；载荷首字节 bit4=Trellis、bit5=宽8、bit6=矩阵、bit7=高8 |
 | 7 | 帧内块复制（IntraBC，v1.11） | 8×8 块级 COPY/PRED 决策 + 三段式载荷（决策 RLE / COPY 向量 exp-Golomb / PRED 预测残差 RLE）；无损路径全帧参与（v1.11 差分帧启用） | 保留(0) |
-| 8 | 预测后变换 + CABAC 系数编码（v1.14） | 8×8 块 {DC/H/V/MED} SAD 选模式 → DC 走 transform skip / 其余走 lifting DCT → 死区量化 → zigzag → CoeffCABAC（run-level，4 上下文）；三平面独立编码。**载荷自包含亮度/色度步长**（v1.14.1 起：flags bit1/bit2 后各 1 字节，见下方布局） | 保留(0)；bit7=golden 参考 |
+| 8 | 预测后变换 + CABAC 系数编码（v1.14） | 8×8 块 {DC/H/V/MED} SAD 选模式 → DC 走 transform skip / 其余走 lifting DCT → 死区量化 → zigzag → CoeffCABAC（run-level，4 上下文）；三平面独立编码。**载荷自包含亮度/色度步长**（v1.14.1 起：flags bit1/bit2 后各 1 字节，见下方布局） | 保留(0)；时间参考见帧头 reference_type（v1.15） |
 
 **编码器按"字节最小者胜出"在候选间自动竞争**，逐帧记录实际类型，解码端按帧分流：
 

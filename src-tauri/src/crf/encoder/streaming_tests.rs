@@ -1,7 +1,7 @@
 //! 流式编码器测试
 
-use crate::crf::encoder::streaming::StreamingEncoder;
 use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
+use crate::crf::encoder::streaming::StreamingEncoder;
 
 fn make_frame(shift: i32, width: u16, height: u16) -> ImageData {
     let mut px = Vec::with_capacity(width as usize * height as usize * 3);
@@ -266,7 +266,10 @@ fn test_streaming_lossy_golden_decode_semantics() {
     let batched = super::super::encode_sequence(&frames, &params).unwrap();
     let dec_b = crate::crf::decode_from_bytes(&batched).unwrap();
     for (fa, fb) in dec.frames.iter().zip(dec_b.frames.iter()) {
-        assert_eq!(fa.pixels, fb.pixels, "streaming 与批量解码结果必须逐像素一致");
+        assert_eq!(
+            fa.pixels, fb.pixels,
+            "streaming 与批量解码结果必须逐像素一致"
+        );
     }
 }
 
@@ -329,7 +332,7 @@ fn test_streaming_previous_matches_batch() {
         enc.finish().unwrap()
     };
     let batched = super::super::encode_sequence(&frames, &params).unwrap();
-    
+
     // 验证编码结果逐字节一致
     assert_eq!(streaming.len(), batched.len(), "文件大小不一致");
     for i in 0..streaming.len() {
@@ -345,12 +348,15 @@ fn test_streaming_previous_matches_batch() {
             );
         }
     }
-    
+
     // 验证解码端语义正确
     let dec_streaming = crate::crf::decode_from_bytes(&streaming).unwrap();
     let dec_batched = crate::crf::decode_from_bytes(&batched).unwrap();
     for (fa, fb) in dec_streaming.frames.iter().zip(dec_batched.frames.iter()) {
-        assert_eq!(fa.pixels, fb.pixels, "streaming 与 batch 解码结果必须逐像素一致");
+        assert_eq!(
+            fa.pixels, fb.pixels,
+            "streaming 与 batch 解码结果必须逐像素一致"
+        );
     }
 }
 
@@ -378,7 +384,7 @@ fn test_streaming_hybrid_matches_batch() {
         enc.finish().unwrap()
     };
     let batched = super::super::encode_sequence(&frames, &params).unwrap();
-    
+
     // 验证编码结果逐字节一致
     assert_eq!(streaming.len(), batched.len(), "文件大小不一致");
     for i in 0..streaming.len() {
@@ -394,12 +400,15 @@ fn test_streaming_hybrid_matches_batch() {
             );
         }
     }
-    
+
     // 验证解码端语义正确
     let dec_streaming = crate::crf::decode_from_bytes(&streaming).unwrap();
     let dec_batched = crate::crf::decode_from_bytes(&batched).unwrap();
     for (fa, fb) in dec_streaming.frames.iter().zip(dec_batched.frames.iter()) {
-        assert_eq!(fa.pixels, fb.pixels, "streaming 与 batch 解码结果必须逐像素一致");
+        assert_eq!(
+            fa.pixels, fb.pixels,
+            "streaming 与 batch 解码结果必须逐像素一致"
+        );
     }
 }
 
@@ -434,5 +443,157 @@ fn test_streaming_previous_quality_offset_matches_batch() {
                 i, streaming[i], batched[i]
             );
         }
+    }
+}
+
+/// v1.15 多参考帧（prev2）：构造 prev2 独胜序列——帧 i 与帧 i-2 相同
+/// （prev2 差分≈0），但与首帧（golden）和前一帧（previous）均差异大。
+/// 序列 A,B,C,B,D,B：frame3=B 与 frame1=B 相同（prev2 差分 0），
+/// 与 frame0=A（golden）、frame2=C（previous）差异大 → prev2 必胜。
+/// Hybrid 模式产物应含 reference_type=2 帧；往返还原正确。
+#[test]
+fn test_prev2_used_in_hybrid_roundtrip() {
+    use crate::crf::core::config::lossy_v2::{ReferenceModeV2, SceneCutModeV2};
+    let w = 32u16;
+    let h = 24u16;
+    let frames: Vec<ImageData> = [0i32, 100, 200, 100, 50, 100]
+        .iter()
+        .map(|&shift| make_frame(shift, w, h))
+        .collect();
+    let mut params = mk_lossy_params_q90();
+    let mut lossy = crate::crf::core::config::lossy_v2::LossyOptionsV2::builder_preset(9000)
+        .reference_mode(ReferenceModeV2::Hybrid)
+        .build()
+        .unwrap();
+    // 关闭场景切换检测（周期交替的内容差异均值可能超默认阈值，阻断链式候选）
+    lossy.temporal.scene_cut = SceneCutModeV2::Off;
+    params.lossy = Some(lossy);
+
+    let encoded = super::super::encode_sequence(&frames, &params).unwrap();
+
+    // 解析每帧 reference_type：应存在 prev2（=2）帧（至少 frame3）
+    use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
+    let fcount = u16::from_le_bytes([encoded[8], encoded[9]]) as usize;
+    let frames_start = HEADER_SIZE + fcount * 8;
+    let mut off = frames_start;
+    let mut ref_types = Vec::new();
+    for _ in 0..fcount {
+        let fs = u32::from_le_bytes(encoded[off..off + 4].try_into().unwrap()) as usize;
+        ref_types.push(encoded[off + FRAME_HEADER_SIZE - 1]);
+        off += FRAME_HEADER_SIZE + fs;
+    }
+    assert!(
+        ref_types.iter().any(|&r| r == 2),
+        "周期内容下 prev2 候选应胜出，参考类型分布: {:?}",
+        ref_types
+    );
+
+    // 往返还原：有损下误差受控（prev2 还原公式正确）。注意高值内容帧
+    // （shift=100 的 B 内容）在 q90 有损下的固有误差 ~80-86，与 prev2 无关
+    // （帧1 非 prev2 同样 86）；prev2 帧（3/5）误差与 golden 帧同量级。
+    let result = crate::crf::decode_from_bytes(&encoded).unwrap();
+    let restored = crate::crf::decoder::session::DecodeSession::restore_temporal(&result);
+    assert_eq!(restored.len(), frames.len());
+    for (i, (r, o)) in restored.iter().zip(&frames).enumerate() {
+        let max_err = r
+            .pixels
+            .iter()
+            .zip(&o.pixels)
+            .map(|(a, b)| (a - b).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_err < 128,
+            "第 {} 帧（prev2={}）往返 max_err={} 应 <128",
+            i,
+            result.frame_prev2_refs.get(i).copied().unwrap_or(false),
+            max_err
+        );
+    }
+    // prev2 标志表与参考类型一致
+    for (i, &rt) in ref_types.iter().enumerate() {
+        assert_eq!(
+            result.frame_prev2_refs[i],
+            rt == 2,
+            "帧 {} prev2 标志应与 reference_type 一致",
+            i
+        );
+    }
+}
+
+/// prev2 的 batch/streaming 一致性：周期内容 + Hybrid，两条路径逐字节一致。
+#[test]
+fn test_streaming_prev2_matches_batch() {
+    use crate::crf::core::config::lossy_v2::ReferenceModeV2;
+    let w = 32u16;
+    let h = 24u16;
+    let frames: Vec<ImageData> = [0i32, 100, 0, 100, 0, 100, 0]
+        .iter()
+        .map(|&shift| make_frame(shift, w, h))
+        .collect();
+    let mut params = mk_lossy_params_q90();
+    params.lossy = Some(
+        crate::crf::core::config::lossy_v2::LossyOptionsV2::builder_preset(9000)
+            .reference_mode(ReferenceModeV2::Hybrid)
+            .build()
+            .unwrap(),
+    );
+
+    let streaming = {
+        let mut enc = StreamingEncoder::new(&params).unwrap();
+        for f in &frames {
+            enc.push_frame(f).unwrap();
+        }
+        enc.finish().unwrap()
+    };
+    let batched = super::super::encode_sequence(&frames, &params).unwrap();
+
+    assert_eq!(streaming.len(), batched.len(), "文件大小不一致");
+    for i in 0..streaming.len() {
+        if streaming[i] != batched[i] {
+            let s = i.saturating_sub(12);
+            panic!(
+                "首个差异 @{}: streaming={} batched={}\n  s[..]={:02x?}\n  b[..]={:02x?}",
+                i,
+                streaming[i],
+                batched[i],
+                &streaming[s..(i + 12).min(streaming.len())],
+                &batched[s..(i + 12).min(batched.len())]
+            );
+        }
+    }
+}
+
+/// Previous 模式保持纯 previous 链：产物不得出现 reference_type=2 帧。
+#[test]
+fn test_prev2_not_used_in_previous_mode() {
+    use crate::crf::core::config::lossy_v2::ReferenceModeV2;
+    let w = 32u16;
+    let h = 24u16;
+    let frames: Vec<ImageData> = [0i32, 100, 0, 100, 0]
+        .iter()
+        .map(|&shift| make_frame(shift, w, h))
+        .collect();
+    let mut params = mk_lossy_params_q90();
+    params.lossy = Some(
+        crate::crf::core::config::lossy_v2::LossyOptionsV2::builder_preset(9000)
+            .reference_mode(ReferenceModeV2::Previous)
+            .build()
+            .unwrap(),
+    );
+
+    let encoded = super::super::encode_sequence(&frames, &params).unwrap();
+    use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
+    let fcount = u16::from_le_bytes([encoded[8], encoded[9]]) as usize;
+    let frames_start = HEADER_SIZE + fcount * 8;
+    let mut off = frames_start;
+    for _ in 0..fcount {
+        let fs = u32::from_le_bytes(encoded[off..off + 4].try_into().unwrap()) as usize;
+        let rt = encoded[off + FRAME_HEADER_SIZE - 1];
+        assert_ne!(
+            rt, 2,
+            "Previous 模式不得使用 prev2 参考（reference_type=2）"
+        );
+        off += FRAME_HEADER_SIZE + fs;
     }
 }

@@ -189,8 +189,7 @@ fn test_lossy_golden_sequence_roundtrip() {
     assert_eq!(result.frames.len(), frames.len());
 
     // golden 链还原（生产恢复逻辑收敛于 DecodeSession::restore_temporal，规划 §8.2）
-    let restored_all =
-        crate::crf::decoder::session::DecodeSession::restore_temporal(&result);
+    let restored_all = crate::crf::decoder::session::DecodeSession::restore_temporal(&result);
     let mut max_err_all: i32 = 0;
     for (i, (orig, restored)) in frames.iter().zip(restored_all.iter()).enumerate() {
         if i == 0 {
@@ -232,9 +231,7 @@ fn test_lossy_golden_sequence_roundtrip() {
 #[test]
 fn test_lossy_frame_type8_file_roundtrip() {
     use crate::crf::checksum::crc32;
-    use crate::crf::core::bitstream::constants::{
-        FOOTER_MAGIC, FRAME_HEADER_SIZE, HEADER_SIZE,
-    };
+    use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FRAME_HEADER_SIZE, HEADER_SIZE};
     use crate::crf::core::bitstream::header::CrfHeader;
     use crate::crf::core::domain::{CompressionType, Flags, PredictionMode};
     use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
@@ -262,15 +259,9 @@ fn test_lossy_frame_type8_file_roundtrip() {
     let img1 = make_img(17);
 
     // frame0：type8 无损（q=1），RGB 直通域
-    let frame0_payload = encode_intra_transform_payload(
-        &img0,
-        CompressionType::GolombRice,
-        1,
-        0,
-        1,
-        0,
-    )
-    .expect("frame0 encode failed");
+    let frame0_payload =
+        encode_intra_transform_payload(&img0, CompressionType::GolombRice, 1, 0, 1, 0)
+            .expect("frame0 encode failed");
     let frame0_buf = crate::crf::encoder::assemble_frame(&frame0_payload, &img0, 0, 8).unwrap();
 
     // frame1：type8 有损差分（luma=2, chroma=3）；golden 参考位 bit7=1
@@ -287,19 +278,14 @@ fn test_lossy_frame_type8_file_roundtrip() {
         color_format: ColorFormat::Rgb,
         pixels: diff,
     };
-    let frame1_payload = encode_intra_transform_payload(
-        &diff_img,
-        CompressionType::GolombRice,
-        2,
-        0,
-        3,
-        0,
-    )
-    .expect("frame1 encode failed");
-    let frame1_buf =
-        crate::crf::encoder::assemble_frame(&frame1_payload, &diff_img, 0x80, 8).unwrap();
+    let frame1_payload =
+        encode_intra_transform_payload(&diff_img, CompressionType::GolombRice, 2, 0, 3, 0)
+            .expect("frame1 encode failed");
+    let frame1_buf = crate::crf::encoder::assemble_frame(&frame1_payload, &diff_img, 0, 8).unwrap();
 
-    // 文件头：2 帧、RGB、GolombRice、无 RCT（RGB 直通）、含帧索引
+    // 文件头：2 帧、RGB、GolombRice、无 RCT（RGB 直通）、含帧索引。
+    // v1.15 golden 参考由帧头 reference_type=0 表达（assemble_frame 默认），
+    // coding_params 不再承载 golden 位。
     let mut header = CrfHeader::new(2, w, h, 8, ColorFormat::Rgb, CompressionType::GolombRice);
     header.flags.set_has_index(true);
     header.flags.set_has_rct(false);

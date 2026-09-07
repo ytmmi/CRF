@@ -44,6 +44,7 @@ impl DecodeSession {
         // 解析帧索引
         let mut frame_index = Vec::new();
         let mut golden_refs: Vec<bool> = Vec::new();
+        let mut prev2_refs: Vec<bool> = Vec::new();
         let mut offset = HEADER_SIZE;
 
         if header.flags.has_index() {
@@ -107,6 +108,7 @@ impl DecodeSession {
             let frame = Self::reconstruct_packet(&packet, &header)?;
             frames.push(frame);
             golden_refs.push(packet.header.is_golden_ref());
+            prev2_refs.push(packet.header.is_prev2_ref());
 
             current_offset = frame_end;
         }
@@ -122,7 +124,8 @@ impl DecodeSession {
                 if skip_first && i == 0 {
                     continue;
                 }
-                frame.pixels = crate::crf::core::color::rct::rct_inverse(&frame.pixels, components)?;
+                frame.pixels =
+                    crate::crf::core::color::rct::rct_inverse(&frame.pixels, components)?;
             }
         }
 
@@ -131,16 +134,18 @@ impl DecodeSession {
             frame_index,
             frames,
             frame_golden_refs: golden_refs,
+            frame_prev2_refs: prev2_refs,
         })
     }
 
     /// 时间维参考还原（规划文档 §8.2：DecodeSession temporal restore）
     ///
     /// `decode_bytes` 返回的 `frames` 是逐帧重建的**残差/基准值**，
-    /// 完整帧需要按 `frame_golden_refs` 参考模式叠加还原：
+    /// 完整帧需要按参考类型叠加还原：
     /// - 首帧（i==0）：即自身；
-    /// - golden 参考帧（is_golden）：固定基准 = 解码出的 frame0（G_hat）+ 残差；
-    /// - 链式帧（非 golden）：前一还原帧 + 残差。
+    /// - golden 参考帧（reference_type=0）：固定基准 = 解码出的 frame0（G_hat）+ 残差；
+    /// - previous 参考帧（reference_type=1）：前一还原帧 + 残差；
+    /// - prev2 参考帧（reference_type=2，v1.15）：前前还原帧 + 残差（周期动作）。
     ///
     /// 这是**生产恢复逻辑的唯一实现**。测试与调用方不得各自复制
     /// 一份恢复公式（避免语义漂移）。
@@ -148,46 +153,44 @@ impl DecodeSession {
         let mut out: Vec<ImageData> = Vec::with_capacity(result.frames.len());
         // 全 golden 架构的固定差分基准 = 文件自身解码出的 frame0
         let golden_base = &result.frames[0];
-        let mut prev: Option<&ImageData> = None;
         for (i, frame) in result.frames.iter().enumerate() {
             let is_golden = result.frame_golden_refs.get(i).copied().unwrap_or(false);
+            let is_prev2 = result.frame_prev2_refs.get(i).copied().unwrap_or(false);
             let restored = if i == 0 {
                 frame.clone()
+            } else if is_golden {
+                Self::restore_referenced(Some(golden_base), frame)
+            } else if is_prev2 {
+                // prev2 = 前前还原帧（i-2）；i<2 时退化为 golden
+                let base = if i >= 2 {
+                    Some(&out[i - 2])
+                } else {
+                    Some(golden_base)
+                };
+                Self::restore_referenced(base, frame)
             } else {
-                Self::restore_referenced(golden_base, prev, is_golden, frame)
+                let base = if i >= 1 {
+                    Some(&out[i - 1])
+                } else {
+                    Some(golden_base)
+                };
+                Self::restore_referenced(base, frame)
             };
             out.push(restored);
-            prev = out.last();
         }
         out
     }
 
-    /// 单帧时间维还原（i>0）：golden 参考叠加 `golden`，链式参考叠加 `prev`。
+    /// 单帧时间维还原（i>0）：参考叠加基准（golden/prev/prev2）+ 残差。
     /// `restore_temporal` 与 `decode_bytes_streaming` 共用，保证恢复公式唯一。
-    fn restore_referenced(
-        golden: &ImageData,
-        prev: Option<&ImageData>,
-        is_golden: bool,
-        frame: &ImageData,
-    ) -> ImageData {
-        let pixels = if is_golden {
-            golden
-                .pixels
-                .iter()
-                .zip(&frame.pixels)
-                .map(|(a, b)| a + b)
-                .collect()
-        } else {
-            match prev {
-                Some(p) => p
-                    .pixels
-                    .iter()
-                    .zip(&frame.pixels)
-                    .map(|(a, b)| a + b)
-                    .collect(),
-                None => frame.pixels.clone(),
-            }
-        };
+    fn restore_referenced(base: Option<&ImageData>, frame: &ImageData) -> ImageData {
+        let pixels = base
+            .expect("restore base must be set")
+            .pixels
+            .iter()
+            .zip(&frame.pixels)
+            .map(|(a, b)| a + b)
+            .collect();
         ImageData {
             width: frame.width,
             height: frame.height,
@@ -198,10 +201,7 @@ impl DecodeSession {
     }
 
     /// 通过统一帧包走分派层 → 重建层
-    fn reconstruct_packet(
-        packet: &FramePacket<'_>,
-        header: &CrfHeader,
-    ) -> CrfResult<ImageData> {
+    fn reconstruct_packet(packet: &FramePacket<'_>, header: &CrfHeader) -> CrfResult<ImageData> {
         // 组装帧头 + payload 完整字节（分派层契约）
         let mut buf = Vec::with_capacity(FRAME_HEADER_SIZE + packet.payload.len());
         packet.header.write_bytes(&mut buf)?;
@@ -239,9 +239,10 @@ impl DecodeSession {
         let skip_first = header.flags.first_frame_no_rct();
         let components = header.color_format.component_count();
 
-        // 时间维还原状态：golden 基准（还原后的 frame0）+ 前一还原帧
+        // 时间维还原状态：golden 基准（还原后的 frame0）+ 前一/前前还原帧
         let mut golden_base: Option<ImageData> = None;
         let mut prev: Option<ImageData> = None;
+        let mut prev2: Option<ImageData> = None;
 
         let mut current_offset = frames_start;
         for i in 0..header.frame_count as usize {
@@ -277,17 +278,26 @@ impl DecodeSession {
             }
 
             let is_golden = packet.header.is_golden_ref();
+            let is_prev2 = packet.header.is_prev2_ref();
             let restored = if i == 0 {
                 frame.clone()
             } else if is_golden {
-                Self::restore_referenced(golden_base.as_ref().expect("golden base set"), None, true, &frame)
+                Self::restore_referenced(golden_base.as_ref(), &frame)
+            } else if is_prev2 {
+                // prev2 = 前前还原帧（i-2）；i<2 时退化为 golden
+                let base = if i >= 2 {
+                    prev2.as_ref()
+                } else {
+                    golden_base.as_ref()
+                };
+                Self::restore_referenced(base, &frame)
             } else {
-                Self::restore_referenced(
-                    golden_base.as_ref().expect("golden base set"),
-                    prev.as_ref(),
-                    false,
-                    &frame,
-                )
+                let base = if i >= 1 {
+                    prev.as_ref()
+                } else {
+                    golden_base.as_ref()
+                };
+                Self::restore_referenced(base, &frame)
             };
 
             on_frame(i, &restored)?;
@@ -295,6 +305,7 @@ impl DecodeSession {
             if i == 0 {
                 golden_base = Some(restored.clone());
             }
+            prev2 = prev.take();
             prev = Some(restored);
             current_offset = frame_end;
         }

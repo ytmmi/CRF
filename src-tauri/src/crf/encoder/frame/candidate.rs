@@ -10,22 +10,22 @@
 
 use rayon::prelude::*;
 
+use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
+use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
+use crate::crf::core::prediction::cost::residual_activity_for_mode_sampled;
+use crate::crf::core::prediction::cost::satd_for_mode_sampled;
+use crate::crf::core::prediction::intra::apply_prediction_into;
+use crate::crf::core::transform::closed_loop::closed_loop_predict_quant_banded_into;
 use crate::crf::encoder::banded::encode_banded_payload;
 use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 use crate::crf::encoder::planar::encode_planar_payload_limited;
 use crate::crf::error::{CrfError, CrfResult};
-use crate::crf::core::bitstream::constants::{BAND_HEIGHT, FRAME_HEADER_SIZE};
-use crate::crf::core::domain::{CompressionType, ImageData, PredictionMode};
-use crate::crf::core::prediction::intra::apply_prediction_into;
-use crate::crf::core::transform::closed_loop::closed_loop_predict_quant_banded_into;
-use crate::crf::core::prediction::cost::residual_activity_for_mode_sampled;
-use crate::crf::core::prediction::cost::satd_for_mode_sampled;
 
-use super::BandSteps;
-use crate::crf::core::transform::rdoq::trellis_quantize_interleaved;
-use super::super::scratch::FrameScratch;
-use super::{assemble_frame, FrameQuant};
 use super::super::rle_cabac;
+use super::super::scratch::FrameScratch;
+use super::BandSteps;
+use super::{assemble_frame, FrameQuant};
+use crate::crf::core::transform::rdoq::trellis_quantize_interleaved;
 
 use crate::crf::performance::telemetry::Span;
 
@@ -111,13 +111,7 @@ pub fn encode_frame_adaptive(
     let avg_abs_res = ranked
         .first()
         .map(|&(_, mode)| {
-            residual_activity_for_mode_sampled(
-                &image.pixels,
-                width,
-                height,
-                components,
-                mode,
-            )
+            residual_activity_for_mode_sampled(&image.pixels, width, height, components, mode)
         })
         .unwrap_or(0.0);
     let dct_threshold = (fq.step.max(1) as f64) * 0.1;
@@ -275,8 +269,7 @@ pub fn encode_frame_adaptive(
             // CABAC 候选同样走闭环（有损）或开环（无损），与帧级路径一致。
             // v2 梯度分级上下文：空间域残差流传入 stride 启用因果梯度分级
             let predicted: &[i32] = if fq.is_lossy() {
-                let (residuals, reconstruction) =
-                    frame_scratch.closed_loop(image.pixels.len());
+                let (residuals, reconstruction) = frame_scratch.closed_loop(image.pixels.len());
                 closed_loop_predict_quant_banded_into(
                     &image.pixels,
                     residuals,
@@ -319,8 +312,12 @@ pub fn encode_frame_adaptive(
                 full_payload.push(k);
                 full_payload.extend_from_slice(&payload);
                 let mut cab = assemble_frame(&full_payload, image, k, 5)?;
-                // 帧头 pred_mode 记录实际使用的空间预测模式
-                let pm_off = FRAME_HEADER_SIZE - 1;
+                // 帧头 pred_mode 记录实际使用的空间预测模式。
+                // v1.15 帧头 12B：pred_mode 位于 data[10]（FRAME_HEADER_SIZE-2），
+                // data[11] 为 reference_type——旧写法 FRAME_HEADER_SIZE-1 会
+                // 误写 reference_type 且使 pred_mode 恒为 PRED_MODE_UNSET，
+                // 导致解码端预测撤销失效（编解码不对称）。
+                let pm_off = FRAME_HEADER_SIZE - 2;
                 cab[pm_off] = best_mode as u8;
                 if best.as_ref().is_none_or(|(sz, ..)| cab.len() < *sz) {
                     best = Some((cab.len(), cab, Some(best_mode)));
@@ -398,37 +395,39 @@ pub fn encode_frame_adaptive(
         // 后续同序严格 `<` 比较，tie-break 与串行版逐字节一致。
         let dct_results: Vec<(usize, Vec<u8>, usize, usize, bool)> = variants
             .par_iter()
-            .map(|&(block_w, block_h, use_qm)| -> CrfResult<(usize, Vec<u8>, usize, usize, bool)> {
-                let q_coeff = super::super::dct_path::dct_quantize_interleaved_bs(
-                    &image.pixels,
-                    width,
-                    height,
-                    components,
-                    q_step,
-                    block_w,
-                    block_h,
-                    use_qm,
-                    fq.q1_matrix_scale && use_qm,
-                );
-                // DCT 系数流为非空间域数据，不启用空间域分类器（stride=None）
-                // 载荷 v3：[k|形状/矩阵标志 u8][flags=Uniform][cabac 码流]
-                let (payload, k) = rle_cabac::encode_frame_rle_cabac_adaptive(&q_coeff, None)?;
-                let mut flag_byte = k;
-                if block_w == 8 {
-                    flag_byte |= BW8_FLAG_BIT;
-                }
-                if block_h == 8 {
-                    flag_byte |= BH8_FLAG_BIT;
-                }
-                if use_qm {
-                    flag_byte |= QM_FLAG_BIT;
-                }
-                let mut full_payload = Vec::with_capacity(payload.len() + 1);
-                full_payload.push(flag_byte);
-                full_payload.extend_from_slice(&payload);
-                let len = FRAME_HEADER_SIZE + full_payload.len();
-                Ok((len, full_payload, block_w, block_h, use_qm))
-            })
+            .map(
+                |&(block_w, block_h, use_qm)| -> CrfResult<(usize, Vec<u8>, usize, usize, bool)> {
+                    let q_coeff = super::super::dct_path::dct_quantize_interleaved_bs(
+                        &image.pixels,
+                        width,
+                        height,
+                        components,
+                        q_step,
+                        block_w,
+                        block_h,
+                        use_qm,
+                        fq.q1_matrix_scale && use_qm,
+                    );
+                    // DCT 系数流为非空间域数据，不启用空间域分类器（stride=None）
+                    // 载荷 v3：[k|形状/矩阵标志 u8][flags=Uniform][cabac 码流]
+                    let (payload, k) = rle_cabac::encode_frame_rle_cabac_adaptive(&q_coeff, None)?;
+                    let mut flag_byte = k;
+                    if block_w == 8 {
+                        flag_byte |= BW8_FLAG_BIT;
+                    }
+                    if block_h == 8 {
+                        flag_byte |= BH8_FLAG_BIT;
+                    }
+                    if use_qm {
+                        flag_byte |= QM_FLAG_BIT;
+                    }
+                    let mut full_payload = Vec::with_capacity(payload.len() + 1);
+                    full_payload.push(flag_byte);
+                    full_payload.extend_from_slice(&payload);
+                    let len = FRAME_HEADER_SIZE + full_payload.len();
+                    Ok((len, full_payload, block_w, block_h, use_qm))
+                },
+            )
             .collect::<CrfResult<Vec<_>>>()?;
         for (len, full_payload, block_w, block_h, use_qm) in dct_results {
             if best_dct.as_ref().is_none_or(|(sz, ..)| len < *sz) {

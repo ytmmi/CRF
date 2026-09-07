@@ -101,7 +101,11 @@ fn p0_lossy_golden_no_reference_drift() {
     // 每帧还原误差都会包含完整的首帧误差场（系统性偏移不衰减）。
     let originals = synthetic_sequence(5, 48, 40);
     let params = EncodeParams {
-        lossy: Some(crate::crf::LossyOptionsV2Builder::preset(7500).build().unwrap()),
+        lossy: Some(
+            crate::crf::LossyOptionsV2Builder::preset(7500)
+                .build()
+                .unwrap(),
+        ),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("有损编码失败");
@@ -146,7 +150,12 @@ fn p0_q95_soft_first_frame_structural_closure() {
     // 具体率失真数值归 P1 标定。
     let originals = synthetic_sequence(3, 40, 32);
     let params = EncodeParams {
-        lossy: Some(crate::crf::LossyOptionsV2Builder::preset(9500).reference_mode(crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden).build().unwrap()),
+        lossy: Some(
+            crate::crf::LossyOptionsV2Builder::preset(9500)
+                .reference_mode(crate::crf::core::config::lossy_v2::ReferenceModeV2::Golden)
+                .build()
+                .unwrap(),
+        ),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q95 编码失败");
@@ -155,8 +164,13 @@ fn p0_q95_soft_first_frame_structural_closure() {
     assert_eq!(result.frames.len(), originals.len());
     assert_eq!(result.header.width, 40);
     assert_eq!(result.header.height, 32);
-    // golden 标志：首帧 false，其余全部 true（全 golden 架构）
-    assert!(!result.frame_golden_refs[0]);
+    // v1.15 参考类型语义：首帧 reference_type=0（golden 基准自身），
+    // 其余帧 reference_type=0（golden 差分）→ frame_golden_refs 全 true。
+    // （旧版 golden 标志读 coding_params.bit7，首帧未置位故为 false。）
+    assert!(
+        result.frame_golden_refs[0],
+        "首帧即 golden 基准（v1.15 reference_type=0）"
+    );
     for (i, g) in result.frame_golden_refs.iter().enumerate().skip(1) {
         assert!(g, "第 {} 帧应为 golden 差分帧", i);
     }
@@ -172,11 +186,19 @@ fn preset_explicit_equivalence() {
     let originals = synthetic_sequence(4, 48, 40);
     let base = base_params();
     let preset_params = EncodeParams {
-        lossy: Some(crate::crf::LossyOptionsV2Builder::preset(9000).build().unwrap()),
+        lossy: Some(
+            crate::crf::LossyOptionsV2Builder::preset(9000)
+                .build()
+                .unwrap(),
+        ),
         ..base.clone()
     };
     let explicit_params = EncodeParams {
-        lossy: Some(crate::crf::LossyOptionsV2Builder::explicit_steps(512, 768).build().unwrap()),
+        lossy: Some(
+            crate::crf::LossyOptionsV2Builder::explicit_steps(512, 768)
+                .build()
+                .unwrap(),
+        ),
         ..base
     };
     let enc_preset =

@@ -2025,3 +2025,54 @@ fq_for_chain_index 2/2）；clippy 无新增告警。
 **遗留**：decode 端 `q_step` 不再来自 lossy_quant 后，`header.lossy_quant`
 对 type8 帧仅作诊断用途；QualityOffset/anchor-offset 下非 type8 帧（planar/
 banded/cabac）的步长分歧不在本修复范围（无反量化逻辑，不依赖该字段）。
+
+## 38. v1.15 破坏式更新：多参考帧（prev2）+ reference_type 帧头字段（2026-09-07）
+
+**背景**：用户建议 7（多参考帧）落地。外部证据：Wiegand 1999 长时记忆多参考
+帧间预测 +2dB≈34% 码率（Foreman）、通用 1→5 帧 5~15%，收益集中于周期运动/
+遮挡重现——CRF 差分场景"相邻状态差分"（帧 N 与 N−2 更相似）真实存在。
+用户授权**破坏式更新**（早期开发版本，无需兼容旧文件）。
+
+### 格式变更（v1.15，不兼容 v1.14 及以下）
+
+- `FRAME_HEADER_SIZE` 11 → 12：新增 `reference_type` 字段（data[11]），
+  `VERSION_MINOR` 3 → 4。
+- golden 参考语义从 `coding_params.bit7`（单 bit，仅区分 golden/链式）迁移到
+  `reference_type` 三态：0=golden / 1=previous / 2=prev2 / 3=保留。
+- 编码端：golden 不再写 coding_params.bit7（assemble_frame 默认 reference_type=0）；
+  previous/prev2 候选写 data[11]。
+- 解码端 `restore_temporal` / `decode_bytes_streaming`：三态还原，保留前前帧
+  （prev2）历史。
+
+### 多参考竞争（Hybrid）
+
+- batch（`sequence.rs`）与 streaming（`streaming.rs`）对称实现：每帧对
+  golden（路径 G 已生成）/ previous（recon[i-1]）/ prev2（recon[i-2]）三候选
+  编码，字节最小者胜出（单调不劣化由竞争保证）。
+- `Previous` 模式保持纯 previous 链（不启用 prev2，保留其误差累积设计语义）；
+  `Golden` 模式全 golden；场景切换命中时跳过 prev/prev2 回退 golden。
+- change_mask / scene_cut 对 prev/prev2 分别按各自参考计算；batch/streaming
+  逐字节一致（周期内容专项测试锁定）。
+
+### 修复的连带缺陷
+
+1. **candidate.rs `pm_off = FRAME_HEADER_SIZE - 1` 误写 reference_type**：原为
+   pred_mode 偏移（data[10]），帧头扩展后写入 data[11]（reference_type），
+   导致 CABAC 候选 pred_mode 恒为 PRED_MODE_UNSET 且 reference_type 被污染——
+   解码端预测撤销失效、帧 0 逐像素不一致（planar 子帧实测暴露）。修复：
+   `FRAME_HEADER_SIZE - 2`。
+2. **intrabc 测试硬编码帧头 11**：`off += 11 + fsz` → `FRAME_HEADER_SIZE + fsz`。
+
+### 测试
+
+- `test_prev2_used_in_hybrid_roundtrip`：prev2 独胜序列 A,B,C,B,D,B
+  （frame3/5 与 frame1 相同、与 golden/prev 差异大）→ 产物含 reference_type=2
+  帧，往返误差受控，prev2 标志表一致。
+- `test_streaming_prev2_matches_batch`：周期内容 Hybrid 下 batch/streaming 逐字节一致。
+- `test_prev2_not_used_in_previous_mode`：Previous 模式无 reference_type=2 帧。
+- closed_loop 首帧 golden 断言更新（v1.15 首帧 reference_type=0 → golden=true）。
+
+**门禁**：全量 release 190 passed / 3 failed（3 失败为既有 CUDA DLL 环境问题，
+与本轮无关）；clippy 无新增告警。
+**文档**：`crf格式标准.md` §3.5/3.5.1（帧头 12B + 参考类型表 + v1.15 破坏式说明）；
+`compression-algorithm-exploration.md` §9 建议 7 标记已实现。
