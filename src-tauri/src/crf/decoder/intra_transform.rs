@@ -17,21 +17,49 @@ const MODE_V: i32 = 2;
 const MODE_MED: i32 = 3;
 
 /// 解码 frame_type=8 载荷 → 重建整帧 RGB
+///
+/// 亮度/色度步长从载荷内读取（flags bit1/bit2 后各 1 字节），**不依赖文件头
+/// lossy_quant**。修复缺陷：旧解码端以 `(q_step, q_step)` 反量化——有损档
+/// chroma_step != q_step（chroma_scale>1000 或显式 chroma_step）时色度步长
+/// 错误；且无损 type8 帧出现在有损文件时会以错误亮度步长解码。
 pub fn decode_intra_transform(
     data: &[u8],
     width: usize,
     height: usize,
     components: usize,
-    q_step: u8,
-    chroma_step: u8,
 ) -> CrfResult<Vec<i32>> {
-    if components != 3 || data.is_empty() {
+    if components != 3 || data.len() < 3 {
         return Err(CrfError::InvalidCodingParams(
             "intra_transform: bad params".into(),
         ));
     }
-    let q = (q_step.max(1)) as i32;
-    let mut offset = 1; // 跳过 flags
+    let flags = data[0];
+    let mut offset = 1;
+    let luma_step = if flags & 0b10 != 0 {
+        let v = *data
+            .get(offset)
+            .ok_or_else(|| CrfError::InsufficientData {
+                expected: offset + 1,
+                actual: data.len(),
+            })?;
+        offset += 1;
+        v
+    } else {
+        0
+    };
+    let chroma_step = if flags & 0b100 != 0 {
+        let v = *data
+            .get(offset)
+            .ok_or_else(|| CrfError::InsufficientData {
+                expected: offset + 1,
+                actual: data.len(),
+            })?;
+        offset += 1;
+        v
+    } else {
+        luma_step
+    };
+    let q = (luma_step.max(1)) as i32;
 
     let mut planes: Vec<Vec<i32>> = Vec::with_capacity(3);
     for pi in 0..3 {

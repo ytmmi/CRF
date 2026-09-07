@@ -48,8 +48,6 @@ mod tests {
             img.width as usize,
             img.height as usize,
             3,
-            1,
-            1,
         )
         .expect("decode failed");
 
@@ -78,8 +76,6 @@ mod tests {
             img.width as usize,
             img.height as usize,
             3,
-            5,
-            5,
         )
         .expect("decode failed");
 
@@ -132,8 +128,6 @@ mod tests {
             w as usize,
             h as usize,
             3,
-            1,
-            1,
         )
         .expect("decode failed");
         let max_err = decoded
@@ -143,5 +137,86 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert_eq!(max_err, 0, "RCT 域无损往返应有零误差，实际 max_err={}", max_err);
+    }
+
+    #[test]
+    fn frame_type8_step_signaling_self_contained() {
+        // 缺陷回归：type8 载荷必须自包含 luma/chroma 步长（flags bit1/bit2），
+        // 解码端不能依赖文件头 lossy_quant 推断——
+        // ①chroma_scale>1000 或显式 chroma_step 时色度步长 ≠ 亮度步长；
+        // ②无损 type8 帧出现在有损文件（lossy_quant>0）时亮度步长不同。
+        //
+        // 构造 q_step=2、chroma_step=3 的有损载荷：
+        // - flags bit1/bit2 恒设，第 2/3 字节分别为 luma_step 与 chroma_step；
+        // - 解码端从载荷读取，Y 用 2、Co/Cg 用 3 反量化。
+        let img = make_frame(32, 24, 0x1357_2468);
+        let payload = encode_intra_transform_payload(
+            &img,
+            CompressionType::GolombRice,
+            2, // q_step（亮度）
+            0, // deadzone
+            3, // chroma_step（色度）
+            0, // chroma_bias
+        )
+        .expect("encode failed");
+
+        assert_eq!(payload[0] & 0b110, 0b110, "luma/chroma 步长必须无条件信令");
+        assert_eq!(payload[1], 2, "信令的 luma_step 应为 2");
+        assert_eq!(payload[2], 3, "信令的 chroma_step 应为 3");
+
+        let decoded = crate::crf::decoder::intra_transform::decode_intra_transform(
+            &payload,
+            img.width as usize,
+            img.height as usize,
+            3,
+        )
+        .expect("decode failed");
+
+        let max_err = decoded
+            .iter()
+            .zip(&img.pixels)
+            .map(|(a, b)| (a - b).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_err < 100,
+            "步长信令往返 max_err={} 应 <100",
+            max_err
+        );
+    }
+
+    #[test]
+    fn frame_type8_luma_chroma_equal_steps() {
+        // chroma_step == q_step（默认 chroma_scale=1000）时双步长字节仍然
+        // 写入（自包含语义），解码结果不受影响。
+        let img = make_frame(32, 24, 0x9753_1086);
+        let payload = encode_intra_transform_payload(
+            &img,
+            CompressionType::GolombRice,
+            4,
+            0,
+            4, // chroma_step == q_step
+            0,
+        )
+        .expect("encode failed");
+
+        assert_eq!(payload[0] & 0b110, 0b110, "步长必须无条件信令");
+        assert_eq!(payload[1], 4, "luma_step 应为 4");
+        assert_eq!(payload[2], 4, "chroma_step 应为 4");
+
+        let decoded = crate::crf::decoder::intra_transform::decode_intra_transform(
+            &payload,
+            img.width as usize,
+            img.height as usize,
+            3,
+        )
+        .expect("decode failed");
+        let max_err = decoded
+            .iter()
+            .zip(&img.pixels)
+            .map(|(a, b)| (a - b).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(max_err < 100, "q=4 往返 max_err={} 应 <100", max_err);
     }
 }

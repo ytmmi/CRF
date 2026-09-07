@@ -188,7 +188,14 @@ pub fn encode_intra_transform_payload(
         })
         .collect::<CrfResult<Vec<_>>>()?;
 
-    let mut out = vec![0u8]; // flags 预留
+    let mut out = vec![0b110u8]; // flags: bit1=luma_step_present, bit2=chroma_step_present
+    // type8 载荷自包含步长信令（修复缺陷）：解码端不依赖文件头 lossy_quant
+    // 推断步长。旧缺陷：decoder 以 (q_step, q_step) 反量化，chroma_scale>1000
+    // 或显式 chroma_step 配置下色度步长错误；且无损 type8 帧出现在有损
+    // 文件（lossy_quant>0）时会以错误亮度步长解码。无条件写入 luma_step +
+    // chroma_step，解码端完全从载荷读取，语义自包含。
+    out.push(q_step);
+    out.push(chroma_step);
     for payload in plane_payloads {
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(&payload);

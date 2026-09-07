@@ -117,9 +117,11 @@ pub fn reconstruct_frame(data: &[u8], header: &CrfHeader) -> CrfResult<ImageData
 
     // 预测后变换 + CABAC 系数编码（frame_type=8，v1.14）
     if header.compression_type == CompressionType::GolombRice && frame_header.frame_type == 8 {
-        let q_step = header.lossy_quant.max(1);
+        // 亮度/色度步长由载荷内 flags 信令（encode 端无条件写入），解码端
+        // 完全从载荷读取，不依赖文件头 lossy_quant——旧缺陷：传
+        // (q_step, q_step) 使 chroma_step != q_step 时色度反量化步长错误。
         let pixels = crate::crf::decoder::intra_transform::decode_intra_transform(
-            frame_data, width, height, components, q_step, q_step,
+            frame_data, width, height, components,
         )?;
         return Ok(ImageData {
             width: header.width,

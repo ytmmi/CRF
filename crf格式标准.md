@@ -129,6 +129,7 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | 5 | RLE+CABAC 算术编码 | 与 frame_type=1 位流语法同构，escape/前缀位改由自适应算术编码承载；v3 三模式上下文分类器竞争（MA 树 / 固定梯度 / 全帧统一） | 全帧 k 值 |
 | 6 | DCT 变换域量化 | 分块 lifting DCT（形状 {4×4, 8×8, 8×4, 4×8}，v1.12 矩形泛化）→ 死区量化（flat/感知矩阵/Trellis）→ CABAC（有损路径专用，无空间预测） | 全帧 k 值；载荷首字节 bit4=Trellis、bit5=宽8、bit6=矩阵、bit7=高8 |
 | 7 | 帧内块复制（IntraBC，v1.11） | 8×8 块级 COPY/PRED 决策 + 三段式载荷（决策 RLE / COPY 向量 exp-Golomb / PRED 预测残差 RLE）；无损路径全帧参与（v1.11 差分帧启用） | 保留(0) |
+| 8 | 预测后变换 + CABAC 系数编码（v1.14） | 8×8 块 {DC/H/V/MED} SAD 选模式 → DC 走 transform skip / 其余走 lifting DCT → 死区量化 → zigzag → CoeffCABAC（run-level，4 上下文）；三平面独立编码。**载荷自包含亮度/色度步长**（v1.14.1 起：flags bit1/bit2 后各 1 字节，见下方布局） | 保留(0)；bit7=golden 参考 |
 
 **编码器按"字节最小者胜出"在候选间自动竞争**，逐帧记录实际类型，解码端按帧分流：
 
@@ -191,7 +192,6 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 ```
 [k|标志位 u8][flags u8][(ma_tree 头)][自适应算术编码位流]
 ```
-
 首字节标志位布局（低 3 位为 Golomb k 值）：
 
 | 位 | 名称 | 说明 |
@@ -204,6 +204,27 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
   Q_pos 倍数的自描述反量化结果，解码端 mask 标志位取 k 后行为一致；
 - DCT 系数流为非空间域数据，不启用空间域上下文分类器
   （flags 恒为 Uniform）。
+
+#### frame_type=8 载荷布局（预测后变换 + CABAC 系数编码，v1.14+）
+
+```
+[flags u8]              bit0=has_modes(预留 0)；bit1=luma_step_present；bit2=chroma_step_present
+[luma_step u8]          亮度步长（无条件信令；0=无损）
+[chroma_step u8]        色度步长（无条件信令）
+重复 3 次（Y、Co、Cg 平面）：
+  [sub_len u32 LE]
+  [子载荷：mode_len u32 LE][k u8][mode_body(CABAC 模式表)][coeff_stream(CoeffCABAC)]
+```
+
+- **步长信令（v1.14.1 起）**：type8 载荷自包含亮度/色度步长，解码端反量化
+  （`level × q`）完全从载荷读取，**不依赖文件头 lossy_quant**。历史缺陷：
+  解码端以 `(lossy_quant, lossy_quant)` 反量化，在 `chroma_scale>1000` /
+  显式 `chroma_step` 配置下色度步长错误；且无损 type8 帧出现在有损文件时
+  亮度步长错误。步长按平面使用：Y 用 `luma_step`，Co/Cg 用 `chroma_step`。
+- 模式表走 RLE+CABAC（v3 载荷 `[k][body]`，`k` 在子载荷首字节）；
+  系数流走 CoeffCABAC（4 上下文：ctx_nonzero / ctx_run / ctx_level_q / sign 直通），
+  从 last_nz 逆序的 `(run, level, sign)` 三元组，位置信息嵌入 run（无单独位置流）。
+- DC 模式（transform skip）直通量化残差；H/V/MED 模式走 DCT8 + 量化 + zigzag。
 
 ### 3.7 预测模式（PredictionMode）
 
