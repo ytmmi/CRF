@@ -345,8 +345,8 @@ bt709 colorspace + primaries + transfer / full range
 
 ## 9. 每次构建的强制流程
 
-这里的“构建”包括 `cargo build/check/test`、`pnpm build/test`、Tauri build，以及为验证
-算法而生成新 CRF 产物的实现轮次。
+这里的“构建”包括 `cargo build/check/test`、`cargo clippy`、NVIDIA feature 构建，以及为验证
+算法而生成新 CRF 产物的实现轮次。项目为**纯 CLI**，无前端构建（pnpm/Tauri 构建不存在）。
 
 ### 9.1 构建前门禁
 

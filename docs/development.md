@@ -21,10 +21,10 @@
 
 | 依赖 | 版本要求 | 说明 |
 | :--- | :--- | :--- |
-| Node.js | >= 18.0 | 前端运行时 |
-| pnpm | >= 8.0 | 包管理器 |
-| Rust | >= 1.75 | 后端语言 |
-| Tauri CLI | >= 2.0 | Tauri 命令行工具 |
+| Rust | >= 1.75 | 唯一构建语言（纯 CLI，无前端） |
+| Cargo | 随 Rust | 包管理器/构建工具 |
+
+> 本项目为**纯 CLI**：无 Node.js / pnpm / Tauri CLI / 前端依赖。
 
 ### Windows 环境
 
@@ -32,14 +32,8 @@
 # 安装 Rust（如果未安装）
 winget install Rustlang.Rustup
 
-# 安装 Visual Studio Build Tools
+# 安装 Visual Studio Build Tools（Rust MSVC 工具链需要）
 winget install Microsoft.VisualStudio.2022.BuildTools
-
-# 安装 Tauri 依赖
-cargo install tauri-cli
-
-# 安装 Node.js（如果未安装）
-winget install OpenJS.NodeJS.LTS
 ```
 
 ### macOS 环境
@@ -50,14 +44,6 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # 安装 Xcode Command Line Tools
 xcode-select --install
-
-# 安装 Tauri CLI
-cargo install tauri-cli
-
-# 安装 Node.js（使用 nvm）
-brew install nvm
-nvm install 18
-nvm use 18
 ```
 
 ### Linux 环境 (Ubuntu/Debian)
@@ -65,22 +51,10 @@ nvm use 18
 ```bash
 # 安装系统依赖
 sudo apt update
-sudo apt install -y \
-  libwebkit2gtk-4.1-dev \
-  libgtk-3-dev \
-  libayatana-appindicator3-dev \
-  librsvg2-dev \
-  patchelf
+sudo apt install -y build-essential pkg-config
 
 # 安装 Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# 安装 Tauri CLI
-cargo install tauri-cli
-
-# 安装 Node.js
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
 ```
 
 ### 克隆项目
@@ -93,11 +67,8 @@ cd crf-viewer
 ### 安装依赖
 
 ```bash
-# 安装前端依赖
-pnpm install
-
-# 验证 Rust 环境
-cargo check
+# 验证 Rust 环境并拉取依赖（crates.io）
+cargo check --manifest-path src-tauri/Cargo.toml --workspace
 ```
 
 ---
@@ -115,30 +86,19 @@ crf-viewer/
 |   +-- codec-architecture-refactor-plan.md # 编解码器分层重构规划
 |   +-- performance-optimization-plan.md # CPU/GPU 性能规划
 |   +-- user-guide.md             # 用户手册
-+-- src/                          # 前端源码 (React)
-|   +-- components/               # UI 组件
-|   +-- hooks/                    # 自定义 Hooks
-|   +-- services/                 # 前端服务
-|   +-- stores/                   # 状态管理
-|   +-- types/                    # TypeScript 类型定义
-|   +-- utils/                    # 工具函数
-+-- src-tauri/                    # Rust 后端
++-- src-tauri/                    # Rust 源码（纯 CLI，无 Tauri）
 |   +-- src/
-|   |   +-- commands/             # Tauri 命令
-|   |   +-- crf/                  # CRF 格式处理
-|   |   +-- image/                # 图像处理
-|   |   +-- main.rs               # 入口
+|   |   +-- main.rs               # CLI 入口（参数解析/测试/基准/探针）
+|   |   +-- cli_config.rs         # CLI 配置解析（有损 V2 flags / 专家配置）
+|   |   +-- crf/                  # CRF 格式核心（codec/core/encoder/decoder/backend/performance）
+|   |   +-- test/                 # 集成测试（批量/流式/探针）
+|   +-- cuda-runtime/             # CUDA 旁路 DLL 运行时
 |   +-- Cargo.toml
-|   +-- tauri.conf.json
-+-- public/                       # 静态资源
-+-- index.html
-+-- package.json
-+-- pnpm-lock.yaml
-+-- tsconfig.json
-+-- vite.config.ts
-+-- .eslintrc.cjs
-+-- .prettierrc
++-- test/                         # 端到端测试图像组
++-- scripts/                      # 辅助脚本
 ```
+
+> 无 `src/` 前端、`package.json`、`vite.config.ts` 等前端文件。
 
 ---
 
@@ -171,71 +131,23 @@ cargo clippy -- -D warnings
 pub enum CrfError {
     #[error("Invalid magic number")]
     InvalidMagic,
-    
+
     #[error("Unsupported version: {0}.{1}")]
     UnsupportedVersion(u16, u16),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-// 命令返回 Result<T, String>
-#[tauri::command]
-pub fn encode_crf(...) -> Result<Vec<u8>, String> {
+// CLI/API 返回 Result<T, CrfError>
+fn encode_crf(...) -> Result<Vec<u8>, CrfError> {
     // 使用 ? 操作符
-    let data = encode_inner(...).map_err(|e| e.to_string())?;
+    let data = encode_inner(...)?;
     Ok(data)
 }
 ```
 
-### TypeScript/React 代码规范
-
-使用 ESLint + Prettier 格式化。
-
-```bash
-# 格式化代码
-pnpm format
-
-# 检查代码
-pnpm lint
-```
-
-**命名规范**：
-
-- 组件：PascalCase（如 `ImageViewer`、`SequencePanel`）
-- 函数/变量：camelCase（如 `loadImage`、`frameCount`）
-- 类型/接口：PascalCase（如 `ImageData`、`EncodeParams`）
-- 常量：SCREAMING_SNAKE_CASE 或 camelCase
-
-**组件规范**：
-
-```tsx
-// 使用函数组件和 Hooks
-interface ImageViewerProps {
-  image: ImageData;
-  onFrameChange?: (index: number) => void;
-}
-
-export const ImageViewer: React.FC<ImageViewerProps> = ({ 
-  image, 
-  onFrameChange 
-}) => {
-  // Hooks 放在最前面
-  const [scale, setScale] = useState(1);
-  
-  // 事件处理
-  const handleZoom = useCallback((delta: number) => {
-    setScale(prev => prev + delta);
-  }, []);
-  
-  // 渲染
-  return (
-    <div className="image-viewer">
-      {/* ... */}
-    </div>
-  );
-};
-```
+> 项目为纯 Rust：无 TypeScript/React 代码规范（历史规划中的前端规范章节已废弃）。
 
 ---
 
@@ -244,45 +156,22 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
 ### 开发模式
 
 ```bash
-# 启动开发服务器（前端热重载 + Rust 后端）
-pnpm tauri dev
+# 以 debug 构建并运行（默认启用 nvidia-cuda feature；无设备自动回退 CPU）
+cargo run --manifest-path src-tauri/Cargo.toml -- --help
 ```
 
 开发模式下：
-- 前端代码修改后自动热重载
-- Rust 代码修改后自动重新编译
-- 应用窗口自动刷新
+- Rust 代码修改后重新 `cargo run` / `cargo test` 即可
+- 无前端、无热重载、无应用窗口
 
 ### 构建发布版本
 
 ```bash
-# 构建当前平台的发布版本
-pnpm tauri build
-```
-
-构建产物位于 `src-tauri/target/release/bundle/`：
-
-| 平台 | 产物路径 |
-| :--- | :--- |
-| Windows | `msi/*.msi` / `nsis/*.exe` |
-| macOS | `dmg/*.dmg` / `macos/*.app` |
-| Linux | `deb/*.deb` / `appimage/*.AppImage` |
-
-### 仅构建前端
-
-```bash
-# 构建前端资源（不打包 Tauri）
-pnpm build
-```
-
-### 仅构建 Rust
-
-```bash
-# 构建 Rust workspace（NVIDIA 默认 feature 会同时生成 EXE 和 CUDA DLL）
+# 构建当前平台的发布版本（workspace 同时产出 EXE 与 CUDA DLL）
 cargo build --manifest-path src-tauri/Cargo.toml --workspace --release --features nvidia-cuda
 ```
 
-Windows NVIDIA 发布包必须按标准 `exe + dll` 方式组织：
+构建产物位于 `src-tauri/target/release/`：
 
 ```text
 src-tauri/target/release/
@@ -303,25 +192,12 @@ cargo test --manifest-path src-tauri/Cargo.toml --features nvidia-cuda `
   crf::backend::gpu::cuda::tests::cuda_diff_matches_scalar_when_driver_is_available -- --nocapture
 ```
 
-发布包不能只复制 EXE；若采用 Tauri/其他安装器，必须将 `crf_cuda.dll` 配置为与主 EXE
+发布包不能只复制 EXE；无论使用何种安装器，必须将 `crf_cuda.dll` 配置为与主 EXE
 同目录的 sidecar/resource，并在安装后目录中复核文件存在。
 
 ---
 
 ## 测试说明
-
-### 前端测试
-
-```bash
-# 运行所有测试
-pnpm test
-
-# 运行测试并生成覆盖率报告
-pnpm test:coverage
-
-# 监听模式
-pnpm test:watch
-```
 
 ### Rust 测试
 
@@ -340,9 +216,11 @@ cargo test -- --nocapture
 
 ```bash
 # 运行完整的构建和测试流程
-pnpm tauri build
-cargo test
-pnpm test
+cargo build --manifest-path src-tauri/Cargo.toml --workspace --release
+cargo test --manifest-path src-tauri/Cargo.toml --workspace
+
+# 端到端图像组测试（编码→解码→逐像素校验）
+cargo run --manifest-path src-tauri/Cargo.toml -- --test test/png/1000
 ```
 
 ### 测试文件结构

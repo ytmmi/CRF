@@ -3,36 +3,41 @@
 ## 目录
 
 - [概述](#概述)
-- [Tauri 命令接口](#tauri-命令接口)
+- [CLI 与 Rust API](#cli-与-rust-api)
 - [数据结构定义](#数据结构定义)
 - [错误处理](#错误处理)
-- [前端服务封装](#前端服务封装)
 
 ---
 
 ## 概述
 
-CRF Viewer 的前后端通信基于 Tauri 2 的命令系统。前端通过 `invoke()` 函数调用 Rust 后端命令，数据通过 JSON 序列化传输。
+CRF Viewer 是**纯 Rust CLI 工具**（无前端、无 Tauri）。编解码能力通过
+`src-tauri/src/main.rs` 的命令行入口与 `crf::codec` facade（Rust 层唯一稳定入口）
+暴露，JSON 仅用于 `--expert-config` 输入与 `--dump-*` 导出。
 
-### 调用方式
+> ⚠️ **历史规划说明**：本文档下文中仍保留早期规划的 `#[tauri::command]` /
+> TypeScript 接口描述。项目现状为纯 CLI，**这些接口全部未实现**，仅作为未来 UI
+> 的参考，不代表当前 API 承诺。
 
-```typescript
-import { invoke } from '@tauri-apps/api/core';
+### 调用方式（当前）
 
-// 基本调用
-const result = await invoke<ResultType>('command_name', { param1: value1 });
+```bash
+# CLI 调用（当前唯一方式）
+cargo run --manifest-path src-tauri/Cargo.toml -- --lossy-quality 96.50 --test <dir>
 
-// 带错误处理
-try {
-  const result = await invoke<string>('decode_crf', { data: bytes });
-} catch (error) {
-  console.error('解码失败:', error);
-}
+# Rust API 调用（facade）
+let report = crf::codec::encode(request)?;
+let result = crf::codec::decode_from_bytes(data)?;
+let resolved = crf::codec::resolve_lossy_json(request_json)?;
+let schema  = crf::codec::lossy_expert_schema_json()?;
 ```
 
 ---
 
-## Tauri 命令接口
+## Tauri 命令接口（历史规划，未实现）
+
+> 以下 `#[tauri::command]` 与 `invoke()` 示例均为早期规划，项目当前**没有** Tauri
+> 命令系统。保留本节仅为未来 UI 提供接口形态参考。
 
 ### 文件操作
 
@@ -420,34 +425,16 @@ interface DecodeResult {
 | `File not found` | 文件不存在 |
 | `Permission denied` | 无权限访问文件 |
 
-### 前端错误处理
+### 前端错误处理（历史规划，未实现）
 
-```typescript
-import { invoke } from '@tauri-apps/api/core';
-
-async function openCrfFile(path: string) {
-  try {
-    const metadata = await invoke<CrfMetadata>('get_crf_metadata', { 
-      data: await readFile(path) 
-    });
-    return metadata;
-  } catch (error) {
-    // error 是字符串类型
-    if (error.includes('Invalid magic')) {
-      showNotification('不是有效的 CRF 文件');
-    } else {
-      showNotification(`打开失败: ${error}`);
-    }
-    throw error;
-  }
-}
-```
+> 无前端，以下示例仅为未来 UI 参考。
 
 ---
 
-## 前端服务封装
+## 前端服务封装（历史规划，未实现）
 
-建议在 `services/tauriCommands.ts` 中统一封装所有后端调用：
+> 项目当前**没有** `src/services/tauriCommands.ts` 或任何前端源码。以下为未来 UI
+> 的可选封装形态，不代表已实现。
 
 ```typescript
 // services/tauriCommands.ts

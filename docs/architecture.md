@@ -15,14 +15,14 @@
 - [整体架构](#整体架构)
 - [模块划分](#模块划分)
 - [数据流设计](#数据流设计)
-- [前后端交互](#前后端交互)
+- [接口与交互（CLI / Rust API）](#接口与交互cli--rust-api)
 - [核心算法](#核心算法)
 
 ---
 
 ## 系统概述
 
-CRF Viewer 是一个基于 Tauri 2 框架构建的跨平台桌面应用，用于差分图片序列的无损压缩、存储和查看。系统采用 Rust 后端 + React 前端的架构，实现了高性能的图像处理和用户友好的交互界面。
+CRF Viewer 是一个**纯 Rust CLI 工具**（无前端、无 Tauri GUI），用于差分图片序列的无损/有损压缩、存储与校验。系统采用单进程 Rust 架构，通过命令行参数驱动编解码、基准与探针。
 
 ### 设计目标
 
@@ -37,29 +37,28 @@ CRF Viewer 是一个基于 Tauri 2 框架构建的跨平台桌面应用，用于
 
 ```
 +=====================================================================+
-|                        CRF Viewer 应用                               |
+|                        CRF CLI（纯 Rust 进程）                        |
 +=====================================================================+
 |                                                                      |
 |  +----------------------------------------------------------------+  |
-|  |                    React 前端层                                  |  |
-|  |  +-------------+ +-------------+ +---------------------------+  |  |
-|  |  |   UI 组件   | | 状态管理    | |   服务层                   |  |  |
-|  |  |  (Views)    | | (Zustand)   | | (Tauri Commands)          |  |  |
-|  |  +-------------+ +-------------+ +---------------------------+  |  |
+|  |                    CLI 参数解析层                                |  |
+|  |   main.rs / cli_config.rs：--test / --bench / --probe-* /       |  |
+|  |   --lossy-quality / --expert-config / --dump-*                  |  |
 |  +----------------------------------------------------------------+  |
 |                              |                                       |
 |                              v                                       |
 |  +----------------------------------------------------------------+  |
-|  |                    Tauri IPC 层                                  |  |
-|  |           (前后端通信桥接 - JSON 序列化)                         |  |
+|  |                  crf::codec 对外 facade                          |  |
+|  |         (EncodeRequest / DecodeRequest / ResolvedConfig)        |  |
 |  +----------------------------------------------------------------+  |
 |                              |                                       |
 |                              v                                       |
 |  +----------------------------------------------------------------+  |
-|  |                    Rust 后端层                                    |  |
+|  |                    Rust 核心层（编解码）                          |  |
 |  |  +-------------+ +-------------+ +---------------------------+  |  |
-|  |  |  命令处理   | |  图像处理   | |   CRF 编解码器             |  |  |
-|  |  | (Commands)  | | (image-rs)  | | (Encoder/Decoder)         |  |  |
+|  |  |  encoder    | |  decoder    | |  core（公共契约与数学）     |  |  |
+|  |  | (session/    | | (container/ | |  + backend（scalar/SIMD/   |  |  |
+|  |  |  frame/...)  | |  frame/...) | |    GPU 能力探测）          |  |  |
 |  |  +-------------+ +-------------+ +---------------------------+  |  |
 |  +----------------------------------------------------------------+  |
 |                              |                                       |
@@ -71,18 +70,24 @@ CRF Viewer 是一个基于 Tauri 2 框架构建的跨平台桌面应用，用于
 +=====================================================================+
 ```
 
+> 无 `Tauri IPC`、无 `React 前端层`——仓库没有 `src/` 前端源码，所有输入输出经由
+> CLI 参数与文件系统完成。
+
 ---
 
 ## 模块划分
 
-### 1. 前端模块 (React)
+### 1. 前端模块 (React) —— 不存在
 
-> **注意**：仓库当前没有 React/Tauri 前端源码（见
-> [《CRF 有损精细参数接口规划》](lossy-tuning-interface-plan.md)：UI 落地点是可直接供
-> 未来前端消费的 `expert_panel_schema()` 与解析 API）。以下为早期规划的前端目录，
-> 不代表已实现，仅作参考。
+> **项目现状（2026-09-07 更新）**：本项目为**纯 CLI**，仓库**没有** React/Tauri 前端
+> 源码，也没有 `src/`、`package.json`、`vite.config.ts` 等前端文件。Cargo.toml 无
+> tauri 依赖。以下目录树是早期规划的历史记录，**不代表已实现**，仅作未来 UI 参考；
+> 有损参数接口的 UI 落地点是 `expert_panel_schema()` / `lossy_expert_schema_json()`
+> 导出的 schema 与解析 API（见
+> [《CRF 有损精细参数接口规划》](lossy-tuning-interface-plan.md)）。
 
-```
+```text
+（历史规划，未实现）
 src/
 +-- components/           # UI 组件
 |   +-- ImageViewer/     # 图像查看器
@@ -108,7 +113,7 @@ src/
     +-- image.ts         # 图像相关类型
 ```
 
-**职责说明**：
+**职责说明**（历史规划，未实现）：
 
 | 模块 | 职责 |
 | :--- | :--- |
@@ -127,7 +132,7 @@ src/
 
 ```
 src-tauri/src/
-+-- main.rs              # 应用入口（CLI 参数解析 + Tauri）
++-- main.rs              # 应用入口（纯 CLI 参数解析；无 Tauri）
 +-- cli_config.rs        # CLI 配置解析（有损 V2 flags / 专家配置）
 +-- test/                # 集成测试（批量/流式/探针）
 |   +-- mod.rs
@@ -271,114 +276,69 @@ crf/
 +--------------+     +--------------+     +--------------+     +--------------+
 ```
 
-### 3. 用户交互流程
+### 3. 用户交互流程（CLI）
 
 ```
 +================================================================+
-|                         用户界面                                |
+|                         命令行交互                              |
 +================================================================+
 |                                                                 |
-|   +----------+      +----------+      +----------+             |
-|   | 拖拽导入 | ==>  | 选择文件 | ==>  | 预览确认 |             |
-|   +----------+      +----------+      +----------+             |
-|                                                 |              |
-|                                                 v              |
-|   +----------+      +----------+      +----------+             |
-|   | 保存结果 | <==  | 压缩处理 | <==  | 设置参数 |             |
-|   +----------+      +----------+      +----------+             |
+|   +------------+     +------------+     +------------+         |
+|   | 指定输入组 | ==> | 选择参数   | ==> | 执行编码   |         |
+|   | (目录/文件) |     | (质量/专家)|     | (cargo run)|         |
+|   +------------+     +------------+     +------------+         |
+|                                               |                |
+|                                               v                |
+|   +------------+     +------------+     +------------+         |
+|   | 校验/导出  | <== | 产物 .crf  | <== | --test 校验 |        |
+|   | (verify)   |     | (文件系统) |     | (往返/像素) |        |
+|   +------------+     +------------+     +------------+         |
 |                                                                 |
 +================================================================+
 ```
 
 ---
 
-## 前后端交互
+## 接口与交互（CLI / Rust API）
 
-### Tauri 命令接口
+> 项目为**纯 CLI**：无 Tauri 命令系统、无前端调用。所有能力通过
+> `src-tauri/src/main.rs` 的命令行入口与 `crf::codec` facade（Rust 层唯一稳定入口）
+> 暴露。以下历史规划中的 `#[tauri::command]` / TypeScript 结构**均已废弃**，
+> 仅保留作为未来 UI 参考。
 
-前后端通过 Tauri 的命令系统进行通信。前端调用 Rust 函数，通过 JSON 序列化传递数据。
+### CLI 入口（main.rs）
 
-#### 文件操作命令
+| 参数 | 功能 |
+| :--- | :--- |
+| `--test <dir>` | 端到端集成测试（编码→解码→逐像素校验；支持质量/流式/探针） |
+| `--bench <dir>` | 端到端基准（预热 + 5 轮，p50/p95 与 MPix/s） |
+| `--lossy-quality <q>` | 有损质量预设（如 96.50） |
+| `--expert-config <path>` | V2 专家配置 JSON |
+| `--dump-resolved-config <path>` | 导出 resolved 配置 |
+| `--dump-expert-schema <path>` | 导出专家面板 schema |
+| `--probe-*` | 算法探针（split/planar/banded/ringing/lambda/activity/coeff-ctx 等） |
+| `--debug-pixels <a> <b>` | 像素级调试 |
 
-```rust
-#[tauri::command]
-pub fn open_file(path: String) -> Result<FileMetadata, String>
-
-#[tauri::command]
-pub fn save_file(data: Vec<u8>, path: String) -> Result<(), String>
-```
-
-#### 编解码命令
-
-```rust
-#[tauri::command]
-pub fn encode_crf(frames: Vec<ImageData>, params: EncodeParams) 
-    -> Result<Vec<u8>, String>
-
-#[tauri::command]
-pub fn decode_crf(data: Vec<u8>) -> Result<DecodeResult, String>
-
-#[tauri::command]
-pub fn get_crf_metadata(data: Vec<u8>) -> Result<CrfMetadata, String>
-```
-
-#### 图像处理命令
+### Rust 入口（crf::codec facade）
 
 ```rust
-#[tauri::command]
-pub fn load_image(path: String) -> Result<ImageData, String>
+// 编码：EncodeRequest → EncodeReport
+crf::codec::encode(request)?;
 
-#[tauri::command]
-pub fn compute_residual(base: ImageData, target: ImageData) 
-    -> Result<ImageData, String>
+// 解码：DecodeRequest → DecodeResult
+crf::codec::decode_from_bytes(data)?;
+
+// 配置：V2 JSON 解析 / resolved 导出 / 专家面板 schema
+crf::codec::resolve_lossy_json(request_json)?;
+crf::codec::lossy_expert_schema_json()?;
 ```
 
 ### 数据结构定义
 
-#### 前端 -> 后端
-
-```typescript
-// 图像数据
-interface ImageData {
-  width: number;
-  height: number;
-  bitDepth: number;
-  colorFormat: 'gray' | 'rgb' | 'yuv444' | 'yuv422' | 'yuv420';
-  pixels: number[];  // 一维像素数组
-}
-
-// 编码参数
-interface EncodeParams {
-  compressionType: 'golomb-rice' | 'exp-golomb' | 'transform';
-  blockSize?: number;
-  userMetadata?: string;
-}
-```
-
-#### 后端 -> 前端
-
-```typescript
-// CRF 元数据
-interface CrfMetadata {
-  version: [number, number];
-  frameCount: number;
-  width: number;
-  height: number;
-  bitDepth: number;
-  colorFormat: string;
-  compressionType: string;
-  hasIndex: boolean;
-  userData: string;
-  frames: FrameInfo[];
-}
-
-interface FrameInfo {
-  index: number;
-  offset: number;
-  size: number;
-  type: string;
-}
-```
+核心数据模型在 `crf::core::domain`（`ImageData` / `EncodeParams` / `Flags` /
+`FrameHeader`）与 `crf::core::contract`（`FramePacket` / `ReferenceState` /
+`ResolvedConfig` / `CandidateResult`），全部为 Rust 类型；JSON 序列化仅用于
+`--expert-config` 输入与 `--dump-*` 导出。
 
 ---
 

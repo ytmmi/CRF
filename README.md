@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>面向二次元插画差分场景的跨平台无损压缩与查看工具（基于 Tauri 2）</strong>
+  <strong>面向二次元插画差分场景的跨平台无损/有损压缩工具（纯 Rust CLI）</strong>
 </p>
 
 <p align="center">
@@ -32,10 +32,9 @@
 
 ### 查看功能
 
-- **序列浏览**：逐帧查看差分图序列
-- **差异可视化**：直观显示帧间差异
-- **元数据查看**：显示文件头信息、编码参数等
-- **对比模式**：支持原图与差分图对比查看
+> ⚠️ **当前项目为纯 CLI**：仓库没有 React/Tauri 前端源码，以下查看功能尚未实现。
+> 命令行提供编解码、元数据 dump、基准与探针；图像序列通过 `--test` 集成测试路径
+> 做端到端校验。
 
 ### 压缩特性
 
@@ -53,26 +52,23 @@
 
 ### 后端 (Rust)
 
-- **框架**：Tauri 2.0
-- **语言**：Rust
+- **语言/框架**：Rust（纯 CLI，无 Tauri / 无前端）
 - **图像处理**：image-rs
 - **序列化**：serde / serde_json
-- **压缩算法**：自研 Golomb-Rice / 指数哥伦布编码器
+- **压缩算法**：自研 Golomb-Rice / 指数哥伦布 / CABAC 编码器
+- **并行**：rayon（帧级/条带级/候选并行）+ 可选 NVIDIA CUDA 旁路 DLL（`crf_cuda.dll`，动态加载）
 
-### 前端 (React)
+### 界面（CLI）
 
-- **框架**：React 18+
-- **构建工具**：Vite
-- **类型系统**：TypeScript
-- **UI 组件**：待定（Ant Design / Material UI）
-- **状态管理**：Zustand / React Context
+- **交互方式**：命令行参数（`--lossy-quality` / `--expert-config` / `--test` / `--bench` / 探针入口等）
+- 无前端源码、无 GUI；有损 V2 专家面板 schema 通过 `--dump-expert-schema` 导出，供未来前端消费
 
 ### 构建与打包
 
-- **包管理**：pnpm
-- **代码检查**：ESLint + Prettier
-- **测试框架**：Vitest (前端) + cargo-test (Rust)
-- **CI/CD**：GitHub Actions
+- **包管理**：Cargo（workspace：`crf-viewer` + `cuda-runtime`）
+- **代码检查**：`cargo fmt` + `cargo clippy -- -D warnings`
+- **测试框架**：`cargo test`（Rust，全量单测 + 端到端往返）
+- **CI/CD**：GitHub Actions（规划中）
 
 ---
 
@@ -80,10 +76,9 @@
 
 ### 环境要求
 
-- **Node.js**：>= 18.0
-- **pnpm**：>= 8.0
 - **Rust**：>= 1.75
-- **Tauri CLI**：>= 2.0
+- **Cargo**：随 Rust 安装
+- （可选）NVIDIA 驱动：仅在使用默认 `nvidia-cuda` feature 时需要，无设备自动回退 CPU
 
 ### 安装依赖
 
@@ -92,27 +87,22 @@
 git clone https://github.com/your-username/crf-viewer.git
 cd crf-viewer
 
-# 安装前端依赖
-pnpm install
-
-# 安装 Rust 依赖（首次构建会较慢）
-cargo build
+# 构建（首次较慢）
+cargo build --manifest-path src-tauri/Cargo.toml --workspace --release
 ```
 
 ### 开发模式
 
 ```bash
-# 启动开发服务器（前端 + Rust 后端热重载）
-pnpm tauri dev
+# 直接以 debug 运行（自动使用默认 nvidia-cuda feature，无设备回退 CPU）
+cargo run --manifest-path src-tauri/Cargo.toml -- --help
 ```
 
 ### 构建发布版本
 
 ```bash
-# 构建当前平台的发布版本
-pnpm tauri build
-
-# 构建产物位于 src-tauri/target/release/bundle/
+# 构建当前平台的发布版本（workspace 同时产出 EXE 与 CUDA DLL）
+cargo build --manifest-path src-tauri/Cargo.toml --workspace --release --features nvidia-cuda
 ```
 
 Windows NVIDIA 版本采用标准 `exe + dll` 分发。Rust workspace 构建会同时生成：
@@ -132,13 +122,17 @@ EXE。该 DLL 只使用 NVIDIA 驱动提供的 `nvcuda.dll`，目标机无需 CU
 
 ### 预编译版本
 
-从 [Releases](https://github.com/your-username/crf-viewer/releases) 页面下载对应平台的安装包：
+从 [Releases](https://github.com/your-username/crf-viewer/releases) 页面下载对应平台的发布包：
 
 | 平台 | 文件格式 |
 | :--- | :--- |
-| Windows | `.msi` / `.exe` |
-| macOS | `.dmg` |
-| Linux | `.deb` / `.AppImage` |
+| Windows | `crf-viewer.exe` + `crf_cuda.dll` |
+| macOS | 二进制（未发布） |
+| Linux | 二进制（未发布） |
+
+Windows NVIDIA 版必须按标准 `exe + dll` 分发：`crf_cuda.dll` 与 `crf-viewer.exe`
+放在同一目录；只分发 EXE 会丢失 GPU 加速路径（仍可回退 CPU）。无 NVIDIA 驱动或
+DLL 缺失时程序自动回退 CPU。
 
 ### 从源码构建
 
@@ -148,28 +142,30 @@ EXE。该 DLL 只使用 NVIDIA 驱动提供的 `nvcuda.dll`，目标机无需 CU
 
 ## 使用说明
 
+本项目为**纯 CLI**：所有编解码能力通过命令行参数暴露，无 GUI。
+
 ### 基本操作
 
-1. **导入差分图**
-   - 点击「导入」按钮或拖拽文件到窗口
-   - 选择 2~50 张差分图文件（支持 PNG、BMP、TIFF）
-   - 系统自动验证图像一致性和格式
+```bash
+cd src-tauri
 
-2. **压缩保存**
-   - 点击「压缩」按钮
-   - 选择保存路径和文件名
-   - 等待压缩完成（通常 < 1秒）
+# 无损压缩：把 <dir> 下的差分图序列编码为 test_adaptive.crf
+cargo run -- --test <dir>
 
-3. **查看 CRF 文件**
-   - 打开 `.crf` 文件
-   - 使用序列浏览功能逐帧查看
-   - 查看元数据和编码信息
+# 有损压缩（质量预设）
+cargo run -- --lossy-quality 96.50 --chroma-sampling 420 --effort 8 --test <dir>
 
-4. **解压还原**
-   - 打开 `.crf` 文件
-   - 点击「解压」按钮
-   - 选择输出目录
-   - 获得与原始完全一致的差分图序列
+# 端到端基准（p50/p95 + MPix/s）
+cargo run -- --bench <dir>
+
+# 查看元数据 / dump 配置
+cargo run -- --dump-resolved-config resolved.json
+cargo run -- --dump-expert-schema panel-schema.json
+```
+
+- 输入支持 PNG/JPEG/WebP/BMP/TIFF；批量接口 2~50 帧，超过 50 帧走流式路径
+- 无损输出可经 `CRF_OUTPUT_FORMAT=webp` 切换 WebP-VP8L
+- 编解码往返、无损逐像素校验、batch/streaming 一致性由 `--test` 集成测试路径自动执行
 
 ### 有损 V2 命令行配置
 
@@ -189,13 +185,7 @@ cargo run -- --dump-expert-schema panel-schema.json
 
 ### 快捷键
 
-| 快捷键 | 功能 |
-| :--- | :--- |
-| `Ctrl/Cmd + O` | 打开文件 |
-| `Ctrl/Cmd + S` | 保存/导出 |
-| `←` / `→` | 上一帧/下一帧 |
-| `Space` | 播放/暂停序列 |
-| `Ctrl/Cmd + I` | 查看文件信息 |
+> 无 GUI，不存在快捷键。CLI 参数见上文「基本操作」与「有损 V2 命令行配置」。
 
 ### 文件格式
 
@@ -218,31 +208,21 @@ crf-viewer/
 │   ├── first-frame-optimization-plan.md # 有损目标预设与首帧优化规划
 │   ├── lossy-tuning-interface-plan.md   # 有损精细参数接口规划
 │   └── user-guide.md             # 用户手册
-├── src/                          # 前端源码 (React)
-│   ├── components/               # UI 组件
-│   ├── hooks/                    # 自定义 Hooks
-│   ├── services/                 # 前端服务
-│   ├── stores/                   # 状态管理
-│   └── utils/                    # 工具函数
-├── src-tauri/                    # Rust 后端
+├── src-tauri/                    # Rust 源码（纯 CLI，无 Tauri）
 │   ├── src/
-│   │   ├── commands/             # Tauri 命令
-│   │   ├── crf/                  # CRF 格式处理
-│   │   │   ├── encoder.rs       # 编码器
-│   │   │   ├── decoder.rs       # 解码器
-│   │   │   └── format.rs        # 格式定义
-│   │   ├── image/                # 图像处理
-│   │   └── main.rs               # 入口
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── public/                       # 静态资源
-├── index.html
-├── package.json
-├── pnpm-lock.yaml
-├── tsconfig.json
-├── vite.config.ts
+│   │   ├── main.rs               # CLI 入口（参数解析/测试/基准/探针）
+│   │   ├── cli_config.rs         # CLI 配置解析（有损 V2 flags / 专家配置）
+│   │   ├── crf/                  # CRF 格式核心（codec/core/encoder/decoder/backend/performance）
+│   │   └── test/                 # 集成测试（批量/流式/探针）
+│   ├── cuda-runtime/             # CUDA 旁路 DLL 运行时
+│   └── Cargo.toml
+├── test/                         # 端到端测试图像组
+├── scripts/                      # 辅助脚本
 └── README.md
 ```
+
+> 仓库**没有** `src/`（React 前端）、`package.json`、`pnpm-lock.yaml`、`vite.config.ts`
+> 等前端文件——本项目是纯 Rust CLI。
 
 ---
 
@@ -369,9 +349,8 @@ JPEG/WebP 有损源的差分压缩增强。按条带估计残差失真水平，�
 
 ## 致谢
 
-- [Tauri](https://tauri.app/) - 构建跨平台桌面应用
-- [React](https://react.dev/) - 用户界面构建
 - [image-rs](https://github.com/image-rs/image) - Rust 图像处理库
+- [rayon](https://github.com/rayon-rs/rayon) - 数据并行
 - H.264 标准 - 算法设计参考
 
 ---
