@@ -39,6 +39,9 @@ pub mod probe_error_separation;
 pub mod probe_monotonicity;
 /// probe_planar：planar 剪枝信号（色度平坦度）的 profile 验证探针
 pub mod probe_planar;
+/// probe_planar_parallel：planar 三子平面「外层并行 + 内层禁用并行」收益探针
+/// （§P1c 遗留 + optimization-review §36：内层减速比实测 + preferred_sub 字节影响）
+pub mod probe_planar_parallel;
 /// probe_planar_sub：planar 子平面次级候选胜出频率探针（profile 验证）
 pub mod probe_planar_sub;
 /// probe_palette：palette 色数分布（分量级/像素级 + RCT 残差域可行性）探针

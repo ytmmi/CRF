@@ -197,6 +197,12 @@ pub(crate) fn encode_planar_payload_limited(
         }
     };
 
+    // 探针钩子（optimization-review §36）：CRF_PLANAR_NO_PREF=1 时跳过子平面间
+    // 历史引导，用于验证「外层并行必须去掉 preferred_sub」的字节影响。
+    // 默认关闭，产物与现状逐字节一致，不改变任何码流语义。
+    let no_pref = std::env::var("CRF_PLANAR_NO_PREF")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let mut preferred_sub: Option<crate::crf::core::domain::PredictionMode> = None;
     // (平面数据, 平面宽, 平面高)：Y 全分辨率；Co/Cg 视 half_res 而定。
     // P1：子平面数据转为独占所有权（move 而非 clone）——planes[0]/co_enc/cg_enc
@@ -250,7 +256,7 @@ pub(crate) fn encode_planar_payload_limited(
             preferred_sub,
             sub_steps,
         )?;
-        preferred_sub = sub_out.pred_mode;
+        preferred_sub = if no_pref { None } else { sub_out.pred_mode };
         out.extend_from_slice(&(sub_out.data.len() as u32).to_le_bytes());
         out.extend_from_slice(&sub_out.data);
         drop(sub_span);
