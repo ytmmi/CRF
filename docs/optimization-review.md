@@ -2919,3 +2919,30 @@ palette 能力）。bench（组 1000）：
 
 方案 B 省 **153.1ms（−1.8%）**，**字节透明**，保留 palette 低色数能力；低于 3% 门槛
 但安全（不改产物、不丢能力）。方案 A（−5.0%）留作未来若确认低色数能力无需求时的备选。
+
+## 61. 有损接口规划收尾：专家面板 schema 补全（2026-09-10）
+
+**背景**：有损参数接口规划（lossy-tuning-interface-plan.md）V2 控制面已完整
+（`LossyOptionsV2` ~50 字段 + `KernelLossyConfig` + `resolve_without_encoding` +
+JSON/CLI/`--dump-expert-schema`）。§13 项6「逐组接入参数」的剩余（量化矩阵、RDOQ λ、
+ringing 控制）均为**已冻结字段**（§P4.1/§P4.6/§P4.7：配置已定义、内核不消费），
+无需接入。
+
+**本次工作**：补全 `expert_panel_schema`（`core/config/lossy_v2/ui.rs`）——原仅覆盖
+~18 字段（6 面板），现扩展为 **~35 字段（8 面板）**，覆盖 V2 稳定公开字段：
+- basic：+ rate.mode / minQualityX100 / maxBytes
+- firstFrame：+ qualityX100 / maxBytes
+- quant（新面板）：deadzoneLumaX256 / chromaScaleX1000 / deadzoneChromaX256 / matrix / rdoq
+- chroma：+ downsampleFilter / upsampleFilter / siting / edgeProtectionX100
+- perceptual：+ noiseMode / noiseTauX100
+- temporal：+ changeMask / motionMode / sceneCut / sceneCutThresholdX1000 / anchorQualityOffsetX100
+- experimental：+ transformSkip / tileSize
+- performance（新面板）：threads / deterministic / fastFail
+
+**结论**：
+1. schema 仍是「唯一字段描述源」（前端不复制后端范围/单位/枚举），本次仅补全覆盖；
+2. 未暴露 `base.revision`/`apiVersion`/`allowIgnored` 等内部/元字段；
+3. UI 前端源码仍不存在（项目纯 CLI）——schema 供未来前端消费，本次使其完整。
+
+**裁决**：有损参数接口规划**收尾完成**——V2 控制面完整、§13 项6 剩余为冻结字段
+（无需接入）、专家面板 schema 已补全；UI 落地待前端项目。

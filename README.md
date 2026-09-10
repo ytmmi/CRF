@@ -22,7 +22,7 @@
 
 ## 版本说明
 
-**当前版本：`0.3.3.14`**
+**当前版本：`0.3.3.15`**
 
 版本号采用四段式 `a.b.c.d` 命名规则：
 
@@ -36,8 +36,8 @@
 每次 git push 前必须递增版本号（禁止同一版本号重复推送），变更属于哪一档就递增
 对应段位并清零右侧所有段位。完整规则见 [docs/project-standards.md §13](docs/project-standards.md)。
 
-> `Cargo.toml` 遵循三位 semver 同步为 `0.3.3`（省略 `d`）；完整四位 `0.3.3.14`
-> 通过 `crf-viewer --version` 显示，git tag 发布使用 `v0.3.3.14`。
+> `Cargo.toml` 遵循三位 semver 同步为 `0.3.3`（省略 `d`）；完整四位 `0.3.3.15`
+> 通过 `crf-viewer --version` 显示，git tag 发布使用 `v0.3.3.15`。
 
 ---
 

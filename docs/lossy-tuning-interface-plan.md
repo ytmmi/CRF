@@ -466,6 +466,12 @@ API 版本、预设 revision 和 CRF bitstream version 必须分开：
 - 较高质量编号的分层验证集质量不得低于较低编号；
 - 新接口不会绕过 reconstructed-reference、格式版本或解码安全检查。
 
+> **状态（2026-09-10，见 optimization-review.md §61）——✅ 收尾完成**：V2 控制面完整
+> （`LossyOptionsV2` ~50 字段 + `KernelLossyConfig` + `resolve_without_encoding` +
+> JSON/CLI/schema）；§13 项6「逐组接入参数」的剩余（量化矩阵、RDOQ λ、ringing 控制）
+> 均为已冻结字段（配置已定义、内核不消费），无需接入；专家面板 schema 由 ~18 字段
+> （6 面板）补全为 ~35 字段（8 面板）。UI 落地待前端项目（项目为纯 CLI）。
+
 ## 14. 本轮边界
 
 本文只规划未来的有损参数控制面。没有修改 `EncodeParams`、`LossyTuning`、Tauri、CLI、
