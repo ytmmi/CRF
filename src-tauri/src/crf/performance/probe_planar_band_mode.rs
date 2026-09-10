@@ -11,12 +11,20 @@
 //!
 //! 口径：SATD 仅作候选排序/理论信号，不等于最终字节收益。
 //!
+//! 口径一：SATD 统计（条带级 vs 整帧最优模式的残差 SATD 差异）；
+//! 口径二：字节对比（A1 帧级+CABAC / B 条带级+CABAC+模式头 / A2 现有最优）。
+//!
 //! 不接入生产路径，仅由 `--probe-planar-band-mode <dir>` CLI 分派。
 
+use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::color::rct;
-use crate::crf::core::domain::{ColorFormat, PredictionMode};
-use crate::crf::core::prediction::intra::predict_at;
-use crate::crf::encoder::frame::candidate::ADAPTIVE_CANDIDATES;
+use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData, PredictionMode};
+use crate::crf::core::prediction::intra::{
+    apply_prediction_band_into, apply_prediction_into, predict_at,
+};
+use crate::crf::encoder::frame::candidate::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
+use crate::crf::encoder::frame::FrameQuant;
+use crate::crf::encoder::rle_cabac;
 use crate::crf::performance::bench::load_frames;
 
 const BAND: usize = 32;
@@ -155,6 +163,58 @@ pub fn run(dir: &str) -> Result<(), String> {
             mode_str.join(","),
             distinct.len(),
             gain * 100.0
+        );
+
+        // ===== 字节口径 =====
+        // A1：帧级最优模式 + CABAC（与 B 同熵编码口径，隔离「条带 vs 帧级」）
+        let mut res_a1 = vec![0i32; w * h];
+        apply_prediction_into(plane, &mut res_a1, w, h, 1, whole_best.1);
+        let (payload_a1, _k1) = rle_cabac::encode_frame_rle_cabac_adaptive(&res_a1, Some(w))
+            .map_err(|e| e.to_string())?;
+        let a1_bytes = FRAME_HEADER_SIZE + 1 + payload_a1.len();
+
+        // B：条带级最优模式 + 整帧 CABAC + 条带模式头（每带 1 字节）
+        let band_count = band_modes.len();
+        let mut res_b = vec![0i32; w * h];
+        let mut band_buf: Vec<i32> = Vec::new();
+        for (b, &mode) in band_modes.iter().enumerate() {
+            let y0 = b * BAND;
+            let y1 = (y0 + BAND).min(h);
+            let len = (y1 - y0) * w;
+            band_buf.resize(len, 0);
+            apply_prediction_band_into(plane, &mut band_buf, w, 1, mode, y0, y1);
+            res_b[y0 * w..y1 * w].copy_from_slice(&band_buf);
+        }
+        let (payload_b, _kb) = rle_cabac::encode_frame_rle_cabac_adaptive(&res_b, Some(w))
+            .map_err(|e| e.to_string())?;
+        let b_bytes = FRAME_HEADER_SIZE + band_count + 1 + payload_b.len();
+
+        // A2：现有最优（全候选竞争，含帧级 cabac / banded / rle / dct）
+        let plane_img = ImageData {
+            width: frame.width,
+            height: frame.height,
+            bit_depth: frame.bit_depth,
+            color_format: ColorFormat::Gray,
+            pixels: plane.clone(),
+        };
+        let a2_out = encode_frame_adaptive(
+            &plane_img,
+            CompressionType::GolombRice,
+            8,
+            false,
+            FrameQuant::lossless(),
+            None,
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+        let a2_bytes = a2_out.data.len();
+
+        println!(
+            "     [字节] A1帧级+CABAC={a1_bytes}  B条带+CABAC={b_bytes}(含{band_count}B模式头)  差={:+}({:+.2}%)  |  A2现有最优={a2_bytes}  B-vs-A2={:+}({:+.2}%)",
+            b_bytes as i64 - a1_bytes as i64,
+            (b_bytes as f64 - a1_bytes as f64) / a1_bytes as f64 * 100.0,
+            b_bytes as i64 - a2_bytes as i64,
+            (b_bytes as f64 - a2_bytes as f64) / a2_bytes as f64 * 100.0,
         );
     }
     println!("\n判定参考：条带级 SATD 收益 >3% 且扣除条带头开销后仍有净收益，才值得实施（§9 建议 9）。");
