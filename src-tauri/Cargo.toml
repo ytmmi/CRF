@@ -8,6 +8,10 @@ description = "CRF - Diff Image Lossless Compression Viewer"
 
 [workspace]
 members = [".", "cuda-runtime"]
+# default-members 同时包含 sidecar DLL：`cargo build --release`（不带 --workspace）
+# 也会重建 crf_cuda.dll，避免 EXE 与 DLL 版本不同步（GPU kernel 探针曾因旧 DLL
+# 缺 rct_forward 导出而报「export is missing」）。
+default-members = [".", "cuda-runtime"]
 resolver = "2"
 
 [features]

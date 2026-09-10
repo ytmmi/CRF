@@ -2710,4 +2710,12 @@ HtoD → launch → sync → DtoH → 释放）的 p50 耗时（5 轮中位）�
    不实施」；
 2. `crf_cuda.dll` 与 GPU 分派路径（`backend/gpu/*`、`backend/ops.rs`）保留为
    「能力保留」（同 §33 先例），CPU 为默认且唯一实用后端；
-3. 未来若出现「超大图/超长序列批量」且单次传输可摊销到足够计算量的场景，可复评。
+3. §P5~§P7（AMD HIP/Vulkan、GPU-RDO、GPU 发布）以 P3/P4 成立为前提，一并关闭为
+   「依赖已证伪项、不实施」；
+4. 未来若出现「超大图/超长序列批量」且单次传输可摊销到足够计算量的场景，可复评。
+
+**附带修复**：GPU 探针首次运行报 `crf_cuda_rct_forward export is missing`——根因是
+`cargo build --release`（不带 `--workspace`）只构建 crf-viewer、不重建 `crf_cuda.dll`，
+致 EXE 更新而 DLL 陈旧（缺 rct 导出）。修复：workspace 加 `default-members =
+[".", "cuda-runtime"]`（普通 build 也重建 DLL）+ `runtime.rs` 加载候选改为 exe 同目录
+绝对路径优先。修复后普通 build 同时编译 crf-cuda，探针稳定通过。

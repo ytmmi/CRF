@@ -49,7 +49,8 @@ impl Sidecar {
         if let Ok(path) = std::env::var("CRF_CUDA_DLL") {
             candidates.push(PathBuf::from(path));
         }
-        candidates.push(PathBuf::from("crf_cuda.dll"));
+        // exe 同目录绝对路径优先（README 分发约定 exe+dll 同目录）；避免无路径
+        // LoadLibrary 命中系统搜索路径中的陈旧 DLL。deps 上级为 cargo test 场景。
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
                 candidates.push(dir.join("crf_cuda.dll"));
@@ -61,6 +62,8 @@ impl Sidecar {
                 }
             }
         }
+        // 最后回退无路径（依赖系统搜索顺序）。
+        candidates.push(PathBuf::from("crf_cuda.dll"));
         let mut lib = ptr::null_mut();
         for candidate in candidates {
             let Ok(raw) = CString::new(candidate.to_string_lossy().as_bytes()) else {
