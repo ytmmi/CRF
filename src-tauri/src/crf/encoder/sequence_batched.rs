@@ -52,7 +52,13 @@ where
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1_500_000_000);
-    let batch_frames = (batch_mem_limit / per_frame_bytes.max(1)).clamp(1, frame_count);
+    // 批内并行度：默认按内存预算自动切分；CRF_BATCH_FRAMES 可显式覆盖（调优/诊断）。
+    let batch_frames = std::env::var("CRF_BATCH_FRAMES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or_else(|| (batch_mem_limit / per_frame_bytes.max(1)).clamp(1, frame_count))
+        .min(frame_count);
 
     let interval = tuning.anchor_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;
