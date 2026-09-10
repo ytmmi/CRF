@@ -28,6 +28,8 @@ pub mod probe_first_frame;
 pub mod probe_first_frame_bypass;
 /// probe_gpu_kernel：GPU kernel 端到端加速比探针（性能规划 P3 CPU/CUDA 对拍）
 pub mod probe_gpu_kernel;
+/// probe_group_bench：指定图像组的 adaptive/q90 压缩时间与体积探针（streaming）
+pub mod probe_group_bench;
 /// probe_lambda：P4.6 前置验证——RDOQ Trellis λ 敏感性扫描探针（S1）
 pub mod probe_lambda;
 /// probe_lic：LIC 整帧乘加照明补偿收益探针（§9 建议 6 采纳探索前置验证）

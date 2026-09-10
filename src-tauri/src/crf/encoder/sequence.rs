@@ -28,6 +28,45 @@ use crate::crf::performance::telemetry::Span;
 /// 内部先经 [`crate::crf::core::contract::ResolvedConfig::resolve`] 解析配置一次，
 /// 再委托 [`encode_sequence_resolved`] 消费，避免 compression_type/header/RCT/量化
 /// 的重复解析（P3.b 配置解析收敛）。
+/// 有界并发信号量：限制**同时编码的帧数**，控制并行中间量驻留内存
+/// （非分批——帧完成即释放许可，保持连续流水，无批间空闲）。
+struct FrameSemaphore {
+    available: std::sync::Mutex<usize>,
+    cv: std::sync::Condvar,
+}
+
+impl FrameSemaphore {
+    fn new(n: usize) -> Self {
+        Self {
+            available: std::sync::Mutex::new(n.max(1)),
+            cv: std::sync::Condvar::new(),
+        }
+    }
+    /// 获取一个许可（RAII：`FramePermit` drop 时自动释放）。
+    fn acquire(&self) -> FramePermit<'_> {
+        let mut a = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        while *a == 0 {
+            a = self.cv.wait(a).unwrap_or_else(|e| e.into_inner());
+        }
+        *a -= 1;
+        FramePermit { sem: self }
+    }
+    fn release(&self) {
+        let mut a = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        *a += 1;
+        self.cv.notify_one();
+    }
+}
+
+struct FramePermit<'a> {
+    sem: &'a FrameSemaphore,
+}
+impl Drop for FramePermit<'_> {
+    fn drop(&mut self) {
+        self.sem.release();
+    }
+}
+
 pub fn encode_sequence(frames: &[ImageData], params: &EncodeParams) -> CrfResult<Vec<u8>> {
     let resolved = crate::crf::core::contract::ResolvedConfig::resolve(params, frames)?;
     encode_sequence_resolved(frames, &resolved)
@@ -48,11 +87,11 @@ pub(crate) fn encode_sequence_resolved(
     }
 
     let frame_count = frames.len() as u16;
-    // 批量接口保持 50 帧内存上限（全帧驻留）；>50 帧请使用
-    // streaming::StreamingEncoder（逐帧推送，内存 O(golden+单帧+码流)）
-    if !(2..=50).contains(&frame_count) {
+    if frame_count < 2 {
         return Err(CrfError::FrameCountOutOfRange(frame_count));
     }
+    // 帧数上限由 bitstream u16 决定（65535）；批内并行度由内存预算**自动切分**
+    // （见下方 batch_frames），不再硬限 50 帧。
 
     // 验证所有帧尺寸一致
     let first = &frames[0];
@@ -85,22 +124,14 @@ pub(crate) fn encode_sequence_resolved(
     // §13 发现组10（8500×5816×4帧 ~2.4GB）batch panic；1000 组（~310MB）正常。
     let components = first.color_format.component_count();
     let per_frame_bytes = first.width as usize * first.height as usize * components * 4;
-    let estimated_bytes = per_frame_bytes
-        .checked_mul(frame_count as usize)
-        .unwrap_or(usize::MAX);
-    // batch 内存阈值：默认 1.5 GB 保守值，CRF_BATCH_MEM_LIMIT 环境变量可放宽
-    // （标定/基准大图组需要帧级并行时由调用方显式提升；生产默认不变）。
+    // batch 内存阈值：默认 1.5 GB 保守值，CRF_BATCH_MEM_LIMIT 环境变量可放宽。
+    // 根据内存预算与单帧大小**自动切分**批内并行度（每批驻留像素 ≤ 预算），
+    // 不再硬限 50 帧；输入帧仍由调用方驻留（超大组请用 streaming 路径）。
     let batch_mem_limit: usize = std::env::var("CRF_BATCH_MEM_LIMIT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1_500_000_000);
-    if estimated_bytes > batch_mem_limit {
-        return Err(CrfError::InvalidCodingParams(format!(
-            "batch 接口预估内存 {:.2} GB 超过 {:.1} GB 限制；大图组请用 streaming 路径（CRF_STREAMING=1）或调高 CRF_BATCH_MEM_LIMIT",
-            estimated_bytes as f64 / 1_000_000_000.0,
-            batch_mem_limit as f64 / 1_000_000_000.0,
-        )));
-    }
+    let batch_frames = (batch_mem_limit / per_frame_bytes.max(1)).clamp(1, frames.len());
 
     let interval = tuning.anchor_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;
@@ -260,11 +291,16 @@ pub(crate) fn encode_sequence_resolved(
         // ===== 阶段 2：后续帧并行差分编码（残差 = 原始帧 − G_hat）=====
         // v1.13 RCT 首帧自适应的双路竞争仅属于首帧；差分帧逻辑保持原样。
         let rest_span = Span::begin("encode.rest_frames");
-        let rest_results: Vec<(Vec<u8>, Option<u8>, bool)> = frames
+        // 有界并发：信号量限制**同时编码的帧数** ≤ batch_frames（按内存预算自动
+        // 切分），控制并行中间量驻留内存；非分批——帧完成即释放许可（连续流水，
+        // 无批间空闲）。结果按帧序 collect，产物与全并行逐字节一致。
+        let frame_sem = FrameSemaphore::new(batch_frames);
+        let rest_results: Vec<(Vec<u8>, Option<u8>, bool)> = frames[1..]
             .par_iter()
             .enumerate()
-            .skip(1)
-            .map(|(i, frame)| -> CrfResult<(Vec<u8>, Option<u8>, bool)> {
+            .map(|(j, frame)| -> CrfResult<(Vec<u8>, Option<u8>, bool)> {
+                let i = j + 1;
+                let _permit = frame_sem.acquire();
                 // P0 闭环核心：差分基准为本地重建的 G_hat（而非 frames[0]）。
                 // 无损 golden 时 G_hat == frames[0]（decode 精确还原），产物
                 // 与旧实现逐字节一致；有损 golden 时误差不再向后续帧传导。
