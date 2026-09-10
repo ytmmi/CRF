@@ -1,8 +1,8 @@
 # CRF 优化已完成项清单（代码进度同步）
 
-**同步日期**：2026-09-08
-**基线版本**：v0.3.2.7（含 v1.15 标定轮 P0~P6 + §39~§48 速度优化/决策轮：palette 像素级预筛、差分帧 intrabc 剪枝、LIC/误差分离/直方图共享/MA 树关闭、D4/D5/D6 回退）
-**核对方式**：codegraph + 关键文件 Read + optimization-review.md §9~§48 实施记录交叉验证
+**同步日期**：2026-09-10
+**基线版本**：v0.3.3.1（含 v1.15 标定轮 P0~P6 + §39~§48 速度优化/决策轮 + §49 LIC v1.16 正式实现 + §50 delta palette 探针否决）
+**核对方式**：codegraph + 关键文件 Read + optimization-review.md §9~§50 实施记录交叉验证
 **关联文档**：
 - [首帧优化规划](first-frame-optimization-plan.md)（本文件标注其已完成项，未完成项仍留在原文件）
 - [有损参数接口规划](lossy-tuning-interface-plan.md)（同上）
@@ -331,6 +331,7 @@
 | **MA 树直方图共享（§8.2）** | §46 叶数分布探针 | 平均叶数 3.8（<4）、21.2% 帧退化 1 叶、叶使用极端偏斜（最小非零叶占比 0.11%）——共享收益窗口小且稀释主导叶精度；N_CTX=60 独立槽位维持现状 |
 | **首帧误差分离（§9 建议 3/10）** | §47 误差分离探针 | 有损 q90 全序列 + 误差层 E vs 无损：10-1-10 +40.5%、10-1-16 +25.1%——E 体积爆炸（±1~2 分布广 RLE 无法压缩），两层冗余确凿；JPEG2000 嵌入式前提（精化层逐步细化同系数）在 CRF 无损语义下不存在 |
 | **banded SAD 求和 SIMD** | §48 D6 带宽瓶颈互证 | sad_abs_sum AVX2（含 i32::MIN 语义对拍）接入后 encode +3.7%（7315 vs 7056ms）——SAD 求和是内存带宽瓶颈，AVX2 无法突破；kernel 保留为能力（同 §33 components==1 先例），banded 维持标量 |
+| **Delta palette（JPEG-XL 式，§8.4）** | §50 收益探针 | 场景错配否决：首帧色数全部 >65536（立绘含抗锯齿/渐变），差分残差大片 0 已由 CABAC 压到 0.03~0.5 bit/像素，而 delta palette 索引流每像素一 token（1000 组差分帧：3.0 MB vs 117 KB）——0/52 帧胜出、最好情况仍劣化 34.7%；不占格式位，探针 `--probe-delta-palette` 保留为回归锚点 |
 
 ---
 
@@ -349,6 +350,7 @@
   文件头 lossy_quant；②路径 C `fq_for_chain_index` 色度半分辨率未解耦
   （`gq>1 &&`）→ 移除阻断，与路径 G 一致；③type8 有损文件级端到端往返测试
   → `test_lossy_frame_type8_file_roundtrip` 补齐。
+- **压缩算法探索未完成项**：[compression-algorithm-exploration.md](compression-algorithm-exploration.md) §2/§3/§4/§5 其余候选（分层帧内预测、多尺度残差变换、字典化重复纹理、首帧分区树、分块时间预测、多候选局部位移补偿、稀疏系数零块 token、Anchor 间隔自适应、分层码率控制、残差熵模型选择、误差扩散抑制、CPU AVX-512/NEON、GPU kernel 等）维持未做、未证伪；**§8.4 Delta palette 已由 §50 探针证伪否决**（场景错配，见否决表）；§8.2 MA 树直方图共享由 §46 否决、§9 建议 3/10 误差分离由 §47 否决、§9 建议 6 LIC 已实现（§49）、建议 7 prev2 已实现（v1.15）、建议 9 planar 条带切换/建议 8 后处理维持未做。
 
 ---
 
@@ -371,6 +373,7 @@
 | `performance/probe_planar_sub.rs` | ~210 | 1000 | ✅（§44 探针锚点）|
 | `performance/probe_ma_tree.rs` | ~160 | 1000 | ✅（§46 探针锚点）|
 | `performance/probe_error_separation.rs` | ~150 | 1000 | ✅（§47 探针锚点）|
+| `performance/probe_delta_palette.rs` | ~330 | 1000 | ✅（§50 探针锚点）|
 
 > 原预警文件已全部拆分收敛：`encoder/tests.rs`(980) → `encoder/tests/{lossy,roundtrip,rct_bypass,mod}.rs`（≤338）；
 > `test/mod.rs`(~985) → `test/{batch,mod,probe}.rs`（≤252）；`format/prediction.rs`(800) → `core/prediction/intra.rs`(714)。

@@ -13,8 +13,13 @@ pub mod coeff_ctx_probe;
 /// probe_activity：P4.2/P4.3/P4.4 activity masking 三旋钮标定探针
 /// （DAT.1 单旋钮边际扫描，体积/PSNR 对照）
 pub mod probe_activity;
+/// probe_avif_target：AVIF CQ18 对标标定探针（Q 档扫描 + PSNR/SSIM/最差帧 + 字节）
+pub mod probe_avif_target;
 /// probe_banded_alt：banded 条带高度自适应（32 vs 64 行）胜出率探针
 pub mod probe_banded_alt;
+/// probe_delta_palette：JPEG-XL 式 delta palette（§8.4）收益探针——像素级色数
+/// + delta 条目编码 + 索引流竞争，与当前最优候选逐帧对比（不写码流）
+pub mod probe_delta_palette;
 /// probe_first_frame：首帧内部候选阶段 profile 探针
 pub mod probe_first_frame;
 /// probe_first_frame_bypass：首帧 RCT 双路竞争的 RGB 直通胜出率 + G 零值特征探针
@@ -43,4 +48,6 @@ pub mod probe_palette;
 pub mod probe_ringing;
 /// probe_rest_frames：差分帧候选 profile 探针（胜出率 + 阶段耗时分离）
 pub mod probe_rest_frames;
+/// probe_valid_set：扩展验证集质量趋势探针（30 张分层首帧，§6.1）
+pub mod probe_valid_set;
 pub mod telemetry;

@@ -64,3 +64,6 @@ pub mod perceptual;
 /// illumination：LIC（局部照明补偿）帧级乘加加权参考的纯数学
 /// （搜索/应用/定点常量；编解码与重建链共用，v1.16）
 pub mod illumination;
+
+/// metrics：静态图客观质量指标（SSIM 等，标定/验收用，§6.2）
+pub mod metrics;

@@ -129,7 +129,7 @@ pub fn run(root: &str) -> Result<(), String> {
 }
 
 /// 构造质量档位对应的编码参数（流式路径忽略 input_original_frames 语义，恒 golden 差分）
-fn make_params(quality: u16) -> Result<EncodeParams, String> {
+pub(crate) fn make_params(quality: u16) -> Result<EncodeParams, String> {
     let lossy = LossyOptionsV2Builder::preset(quality * 100)
         .build()
         .map_err(|e| e.to_string())?;
@@ -145,7 +145,7 @@ fn make_params(quality: u16) -> Result<EncodeParams, String> {
 }
 
 /// 流式编码：逐文件加载原帧 → push_frame → finish，返回完整码流字节。
-fn encode_streaming(paths: &[PathBuf], params: &EncodeParams) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_streaming(paths: &[PathBuf], params: &EncodeParams) -> Result<Vec<u8>, String> {
     let mut enc = StreamingEncoder::new(params).map_err(|e| e.to_string())?;
     for p in paths {
         let frame = load_one(p)?;
@@ -175,7 +175,7 @@ fn psnr_streaming(encoded: &[u8], paths: &[PathBuf]) -> Result<(f64, u64, f64), 
 }
 
 /// 单帧 MSE（三通道合并）与像素总数
-fn frame_mse(a: &ImageData, b: &ImageData) -> (f64, u64) {
+pub(crate) fn frame_mse(a: &ImageData, b: &ImageData) -> (f64, u64) {
     let mut mse = 0.0f64;
     let mut n = 0u64;
     for (x, y) in a.pixels.iter().zip(b.pixels.iter()) {
@@ -186,7 +186,7 @@ fn frame_mse(a: &ImageData, b: &ImageData) -> (f64, u64) {
     (mse, n)
 }
 
-fn psnr_from_mse(mse: f64, pixels: u64) -> f64 {
+pub(crate) fn psnr_from_mse(mse: f64, pixels: u64) -> f64 {
     if pixels == 0 || mse <= 0.0 {
         f64::INFINITY
     } else {
@@ -201,7 +201,7 @@ fn flush() {
 }
 
 /// 加载单张图像为 RGB i32 像素（与 bench::load_frames 一致）
-fn load_one(path: &Path) -> Result<ImageData, String> {
+pub(crate) fn load_one(path: &Path) -> Result<ImageData, String> {
     let img = image::ImageReader::open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .decode()
@@ -224,7 +224,7 @@ fn load_one(path: &Path) -> Result<ImageData, String> {
 }
 
 /// 收集目录下按文件名排序的图像路径（支持 PNG/JPEG/WebP/BMP）
-fn collect_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn collect_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
         .filter_map(|e| e.ok())

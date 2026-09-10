@@ -10,7 +10,7 @@ use std::io::BufReader;
 /// 项目正式版本号(四位 `a.b.c.d`),规则见 docs/project-standards.md §13。
 /// Cargo.toml 的三位 semver(`a.b.c`)与 `d` 段(bug 修复位)合并而来;
 /// 升级时须与 Cargo.toml 及项目标准同步。
-pub const APP_VERSION: &str = "0.3.3.0";
+pub const APP_VERSION: &str = "0.3.3.1";
 
 fn main() {
     // 检查命令行参数，决定运行模式
@@ -258,6 +258,20 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-delta-palette" {
+        // JPEG-XL 式 delta palette 收益探针（§8.4）：像素级色数 + delta 条目
+        // 编码 + 索引流竞争，与当前最优候选逐帧对比（不写码流）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_delta_palette::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.len() > 1 && args[1] == "--probe-activity" {
         // P4.2/P4.3/P4.4 activity masking 三旋钮标定探针（默认扫 test/png 下全部 x-y-z 组）
         let dir = if args.len() > 2 {
@@ -266,6 +280,32 @@ fn main() {
             String::from(r"E:\CRF\test\png")
         };
         if let Err(e) = crf::performance::probe_activity::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-avif-target" {
+        // AVIF CQ18 对标标定探针（§6.3）：Q 档扫描 + PSNR/SSIM/最差帧 + 字节
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::probe_avif_target::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-valid-set" {
+        // 扩展验证集质量趋势探针（§6.1）：30 张分层首帧跑质量映射
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png-valid")
+        };
+        if let Err(e) = crf::performance::probe_valid_set::run(&dir) {
             eprintln!("Probe error: {e}");
             std::process::exit(1);
         }
