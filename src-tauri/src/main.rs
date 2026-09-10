@@ -10,7 +10,7 @@ use std::io::BufReader;
 /// 项目正式版本号(四位 `a.b.c.d`),规则见 docs/project-standards.md §13。
 /// Cargo.toml 的三位 semver(`a.b.c`)与 `d` 段(bug 修复位)合并而来;
 /// 升级时须与 Cargo.toml 及项目标准同步。
-pub const APP_VERSION: &str = "0.3.3.4";
+pub const APP_VERSION: &str = "0.3.3.5";
 
 fn main() {
     // 检查命令行参数，决定运行模式
@@ -88,6 +88,19 @@ fn main() {
             String::from(r"E:\CRF\test\png\1000")
         };
         if let Err(e) = crf::performance::probe_planar_sub::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-planar-band-mode" {
+        // planar 子平面条带级模式切换收益探针（§9 建议 9）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png\1000")
+        };
+        if let Err(e) = crf::performance::probe_planar_band_mode::run(&dir) {
             eprintln!("Probe error: {e}");
             std::process::exit(1);
         }
