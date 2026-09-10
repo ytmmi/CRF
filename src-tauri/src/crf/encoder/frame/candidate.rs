@@ -219,7 +219,14 @@ pub fn encode_frame_adaptive(
         // 二次元插画纯色块/低色数数据特化；planar 子平面经递归同样受益。
         // v2 载荷启用 copy-above token 化（coding_params.bit0=1 标记）。
         let palette_span = Span::begin("encode.adaptive.palette");
-        if palette_plausible(&image.pixels, components) {
+        // 探针钩子（§56）：CRF_NO_SUBPLANE_PALETTE=1 时单分量子平面跳过 palette，
+        // 用于实测「候选级 Fast-Fail」端到端收益（§44：palette 子平面 0 胜出，
+        // 但 Y/Cg 耗时 ~70ms）。默认关闭，产物与现状逐字节一致。
+        let skip_sub_palette = components == 1
+            && std::env::var("CRF_NO_SUBPLANE_PALETTE")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        if !skip_sub_palette && palette_plausible(&image.pixels, components) {
             match encode_palette_payload(&image.pixels, width) {
                 Some(Ok(payload)) => {
                     let pal = assemble_frame(&payload, image, 0x01, 4)?;

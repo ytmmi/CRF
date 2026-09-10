@@ -45,6 +45,8 @@ pub mod probe_monotonicity;
 pub mod probe_planar;
 /// probe_planar_band_mode：planar 子平面条带级模式切换收益探针（§9 建议 9）
 pub mod probe_planar_band_mode;
+/// probe_planar_candidate：planar 子平面候选级 Fast-Fail 空间探针（§56 新候选）
+pub mod probe_planar_candidate;
 /// probe_planar_parallel：planar 三子平面「外层并行 + 内层禁用并行」收益探针
 /// （§P1c 遗留 + optimization-review §36：内层减速比实测 + preferred_sub 字节影响）
 pub mod probe_planar_parallel;

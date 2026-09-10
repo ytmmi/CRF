@@ -2746,7 +2746,7 @@ HtoD → launch → sync → DtoH → 释放）的 p50 耗时（5 轮中位）�
 | GPU 路线（CUDA/Vulkan） | ❌ **已证伪** | §55：diff/rct 端到端 0.32~0.35×，§P3~P7 关闭（建议信息过时） |
 | DCT 的 i16 打包 SIMD（vpmaddwd） | ❌ **已探针证伪** | §59：DCT 阶段仅占 encode 0.6%（P1c 已并行化），i16 SIMD 端到端上限 +0.46%（<3%） |
 | 预测器 L1 距离替代 SATD | ⚠️ 新候选（低） | SATD 首帧仅 23.8ms（§52），收益窗口极小 |
-| planar 内部候选级 Fast-Fail 深化 | ⚠️ **新候选（中）** | §P1b 仅做到子平面级；候选级可探针 |
+| planar 内部候选级 Fast-Fail 深化 | ✅ **正面，值得实施** | §60：palette 子平面高耗时 0 胜出，剪枝端到端 −6.5% + 字节透明 |
 | 解码侧 profile | ⚠️ 新候选（低） | decode p50 仅 encode 1/10~1/20，收益有限 |
 | 熵编码 SIMD 批处理（FlashGMM） | ⚠️ 新候选（低） | §8.1 已排除 rANS；CABAC 强分支/上下文依赖不适合 SIMD |
 
@@ -2764,7 +2764,8 @@ HtoD → launch → sync → DtoH → 释放）的 p50 耗时（5 轮中位）�
 **结论**：修正 GPU 路线与 type8 深化的过时判断后，真正值得投入的新候选收敛为
 **调色板 MTF、DCT i16 打包 SIMD、planar 候选级 Fast-Fail** 三项（均中优先）。其中
 调色板 MTF（§57）、JPEG-XL 抖动调色板（§58）、DCT i16 打包 SIMD（§59）均已探针
-**证伪**，新候选最终收敛为 **planar 候选级 Fast-Fail** 一项。
+**证伪**；**planar 候选级 Fast-Fail（§60）为唯一正面结果**——剪子平面 palette
+端到端 −6.5% + 字节透明，值得实施（方案决策见 §60）。
 
 ## 57. 调色板排序 + MTF 编码探针：证伪（2026-09-10）
 
@@ -2858,3 +2859,50 @@ Floyd-Steinberg 抖动，测 PSNR + 像素级 palette 编码字节，与现有�
 
 **裁决——证伪，不实施**：DCT 阶段占比过低（0.6%），i16 SIMD 端到端无价值；不实施，
 探针保留为回归锚点。
+
+## 60. planar 子平面候选级 Fast-Fail 探针：正面，值得实施（2026-09-10）
+
+**目标**：验证 §56 新候选「planar 内部候选级 Fast-Fail 深化」——是否还有「高耗时 ·
+0 胜出」可剪项。
+
+**探针**：
+1. `performance/probe_planar_candidate.rs`（`--probe-planar-candidate <dir>`）：对
+   planar 的 Y/Co/Cg 子平面单独跑 `encode_frame_adaptive`，报告各候选耗时；
+2. `candidate.rs` 新增 `CRF_NO_SUBPLANE_PALETTE=1` 探针钩子（单分量子平面跳过
+   palette），用 `--bench` 实测端到端收益。
+
+**实测**：
+
+子平面候选耗时（首帧 1024×1820）：
+
+| 候选 | Y | Co | Cg |
+|---|---:|---:|---:|
+| **palette** | **70.97 ms** | 0.16 ms | **69.14 ms** |
+| cabac（胜出） | 51.98 | 46.29 | 43.16 |
+| trial_encode | 45.83 | 41.90 | 38.57 |
+| banded | 34.42 | 33.46 | 38.50 |
+| satd | 4.00 | 3.85 | 4.07 |
+| intrabc（已剪） | 0.00 | 0.00 | 0.00 |
+
+→ **palette 在 Y/Cg 子平面高耗时（~70ms）且 0 胜出**（胜出 frame_type=5 cabac）。
+
+端到端 bench（组 1000，剪子平面 palette vs 默认）：
+
+| 口径 | encode p50 | bytes |
+|---|---:|---:|
+| 默认 | 8634.6 ms | 11,090,794 |
+| `CRF_NO_SUBPLANE_PALETTE=1` | 8072.3 ms | 11,090,794 |
+| 差 | **−562.3 ms（−6.5%）** | **0（字节透明）** |
+
+**结论**：
+1. 剪子平面 palette 端到端 **−6.5%**（>3% 门槛）且**字节完全透明**（palette 子平面
+   0 胜出，剪枝不改变产物）。
+2. 这是 §56 新候选中**唯一正面结果**——§P1b 已剪 intrabc/dct，palette 是剩余唯一
+   「高耗时 · 0 胜出」项。
+3. 权衡：§44 曾以「能力保留」保留 palette（低色数未来可胜出）；剪枝会失去该能力。
+
+**裁决——正面，待实施决策**：
+1. **方案 A（激进）**：直接剪单分量子平面 palette（−6.5%，字节透明，失去低色数能力）；
+2. **方案 B（保守）**：palette 加候选级字节预算 Fast-Fail（保留能力 + 省部分耗时，
+   需改 `encode_palette_payload` 加 byte_limit）；
+3. 实施前需在更多内容域（如 test/png 全组）验证字节透明。
