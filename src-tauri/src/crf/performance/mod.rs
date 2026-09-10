@@ -17,6 +17,8 @@ pub mod probe_activity;
 pub mod probe_avif_target;
 /// probe_banded_alt：banded 条带高度自适应（32 vs 64 行）胜出率探针
 pub mod probe_banded_alt;
+/// probe_dct_simd：DCT i16 打包 SIMD 可行性探针（§56 新候选）
+pub mod probe_dct_simd;
 /// probe_delta_palette：JPEG-XL 式 delta palette（§8.4）收益探针——像素级色数
 /// + delta 条目编码 + 索引流竞争，与当前最优候选逐帧对比（不写码流）
 pub mod probe_delta_palette;
