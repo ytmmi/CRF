@@ -226,16 +226,19 @@ pub fn encode_frame_adaptive(
             && std::env::var("CRF_NO_SUBPLANE_PALETTE")
                 .map(|v| v == "1")
                 .unwrap_or(false);
+        // 候选级 Fast-Fail 预算：palette 载荷只需击败当前最优（帧总长 − 帧头）
+        let palette_limit = best
+            .as_ref()
+            .map_or(usize::MAX, |(sz, ..)| sz.saturating_sub(FRAME_HEADER_SIZE));
         if !skip_sub_palette && palette_plausible(&image.pixels, components) {
-            match encode_palette_payload(&image.pixels, width) {
-                Some(Ok(payload)) => {
+            match encode_palette_payload(&image.pixels, width, palette_limit)? {
+                Some(payload) => {
                     let pal = assemble_frame(&payload, image, 0x01, 4)?;
                     if best.as_ref().is_none_or(|(sz, ..)| pal.len() < *sz) {
                         best = Some((pal.len(), pal, None));
                     }
                 }
-                Some(Err(e)) => return Err(e),
-                None => {} // 色数超限，放弃候选
+                None => {} // 色数超限或 Fast-Fail，放弃候选
             }
         }
         drop(palette_span);
@@ -586,7 +589,11 @@ fn palette_plausible(pixels: &[i32], components: usize) -> bool {
 /// [palette_count u16 LE][k_index u8][pal_len u32 LE]
 /// [palette 值位流 pal_len 字节（exp-Golomb zigzag）]
 /// [索引位流（剩余字节，RLE+Golomb 自适应 k）]
-fn encode_palette_payload(pixels: &[i32], width: usize) -> Option<CrfResult<Vec<u8>>> {
+fn encode_palette_payload(
+    pixels: &[i32],
+    width: usize,
+    byte_limit: usize,
+) -> CrfResult<Option<Vec<u8>>> {
     use std::collections::HashMap;
 
     // 精确统计唯一值并按首现顺序构建调色板与索引流
@@ -599,7 +606,7 @@ fn encode_palette_payload(pixels: &[i32], width: usize) -> Option<CrfResult<Vec<
             Some(&ix) => indices.push(ix as i32),
             None => {
                 if next as usize >= PALETTE_MAX_COLORS {
-                    return None; // 超出色数上限，放弃候选
+                    return Ok(None); // 超出色数上限，放弃候选
                 }
                 map.insert(v, next);
                 palette_order.push(v);
@@ -609,7 +616,7 @@ fn encode_palette_payload(pixels: &[i32], width: usize) -> Option<CrfResult<Vec<
     }
 
     #[allow(clippy::redundant_closure_call)] // IIFE 为复用 ? 早退语义的最小作用域包装
-    Some((|| {
+    (|| {
         // copy-above token 化（AV1 palette 思路适配）：水平恒定区域 →
         // token 0 长行程，RLE 行程机制直接复用；非零为显式索引+1（零开销）。
         let use_copy_above = width > 0 && indices.len() > width;
@@ -629,18 +636,27 @@ fn encode_palette_payload(pixels: &[i32], width: usize) -> Option<CrfResult<Vec<
             indices.clone()
         };
 
-        // token/索引流先行构建以获取 k（头部需要）
-        let mut probe = super::super::rle_golomb::RleGolombEncoder::adaptive(&payload_indices);
-        let k = probe.k;
-        probe.encode_signed_array(&payload_indices);
-        let idx_bytes = probe.finish();
-
         // palette 值流：exp-Golomb(zigzag)，无需额外参数
         let mut pe = super::super::exp_golomb::ExpGolombEncoder::new();
         for &v in &palette_order {
             pe.encode_signed(v);
         }
         let pal_bytes = pe.finish();
+
+        // 候选级 Fast-Fail（§60 方案 B）：载荷 = 8(头) + pal_bytes + idx_bytes。
+        // 头部已超预算 → 必败，跳过索引流编码（保留 palette 能力，仅省耗时）。
+        let header_len = 8 + pal_bytes.len();
+        if header_len >= byte_limit {
+            return Ok(None);
+        }
+        // 索引流 Fast-Fail：已落盘字节超 `byte_limit - header_len` 即必败。
+        let mut probe = super::super::rle_golomb::RleGolombEncoder::adaptive(&payload_indices);
+        let k = probe.k;
+        let Some(idx_bytes) =
+            probe.encode_signed_array_limited(&payload_indices, byte_limit - header_len)
+        else {
+            return Ok(None);
+        };
 
         // 布局 v2（与 decoder/palette.rs 对称）：
         // [count u16 LE][flags u8][k u8][pal_len u32 LE][pal_bytes][idx_bytes]
@@ -653,8 +669,8 @@ fn encode_palette_payload(pixels: &[i32], width: usize) -> Option<CrfResult<Vec<
         out.extend_from_slice(&(pal_bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&pal_bytes);
         out.extend_from_slice(&idx_bytes);
-        Ok(out)
-    })())
+        Ok(Some(out))
+    })()
 }
 
 /// 测试钩子（仅 cfg(test) 可见）：暴露调色板载荷编码供集成测试对比
@@ -664,8 +680,8 @@ pub(crate) mod test_hooks {
     pub(crate) fn encode_palette_payload_for_test(
         pixels: &[i32],
         width: usize,
-    ) -> Option<crate::crf::error::CrfResult<Vec<u8>>> {
-        super::encode_palette_payload(pixels, width)
+    ) -> crate::crf::error::CrfResult<Option<Vec<u8>>> {
+        super::encode_palette_payload(pixels, width, usize::MAX)
     }
 
     /// 基线：原始索引流直接 RLE+Golomb（无 copy-above）的位流大小

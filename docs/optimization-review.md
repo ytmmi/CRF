@@ -2906,3 +2906,16 @@ Floyd-Steinberg 抖动，测 PSNR + 像素级 palette 编码字节，与现有�
 2. **方案 B（保守）**：palette 加候选级字节预算 Fast-Fail（保留能力 + 省部分耗时，
    需改 `encode_palette_payload` 加 byte_limit）；
 3. 实施前需在更多内容域（如 test/png 全组）验证字节透明。
+
+**方案 B 实施结果（2026-09-10）**：`encode_palette_payload` 加 `byte_limit` 参数，
+索引流改用 `encode_signed_array_limited` Fast-Fail（头部已超预算则直接跳过，保留
+palette 能力）。bench（组 1000）：
+
+| 口径 | encode p50 | bytes |
+|---|---:|---:|
+| 加 Fast-Fail 前 | 8634.6 ms | 11,090,794 |
+| **方案 B（默认，已实施）** | **8481.5 ms** | 11,090,794 |
+| 方案 A（剪枝参照） | 8203.1 ms | 11,090,794 |
+
+方案 B 省 **153.1ms（−1.8%）**，**字节透明**，保留 palette 低色数能力；低于 3% 门槛
+但安全（不改产物、不丢能力）。方案 A（−5.0%）留作未来若确认低色数能力无需求时的备选。
