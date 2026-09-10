@@ -130,8 +130,11 @@ pub(crate) fn encode_sequence_resolved(
     let batch_mem_limit: usize = std::env::var("CRF_BATCH_MEM_LIMIT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1_500_000_000);
-    let batch_frames = (batch_mem_limit / per_frame_bytes.max(1)).clamp(1, frames.len());
+        .unwrap_or(4_000_000_000);
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let batch_frames = (batch_mem_limit / per_frame_bytes.max(1))
+        .clamp(1, frames.len())
+        .min(cores);
 
     let interval = tuning.anchor_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;

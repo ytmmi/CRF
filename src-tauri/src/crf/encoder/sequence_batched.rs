@@ -51,14 +51,18 @@ where
     let batch_mem_limit: usize = std::env::var("CRF_BATCH_MEM_LIMIT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1_500_000_000);
+        .unwrap_or(4_000_000_000);
+    // 帧级并行度：内存预算/单帧，并受核数上限约束（帧级并行比帧内并行更有效，
+    // 实测 batch_frames 越大越快；超过核数无益）。
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     // 批内并行度：默认按内存预算自动切分；CRF_BATCH_FRAMES 可显式覆盖（调优/诊断）。
     let batch_frames = std::env::var("CRF_BATCH_FRAMES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n >= 1)
         .unwrap_or_else(|| (batch_mem_limit / per_frame_bytes.max(1)).clamp(1, frame_count))
-        .min(frame_count);
+        .min(frame_count)
+        .min(cores);
 
     let interval = tuning.anchor_interval.max(1) as usize;
     let base_bias = tuning.deadzone_bias;
