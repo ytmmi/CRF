@@ -24,6 +24,8 @@ pub mod rle_cabac;
 pub mod rle_golomb;
 pub(crate) mod scratch;
 pub mod sequence;
+/// sequence_batched：分批加载的序列编码（超大组并行，路径 G 语义）
+pub mod sequence_batched;
 pub mod sequence_tools;
 /// session：序列级 session 与辅助函数（P3 架构迁移）
 pub mod session;
@@ -48,5 +50,6 @@ mod tests;
 // ===== 公共 API（保持与拆分前一致的对外路径）=====
 pub use frame::encode_frame;
 pub use sequence::encode_sequence;
+pub use sequence_batched::encode_sequence_batched;
 
 pub(crate) use frame::{assemble_frame, FrameQuant};

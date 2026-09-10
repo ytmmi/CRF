@@ -1,16 +1,19 @@
-//! 指定图像组的 adaptive/q90 压缩时间与体积探针（streaming，支持 >50 帧）
+//! 指定图像组的 adaptive/q90 压缩时间与体积探针
 //!
-//! 用 `StreamingEncoder` 逐帧推送，内存 O(golden+单帧+码流)，适用于超大组
-//! （如 30-3-81：81 帧 3826×5412，批量接口超 50 帧限制）。仅测编码时间与体积，
-//! 不做解码校验（校验由 `--test` 负责）。
+//! 默认：**分批并行**（`encode_sequence_batched` 惰性加载 + 分批并行，支持超大组
+//! 如 30-3-81：81 帧 3826×5412，内存 O(golden+batch×单帧+码流)）。
+//! 保底：`CRF_STREAMING=1` 走串行 streaming（内存 O(golden+单帧+码流)）。
 //!
+//! 仅测编码时间与体积，不做解码校验（校验由 `--test` 负责）。
 //! 由 `--probe-group-bench <dir>` CLI 分派。
 
 use std::time::Instant;
 
 use image::{ImageReader, RgbImage};
 
+use crate::crf::core::contract::ResolvedConfig;
 use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
+use crate::crf::encoder::sequence_batched::encode_sequence_batched;
 use crate::crf::encoder::streaming::StreamingEncoder;
 use crate::crf::LossyOptionsV2Builder;
 
@@ -69,8 +72,19 @@ pub fn run(dir: &str) -> Result<(), String> {
     if paths.len() < 2 {
         return Err(format!("{dir}: 至少需要 2 张图片，实际 {}", paths.len()));
     }
-    println!("=== 组压缩探针（streaming，支持 >50 帧）===");
-    println!("组: {dir}  ({} 帧)\n", paths.len());
+    let use_streaming = std::env::var("CRF_STREAMING")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    println!("=== 组压缩探针 ===");
+    println!(
+        "组: {dir}  ({} 帧)  模式: {}\n",
+        paths.len(),
+        if use_streaming {
+            "streaming（串行保底）"
+        } else {
+            "batch（分批并行）"
+        }
+    );
     for (label, quality) in [("adaptive(无损)", None), ("q90", Some(90u8))] {
         let params = EncodeParams {
             compression_type: "golomb-rice".to_string(),
@@ -82,29 +96,45 @@ pub fn run(dir: &str) -> Result<(), String> {
                     .build()
                     .expect("preset 校验通过")
             }),
-            input_original_frames: false,
+            input_original_frames: true,
             user_metadata: None,
         };
         let t0 = Instant::now();
-        let mut enc = StreamingEncoder::new(&params).map_err(|e| e.to_string())?;
-        let total = paths.len();
-        for (i, p) in paths.iter().enumerate() {
-            let frame = load_frame(p)?;
-            enc.push_frame(&frame).map_err(|e| e.to_string())?;
-            // 进度：每 5 帧或末帧打印（含 ETA）
-            if (i + 1) % 5 == 0 || i + 1 == total {
-                let elapsed = t0.elapsed().as_secs_f64();
-                let eta = elapsed / (i + 1) as f64 * (total - i - 1) as f64;
-                println!(
-                    "  [{label}] 帧 {}/{total} ({:.0}%)  已用 {:.0}s  ETA {:.0}s",
-                    i + 1,
-                    (i + 1) as f64 / total as f64 * 100.0,
-                    elapsed,
-                    eta
-                );
+        let bytes = if use_streaming {
+            // 保底：逐帧推送串行
+            let mut enc = StreamingEncoder::new(&params).map_err(|e| e.to_string())?;
+            let total = paths.len();
+            for (i, p) in paths.iter().enumerate() {
+                let frame = load_frame(p)?;
+                enc.push_frame(&frame).map_err(|e| e.to_string())?;
+                if (i + 1) % 5 == 0 || i + 1 == total {
+                    let elapsed = t0.elapsed().as_secs_f64();
+                    let eta = elapsed / (i + 1) as f64 * (total - i - 1) as f64;
+                    println!(
+                        "  [{label}] 帧 {}/{total} ({:.0}%)  已用 {:.0}s  ETA {:.0}s",
+                        i + 1,
+                        (i + 1) as f64 / total as f64 * 100.0,
+                        elapsed,
+                        eta
+                    );
+                }
             }
-        }
-        let bytes = enc.finish().map_err(|e| e.to_string())?;
+            enc.finish().map_err(|e| e.to_string())?
+        } else {
+            // 默认：惰性加载 + 分批并行
+            let first = load_frame(&paths[0])?;
+            let resolved = ResolvedConfig::resolve_lazy(&params, &first, paths.len())
+                .map_err(|e| e.to_string())?;
+            encode_sequence_batched(
+                paths.len(),
+                |i| {
+                    load_frame(&paths[i])
+                        .map_err(crate::crf::error::CrfError::InvalidCodingParams)
+                },
+                &resolved,
+            )
+            .map_err(|e| e.to_string())?
+        };
         let secs = t0.elapsed().as_secs_f64();
         println!(
             "{label:<16}: {} B ({:.2} MB)  编码 {:.1}s ({:.0} ms/帧)",

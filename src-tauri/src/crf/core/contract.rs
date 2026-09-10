@@ -173,14 +173,29 @@ impl ResolvedConfig {
         params: &EncodeParams,
         frames: &[ImageData],
     ) -> crate::crf::error::CrfResult<Self> {
+        Self::resolve_inner(params, frames.first(), frames.len())
+    }
+
+    /// 惰性加载路径的配置解析：帧数由调用方显式提供（首帧可能尚未全部加载）。
+    pub fn resolve_lazy(
+        params: &EncodeParams,
+        first: &ImageData,
+        frame_count: usize,
+    ) -> crate::crf::error::CrfResult<Self> {
+        Self::resolve_inner(params, Some(first), frame_count)
+    }
+
+    fn resolve_inner(
+        params: &EncodeParams,
+        first: Option<&ImageData>,
+        frame_count_usize: usize,
+    ) -> crate::crf::error::CrfResult<Self> {
         use crate::crf::core::color::rct::rct_applicable;
         use crate::crf::core::domain::{CompressionType, Flags};
         use crate::crf::error::CrfError;
 
-        let first = frames
-            .first()
-            .ok_or_else(|| CrfError::FrameCountOutOfRange(0))?;
-        let frame_count = frames.len() as u16;
+        let first = first.ok_or_else(|| CrfError::FrameCountOutOfRange(0))?;
+        let frame_count = frame_count_usize as u16;
 
         // 压缩类型解析（与 encoder/sequence.rs 保持同一映射）
         let compression_type = match params.compression_type.as_str() {
@@ -221,7 +236,7 @@ impl ResolvedConfig {
             params.lossy.as_ref(),
             crate::crf::core::config::lossy_v2::ResolveContext {
                 components: Some(components),
-                frame_count: Some(frames.len()),
+                frame_count: Some(frame_count_usize),
             },
         )
         .map_err(|e| CrfError::InvalidCodingParams(e.to_string()))?;
