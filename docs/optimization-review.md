@@ -2550,3 +2550,44 @@ Zero predictor）对 CRF 差分场景能否带来 ≥3% 净收益，据此前置
 3. 探针 `--probe-planar-parallel` 保留为回归锚点；§P1c/§36 待办关闭为「已探针评估、
    不实施」；
 4. 未来若 encode 端到端瓶颈结构变化（如 planar 占比显著上升），可复跑探针复评。
+
+## 52. P2 剩余三项评估（DCT/量化 SIMD、components==3 预测 SIMD、一次遍历合并 8 候选）：不实施（2026-09-10）
+
+**目标**：闭环 performance-optimization-plan.md §P2「CPU SIMD 扩展」的剩余三项——
+DCT/量化 SIMD、components==3 预测 SIMD、「一次遍历合并 8 候选」——据首帧阶段实测
+与既有结论判定是否投入实现。
+
+**首帧阶段分布实测**（`--probe-first-frame` 组 1000，1024×1820，单帧串行）：
+
+| 阶段 | 耗时 | 说明 |
+|---|---:|---|
+| planar | 585.4 ms | 首帧最大热点（§51 已探针证伪并行化） |
+| CABAC | 290.4 ms | |
+| trial_encode | 267.3 ms | |
+| DCT | 252.5 ms | 4 变体已并行（P1c：611→200ms） |
+| palette | 134.7 ms | |
+| intra_transform | 61.8 ms | |
+| **satd（8 候选）** | **23.8 ms** | **<1.5%** |
+
+**逐项判定**：
+
+| 项 | 现状 | 预期收益 | 判定 |
+|---|---|---|---|
+| 一次遍历合并 8 候选 | `satd_for_mode_sampled` 对 8 模式各遍历一次（`par_iter`） | SATD 首帧仅 23.8 ms，全免也省 <1% | ❌ 收益极低 |
+| components==3 预测 SIMD | 仅 components==1 已 SIMD（`simd_predict.rs`） | §33 已实测 components==1 预测 SIMD 端到端 ≈0（内存带宽瓶颈），三分量同理 | ❌ 不实施 |
+| DCT/量化 SIMD | DCT 单变体内标量（`dct4/8x8_forward_into`）；量化已 SIMD（P6.8） | DCT 首帧 252ms 但 4 变体已并行，单变体 SIMD 受最慢变体限制 | ⚠️ 不实施（唯一有探索价值项） |
+
+**根因**：
+1. 三项均未直击首帧真实热点——首帧最大串行块是 planar（585ms，§51 已探针证伪
+   并行化）与 CABAC/trial_encode；SATD 仅占 <1.5%，合并 8 候选收益窗口极小。
+2. §33 已实测 components==1 预测 SIMD 端到端 ≈0（内存带宽瓶颈），components==3
+   同理，SIMD 无法突破带宽瓶颈。
+3. DCT 已由 P1c 变体级并行化（611→200ms），单变体 SIMD 的进一步加速受「最慢
+   变体」串行约束，端到端收益低于 §4.6 的 10% 门槛。
+
+**裁决——不实施**：
+1. 三项均低于 performance-plan §4.6「端到端 ≥10% 或热点 ≥25%」门槛，且除
+   「能力保留」外无端到端价值，不投入实现；
+2. §P2 剩余待办关闭为「已评估、不实施」；
+3. 未来若首帧瓶颈结构变化（如 CABAC/planar 占比下降使 DCT 成为主导），可复评
+   DCT SIMD。

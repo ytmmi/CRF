@@ -847,6 +847,12 @@ components==1 预测 SIMD 已落地但端到端 ≈0（内存带宽瓶颈，§33
 未达 §4.6 的端到端 ≥10% 或热点 ≥25% 门槛；DCT/量化 SIMD、components==3 预测
 SIMD 与「一次遍历合并 8 候选」仍待后续。详见 [optimization-review.md §33](optimization-review.md)。
 
+**✅ 已评估（2026-09-10，见 optimization-review.md §52）——不实施**：首帧阶段实测
+（组 1000）SATD 仅 23.8 ms（<1.5%，「一次遍历合并 8 候选」收益窗口极小）；
+components==1 预测 SIMD 端到端 ≈0（§33，三分量同理）；DCT 已由 P1c 变体级并行
+（611→200ms），单变体 SIMD 受最慢变体限制。三项均低于 §4.6 门槛，**不实施**，
+§P2 剩余项关闭为「已评估、不实施」。
+
 ### P3：GPU 抽象与 Hybrid 探针
 
 - 先实现 capability/scheduler/memory 的窄边界，不接入正式默认；
