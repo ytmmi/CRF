@@ -2946,3 +2946,38 @@ ringing 控制）均为**已冻结字段**（§P4.1/§P4.6/§P4.7：配置已定
 
 **裁决**：有损参数接口规划**收尾完成**——V2 控制面完整、§13 项6 剩余为冻结字段
 （无需接入）、专家面板 schema 已补全；UI 落地待前端项目。
+
+## 62. 超大组并行编码优化（batched + 融合 + 帧级并行度）（2026-09-10）
+
+**背景**：30-3-81（81 帧 3826×5412，1677 MPix）超 batch 50 帧限制，原走 streaming 串行
+（ETA ~1300s）。三项优化：
+
+1. **分批加载并行编码**（`sequence_batched::encode_sequence_batched`，v0.3.3.17）：惰性
+   加载 + 分批并行（路径 G 语义逐字节一致），内存 O(golden + batch_frames×单帧 + 码流)；
+   `ResolvedConfig::resolve_lazy` 支持惰性路径显式帧数。
+2. **融合差分+RCT**（`backend/cpu/simd.rs::sub_rct_forward`，v0.3.3.19）：一次遍历完成
+   差分 + YCoCg-R，省一次全帧内存往返（~40% 流量）；与 `sub_i32`+`rct` 逐位一致。
+3. **帧级并行度增大**（v0.3.3.20）：`batch_mem_limit` 默认 1.5→4GB + `batch_frames`
+   增加核数（`available_parallelism`）上限。
+
+**实测（30-3-81）**：
+
+| 阶段 | adaptive（570.59 MB） | q90（323.66 MB） |
+|---|---:|---:|
+| streaming 串行（初始） | ~1300s（估） | — |
+| batched（batch_frames=6） | 636.8s | 861.9s |
+| + 融合差分+RCT | 537.0s | 785.2s |
+| **+ 帧级并行度增大（16）** | **461.7s** | **666.4s** |
+| **累计 vs 串行** | **~2.8×** | — |
+
+**字节全程逐字节不变**（598304377 / 339378956）。
+
+**关键发现**：
+1. **帧级并行比帧内并行更有效**：1000 组 batch_frames 2→14 提速 1.75×（单调递增），
+   帧级任务粒度大、work-stealing 更优。
+2. **融合收益随图尺寸放大**：30-3-81 大图 −9~16%（内存流量主导）；1000 组小图 −6%
+   （缓存掩盖）。
+3. **batch 50 帧硬限制移除**（v0.3.3.16）：改为按内存自动切分有界并发（`FrameSemaphore`）。
+
+**工具**：`--probe-group-bench <dir>`（默认分批并行，`CRF_STREAMING=1` 走 streaming
+串行保底）；`CRF_BATCH_FRAMES` / `CRF_BATCH_MEM_LIMIT` 调优。

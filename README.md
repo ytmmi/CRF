@@ -22,7 +22,7 @@
 
 ## 版本说明
 
-**当前版本：`0.3.3.20`**
+**当前版本：`0.3.3.21`**
 
 版本号采用四段式 `a.b.c.d` 命名规则：
 
@@ -36,8 +36,8 @@
 每次 git push 前必须递增版本号（禁止同一版本号重复推送），变更属于哪一档就递增
 对应段位并清零右侧所有段位。完整规则见 [docs/project-standards.md §13](docs/project-standards.md)。
 
-> `Cargo.toml` 遵循三位 semver 同步为 `0.3.3`（省略 `d`）；完整四位 `0.3.3.20`
-> 通过 `crf-viewer --version` 显示，git tag 发布使用 `v0.3.3.20`。
+> `Cargo.toml` 遵循三位 semver 同步为 `0.3.3`（省略 `d`）；完整四位 `0.3.3.21`
+> 通过 `crf-viewer --version` 显示，git tag 发布使用 `v0.3.3.21`。
 
 ---
 
@@ -184,7 +184,10 @@ cargo run -- --dump-resolved-config resolved.json
 cargo run -- --dump-expert-schema panel-schema.json
 ```
 
-- 输入支持 PNG/JPEG/WebP/BMP/TIFF；批量接口 2~50 帧，超过 50 帧走流式路径
+- 输入支持 PNG/JPEG/WebP/BMP/TIFF；任意帧数（2~65535）
+- **>50 帧自动分批并行**（`sequence_batched`：惰性加载 + 分批并行，内存
+  O(golden+batch×单帧+码流)）；`CRF_STREAMING=1` 走 streaming 串行保底；
+  `CRF_BATCH_FRAMES` / `CRF_BATCH_MEM_LIMIT` 可调优批并行度
 - 无损输出可经 `CRF_OUTPUT_FORMAT=webp` 切换 WebP-VP8L
 - 编解码往返、无损逐像素校验、batch/streaming 一致性由 `--test` 集成测试路径自动执行
 
