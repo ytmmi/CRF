@@ -2732,7 +2732,7 @@ HtoD → launch → sync → DtoH → 释放）的 p50 耗时（5 轮中位）�
 | 建议 | 判定 | 依据 |
 |---|---|---|
 | 首帧 frame_type=8 有损深化 | ❌ **已关闭** | §53：type8 有损零胜出、无损仅 3/14 帧且无体积收益 |
-| 调色板排序 + MTF 编码 | ⚠️ **新候选（中）** | frame_type=4 palette 已实现，但未做最近邻排序 + Move-To-Front；低色数首帧可探针 |
+| 调色板排序 + MTF 编码 | ❌ **已探针证伪** | §57：MTF palette 比现有 palette 小 12.6%，但远劣于现有最优（B/A2 +1165%）——palette 不参与胜出 |
 | DAN 预测器（边缘/位置猜测） | ⚠️ 新候选（低） | 现有 8 模式已含 D45/D135 边缘方向；新增预测器边际收益低 |
 | 渐进式四叉树（漫画/线稿） | ⚠️ 新候选（低） | 分区树已由 §13 R13② 证伪；渐进式不同但信令开销风险高 |
 | JPEG-XL 普通调色板 + 抖动 | ⚠️ 新候选（低） | delta palette §50 已否决；抖动改变像素，仅适用有损且需质量验证 |
@@ -2762,5 +2762,38 @@ HtoD → launch → sync → DtoH → 释放）的 p50 耗时（5 轮中位）�
 | ⚫ | GPU 路线、frame_type=8 深化、delta palette、rANS/FSE、CM/PAQ、MA 树共享、LIC 深化 | — | 已证伪/排除 |
 
 **结论**：修正 GPU 路线与 type8 深化的过时判断后，真正值得投入的新候选收敛为
-**调色板 MTF、DCT i16 打包 SIMD、planar 候选级 Fast-Fail** 三项（均中优先），其余
-为低优先或已关闭。三者均需先探针验证净收益 >3% 再实施。
+**调色板 MTF、DCT i16 打包 SIMD、planar 候选级 Fast-Fail** 三项（均中优先）。其中
+调色板 MTF 已由 §57 探针**证伪**（palette 远劣于现有最优），新候选进一步收敛为
+**DCT i16 打包 SIMD、planar 候选级 Fast-Fail** 两项；均需先探针验证净收益 >3% 再实施。
+
+## 57. 调色板排序 + MTF 编码探针：证伪（2026-09-10）
+
+**目标**：验证 §56 新候选「调色板排序 + MTF 编码」的净收益——排序后索引相邻 +
+Move-To-Front 使渐变内容 rank 变小，是否改善 palette 压缩。
+
+**探针**（`performance/probe_palette_mtf.rs`，`--probe-palette-mtf <root>`）：对分量级
+色数 ≤256 的低色数帧（test/png-valid 30 图）对比三口径：
+- A = 现有 palette（首现顺序 + copy-above + RLE+Golomb）；
+- B = 排序调色板 + MTF 索引流 + RLE+Golomb；
+- A2 = 现有最优（`encode_frame_adaptive` 全候选竞争）。
+
+**实测**：
+
+| 口径 | 合计字节 | 相对 |
+|---|---:|---|
+| A 现有 palette | 267,863,164 | — |
+| B 排序+MTF | 234,153,319 | **−12.6% vs A** |
+| A2 现有最优 | 18,509,416 | **B/A2 = +1165%** |
+
+**结论**：
+1. B 相对现有 palette（A）确有 **−12.6%** 改善（MTF 排序有效），但**远劣于现有最优**
+   （A2）——palette 索引流每像素一个 token，而 cabac/planar 的残差编码对低色数内容
+   已压到 1/10 以下。
+2. 逐图仅 3 个极小像素画（9~28 色，3~9K 像素）B < A2（−9~−26%），绝对收益仅数 KB；
+   其余全部 B/A2 +79%~+1165%。
+3. 与 §50 delta palette 否决根因一致：palette 索引机制对 CRF 场景（残差稀疏/低色数）
+   不敌残差熵编码。
+
+**裁决——证伪，不实施**：MTF palette 端到端无价值（palette 不参与胜出），不新增码流
+语法；探针保留为回归锚点。§56 新候选收敛为 **DCT i16 打包 SIMD、planar 候选级
+Fast-Fail** 两项。
