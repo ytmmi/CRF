@@ -148,6 +148,13 @@ pub fn rct_inverse(pixels: &mut [i32]) {
     crate::crf::backend::cpu::simd::rct_inverse_interleaved(pixels)
 }
 
+/// 融合差分 + YCoCg-R 正变换：`out = rct(frame − g_hat)`（3 分量交织）。
+/// 与 `sub_i32` + `rct_forward` 逐位一致，省一次全帧内存往返。
+#[inline]
+pub fn sub_rct_forward(frame: &[i32], g_hat: &[i32], out: &mut [i32]) {
+    crate::crf::backend::cpu::simd::sub_rct_forward(frame, g_hat, out)
+}
+
 /// 软阈值（单平面）：|v| <= t 的置零
 #[inline]
 pub fn soft_threshold_plane(pixels: &mut [i32], t: i32) {

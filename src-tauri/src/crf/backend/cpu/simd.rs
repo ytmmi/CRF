@@ -128,6 +128,109 @@ unsafe fn rct_fwd_avx2(pixels: &mut [i32]) {
     }
 }
 
+// ===== 融合：差分 + YCoCg-R 正变换（一次遍历，省全帧内存往返）=====
+
+/// `out = rct(frame − g_hat)`（3 分量交织）。与 `sub_i32` + `rct_forward_interleaved`
+/// 逐位一致，但差分结果驻留寄存器/栈、不写回再读，省一次全帧内存往返。
+pub fn sub_rct_forward(frame: &[i32], g_hat: &[i32], out: &mut [i32]) {
+    assert_eq!(frame.len(), g_hat.len(), "sub_rct 输入长度必须一致");
+    assert_eq!(frame.len(), out.len(), "sub_rct 输出长度必须一致");
+    #[cfg(target_arch = "x86_64")]
+    {
+        if frame.len() >= 24 && has_avx2() {
+            // SAFETY: avx2 已检测；kernel 对尾部使用标量处理。
+            unsafe { sub_rct_fwd_avx2(frame, g_hat, out) };
+            return;
+        }
+    }
+    let done = (frame.len() / 3) * 3;
+    for ((f, gg), o) in frame[..done]
+        .chunks_exact(3)
+        .zip(g_hat[..done].chunks_exact(3))
+        .zip(out[..done].chunks_exact_mut(3))
+    {
+        let dr = f[0] - gg[0];
+        let dg = f[1] - gg[1];
+        let db = f[2] - gg[2];
+        let co = dr - db;
+        let t = db + (co >> 1);
+        let cg = dg - t;
+        o[0] = t + (cg >> 1);
+        o[1] = co;
+        o[2] = cg;
+    }
+    // 不足 3 的尾部仅差分（与 sub_i32 + rct（忽略余数）逐位一致）
+    for i in done..frame.len() {
+        out[i] = frame[i] - g_hat[i];
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn sub_rct_fwd_avx2(frame: &[i32], g_hat: &[i32], out: &mut [i32]) {
+    use std::arch::x86_64::*;
+    let n = frame.len();
+    let mut off = 0;
+    while off + 24 <= n {
+        // 差分 24 i32（连续 SIMD，3 批 8）——驻留栈临时，不写回内存
+        let d0 = _mm256_sub_epi32(
+            _mm256_loadu_si256(frame.as_ptr().add(off).cast()),
+            _mm256_loadu_si256(g_hat.as_ptr().add(off).cast()),
+        );
+        let d1 = _mm256_sub_epi32(
+            _mm256_loadu_si256(frame.as_ptr().add(off + 8).cast()),
+            _mm256_loadu_si256(g_hat.as_ptr().add(off + 8).cast()),
+        );
+        let d2 = _mm256_sub_epi32(
+            _mm256_loadu_si256(frame.as_ptr().add(off + 16).cast()),
+            _mm256_loadu_si256(g_hat.as_ptr().add(off + 16).cast()),
+        );
+        let mut d = [0i32; 24];
+        _mm256_storeu_si256(d.as_mut_ptr().cast(), d0);
+        _mm256_storeu_si256(d.as_mut_ptr().add(8).cast(), d1);
+        _mm256_storeu_si256(d.as_mut_ptr().add(16).cast(), d2);
+        // RCT（8 像素，跨步解包）
+        let mut r = [0i32; 8];
+        let mut g = [0i32; 8];
+        let mut b = [0i32; 8];
+        for k in 0..8 {
+            r[k] = d[k * 3];
+            g[k] = d[k * 3 + 1];
+            b[k] = d[k * 3 + 2];
+        }
+        let vr = _mm256_loadu_si256(r.as_ptr().cast());
+        let vg = _mm256_loadu_si256(g.as_ptr().cast());
+        let vb = _mm256_loadu_si256(b.as_ptr().cast());
+        let vco = _mm256_sub_epi32(vr, vb);
+        let vt = _mm256_add_epi32(vb, _mm256_srai_epi32(vco, 1));
+        let vcg = _mm256_sub_epi32(vg, vt);
+        let vy = _mm256_add_epi32(vt, _mm256_srai_epi32(vcg, 1));
+        let yv: [i32; 8] = std::mem::transmute(vy);
+        let cov: [i32; 8] = std::mem::transmute(vco);
+        let cgv: [i32; 8] = std::mem::transmute(vcg);
+        for k in 0..8 {
+            let q = out.as_mut_ptr().add(off).add(k * 3);
+            *q = yv[k];
+            *q.add(1) = cov[k];
+            *q.add(2) = cgv[k];
+        }
+        off += 24;
+    }
+    // 尾部：差分（全）+ RCT（3 的倍数），与分离版逐位一致
+    for i in off..n {
+        out[i] = frame[i] - g_hat[i];
+    }
+    for px in out[off..].chunks_exact_mut(3) {
+        let (r, g, b) = (px[0], px[1], px[2]);
+        let co = r - b;
+        let t = b + (co >> 1);
+        let cg = g - t;
+        px[0] = t + (cg >> 1);
+        px[1] = co;
+        px[2] = cg;
+    }
+}
+
 // ===== YCoCg-R 逆变换 =====
 
 /// t=Y-(Cg>>1), G=Cg+t, B=t-(Co>>1), R=Co+B；与 rct_inverse 逐位一致
@@ -462,6 +565,34 @@ mod tests {
         // 尾部不足 3 的样本不参与变换（原样保留）
         let n = (orig.len() / 3) * 3;
         assert_eq!(orig[..n], px[..n], "YCoCg-R 往返失败");
+    }
+
+    /// 融合 `sub_rct_forward` 与「`sub_i32` + `rct_forward_interleaved`」逐位一致
+    /// （含非 3 倍数尾部）。
+    #[test]
+    fn test_sub_rct_matches_separate() {
+        let mut state = 0x5EED_5EEDu64;
+        let n = 999; // 非 3 倍数：尾部覆盖
+        let mut frame = vec![0i32; n];
+        let mut g_hat = vec![0i32; n];
+        for v in frame.iter_mut() {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *v = ((state >> 33) as i32 % 512) - 256;
+        }
+        for v in g_hat.iter_mut() {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *v = ((state >> 33) as i32 % 512) - 256;
+        }
+        let mut sep = vec![0i32; n];
+        sub_i32(&frame, &g_hat, &mut sep);
+        rct_forward_interleaved(&mut sep);
+        let mut fus = vec![0i32; n];
+        sub_rct_forward(&frame, &g_hat, &mut fus);
+        assert_eq!(sep, fus, "融合 sub_rct 与分离版不一致");
     }
 
     #[test]

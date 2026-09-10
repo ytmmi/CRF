@@ -183,8 +183,10 @@ where
                 }
                 let fq = fq_for(i);
                 let lic_on = super::sequence_tools::lic_globally_enabled();
-                let encode_diff = |diff_rgb: Vec<i32>| -> CrfResult<Vec<u8>> {
+                let fused = !q95_soft && !noise_on;
+                let encode_diff = |diff_rgb: Vec<i32>, already_rct: bool| -> CrfResult<Vec<u8>> {
                     let mut diff_rgb = diff_rgb;
+                    if !already_rct {
                     if q95_soft {
                         soft1(&mut diff_rgb);
                     }
@@ -208,6 +210,7 @@ where
                         );
                     }
                     crate::crf::core::color::rct::rct_forward_in_place(&mut diff_rgb, components)?;
+                    }
                     let eff_frame = ImageData {
                         width: frame.width,
                         height: frame.height,
@@ -273,8 +276,16 @@ where
 
                 // golden 差分候选
                 let mut diff_golden = vec![0i32; frame.pixels.len()];
-                crate::crf::backend::ops::sub_i32(&frame.pixels, &g_hat, &mut diff_golden);
-                let mut data = encode_diff(diff_golden)?;
+                if fused {
+                    crate::crf::backend::ops::sub_rct_forward(
+                        &frame.pixels,
+                        &g_hat,
+                        &mut diff_golden,
+                    );
+                } else {
+                    crate::crf::backend::ops::sub_i32(&frame.pixels, &g_hat, &mut diff_golden);
+                }
+                let mut data = encode_diff(diff_golden, fused)?;
                 // LIC 加权 golden 候选（单调不劣化）
                 let mut lic_field: Option<(u8, u8)> = None;
                 if lic_on {
@@ -290,12 +301,20 @@ where
                                 &mut lic_ref,
                             );
                             let mut diff_lic = vec![0i32; frame.pixels.len()];
-                            crate::crf::backend::ops::sub_i32(
-                                &frame.pixels,
-                                &lic_ref,
-                                &mut diff_lic,
-                            );
-                            let data_lic = encode_diff(diff_lic)?;
+                            if fused {
+                                crate::crf::backend::ops::sub_rct_forward(
+                                    &frame.pixels,
+                                    &lic_ref,
+                                    &mut diff_lic,
+                                );
+                            } else {
+                                crate::crf::backend::ops::sub_i32(
+                                    &frame.pixels,
+                                    &lic_ref,
+                                    &mut diff_lic,
+                                );
+                            }
+                            let data_lic = encode_diff(diff_lic, fused)?;
                             if data_lic.len() < data.len() {
                                 data = data_lic;
                                 lic_field = Some((fit.a_num as u8, fit.b as i8 as u8));
