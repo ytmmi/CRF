@@ -12,7 +12,9 @@
 
 use rayon::prelude::*;
 
-use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
+use crate::crf::core::bitstream::constants::{
+    FRAME_HEADER_SIZE, HEADER_SIZE, LIC_A_NUM_OFFSET, LIC_B_OFFSET, REFERENCE_TYPE_OFFSET,
+};
 use crate::crf::core::domain::{EncodeParams, ImageData};
 use crate::crf::error::{CrfError, CrfResult};
 
@@ -266,102 +268,157 @@ pub(crate) fn encode_sequence_resolved(
                 // P0 闭环核心：差分基准为本地重建的 G_hat（而非 frames[0]）。
                 // 无损 golden 时 G_hat == frames[0]（decode 精确还原），产物
                 // 与旧实现逐字节一致；有损 golden 时误差不再向后续帧传导。
-                let mut diff_rgb = vec![0i32; frame.pixels.len()];
-                crate::crf::backend::ops::sub_i32(&frame.pixels, &g_hat, &mut diff_rgb);
-                if q95_soft {
-                    soft1(&mut diff_rgb);
-                }
-                // 噪声感知软阈值预处理（仅差分帧、零中心性门控内生效）
-                if noise_on {
-                    use crate::crf::core::perceptual::noise::{
-                        estimate_interleaved_band_thresholds, soft_threshold_interleaved,
-                    };
-                    let thresholds = estimate_interleaved_band_thresholds(
-                        &diff_rgb,
-                        frame.width as usize,
-                        frame.height as usize,
-                        components,
-                        tuning.noise_tau_x100,
-                    );
-                    soft_threshold_interleaved(
-                        &mut diff_rgb,
-                        frame.width as usize,
-                        frame.height as usize,
-                        components,
-                        &thresholds,
-                    );
-                }
-                // P1：原地 RCT——diff_rgb 已是独占缓冲，直接改写省去 rct_forward
-                // 内部的 to_vec 全帧克隆，逐位一致。
-                crate::crf::core::color::rct::rct_forward_in_place(&mut diff_rgb, components)?;
-                let eff_frame = ImageData {
-                    width: frame.width,
-                    height: frame.height,
-                    bit_depth: frame.bit_depth,
-                    color_format: frame.color_format,
-                    pixels: diff_rgb,
-                };
                 let fq = fq_for_index(i);
-                // 闭环 per-band 自适应步长：噪声归一化（amp25 失真感知）或
-                // activity masking（空间梯度感知）二选一，由 V2 perceptual 字段决定。
-                let activity_on = tuning.activity_masking_x100 != 100
-                    || tuning.flat_area_protection_x100 != 100
-                    || tuning.edge_protection_x100 != 100;
-                let band_steps: Vec<u8> = if noise_on || activity_on {
-                    if activity_on {
-                        // P4.2/P4.3/P4.4 activity masking：纹理增步长 + 平坦/边缘减步长
-                        use crate::crf::core::perceptual::noise::estimate_band_activity_steps;
-                        estimate_band_activity_steps(
-                            &eff_frame.pixels,
-                            eff_frame.width as usize,
-                            eff_frame.height as usize,
-                            components,
-                            fq.step,
-                            tuning.activity_masking_x100,
-                            tuning.flat_area_protection_x100,
-                            tuning.edge_protection_x100,
-                        )
-                    } else {
-                        use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
-                        estimate_band_quant_steps(
-                            &eff_frame.pixels,
-                            eff_frame.width as usize,
-                            eff_frame.height as usize,
-                            components,
-                            fq.step,
-                            tuning.noise_tau_x100,
-                        )
+                // v1.16 LIC 全局开关（A/B 验证与逃生门，batch/streaming 共用）
+                let lic_on = super::sequence_tools::lic_globally_enabled();
+                // 差分帧编码管线（golden / LIC 共用）：入参 RGB 域差分
+                // （未后处理），内部执行 q95 轻滤 → 噪声软阈值 → RCT →
+                // band 步长 → 熵编码。golden 与 LIC 两路逐参对齐，保证
+                // batch/streaming 对称与字节竞争公平。
+                let encode_diff = |diff_rgb: Vec<i32>| -> CrfResult<Vec<u8>> {
+                    let mut diff_rgb = diff_rgb;
+                    if q95_soft {
+                        soft1(&mut diff_rgb);
                     }
-                } else {
-                    Vec::new()
+                    // 噪声感知软阈值预处理（仅差分帧、零中心性门控内生效）
+                    if noise_on {
+                        use crate::crf::core::perceptual::noise::{
+                            estimate_interleaved_band_thresholds, soft_threshold_interleaved,
+                        };
+                        let thresholds = estimate_interleaved_band_thresholds(
+                            &diff_rgb,
+                            frame.width as usize,
+                            frame.height as usize,
+                            components,
+                            tuning.noise_tau_x100,
+                        );
+                        soft_threshold_interleaved(
+                            &mut diff_rgb,
+                            frame.width as usize,
+                            frame.height as usize,
+                            components,
+                            &thresholds,
+                        );
+                    }
+                    // P1：原地 RCT——diff_rgb 已是独占缓冲，直接改写省去 rct_forward
+                    // 内部的 to_vec 全帧克隆，逐位一致。
+                    crate::crf::core::color::rct::rct_forward_in_place(
+                        &mut diff_rgb,
+                        components,
+                    )?;
+                    let eff_frame = ImageData {
+                        width: frame.width,
+                        height: frame.height,
+                        bit_depth: frame.bit_depth,
+                        color_format: frame.color_format,
+                        pixels: diff_rgb,
+                    };
+                    // 闭环 per-band 自适应步长：噪声归一化（amp25 失真感知）或
+                    // activity masking（空间梯度感知）二选一，由 V2 perceptual 字段决定。
+                    let activity_on = tuning.activity_masking_x100 != 100
+                        || tuning.flat_area_protection_x100 != 100
+                        || tuning.edge_protection_x100 != 100;
+                    let band_steps: Vec<u8> = if noise_on || activity_on {
+                        if activity_on {
+                            // P4.2/P4.3/P4.4 activity masking：纹理增步长 + 平坦/边缘减步长
+                            use crate::crf::core::perceptual::noise::estimate_band_activity_steps;
+                            estimate_band_activity_steps(
+                                &eff_frame.pixels,
+                                eff_frame.width as usize,
+                                eff_frame.height as usize,
+                                components,
+                                fq.step,
+                                tuning.activity_masking_x100,
+                                tuning.flat_area_protection_x100,
+                                tuning.edge_protection_x100,
+                            )
+                        } else {
+                            use crate::crf::core::perceptual::noise::estimate_band_quant_steps;
+                            estimate_band_quant_steps(
+                                &eff_frame.pixels,
+                                eff_frame.width as usize,
+                                eff_frame.height as usize,
+                                components,
+                                fq.step,
+                                tuning.noise_tau_x100,
+                            )
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    let band_ref: super::frame::BandSteps<'_> = if noise_on || activity_on {
+                        Some(&band_steps)
+                    } else {
+                        None
+                    };
+                    if params.adaptive_prediction {
+                        Ok(encode_frame_adaptive(
+                            &eff_frame,
+                            compression_type,
+                            header.block_size,
+                            false, // 差分帧无首帧语义
+                            fq,
+                            None,
+                            band_ref,
+                        )?
+                        .data)
+                    } else {
+                        Ok(encode_frame(
+                            &eff_frame,
+                            compression_type,
+                            header.block_size,
+                            header.prediction_mode,
+                            false,
+                            fq,
+                            None,
+                        )?)
+                    }
                 };
-                let band_ref: super::frame::BandSteps<'_> = if noise_on || activity_on {
-                    Some(&band_steps)
-                } else {
-                    None
-                };
-                let mut data = if params.adaptive_prediction {
-                    encode_frame_adaptive(
-                        &eff_frame,
-                        compression_type,
-                        header.block_size,
-                        false, // 差分帧无首帧语义
-                        fq,
-                        None,
-                        band_ref,
-                    )?
-                    .data
-                } else {
-                    encode_frame(
-                        &eff_frame,
-                        compression_type,
-                        header.block_size,
-                        header.prediction_mode,
-                        false,
-                        fq,
-                        None,
-                    )?
-                };
+
+                // golden 差分候选（帧头 reference_type=0）
+                let mut diff_golden = vec![0i32; frame.pixels.len()];
+                crate::crf::backend::ops::sub_i32(&frame.pixels, &g_hat, &mut diff_golden);
+                let data_golden = encode_diff(diff_golden)?;
+
+                // LIC 加权 golden 差分候选（v1.16）：采样扫描 → 预筛 →
+                // 同管线编码 → 字节竞争（单调不劣化，仅在更小时采用）。
+                // 光照渐变（闪光/阴影/时间渐变）内容 LIC 残差显著更小；
+                // 无收益帧预筛直接跳过，零额外编码成本。
+                let mut data = data_golden;
+                let mut lic_field: Option<(u8, u8)> = None;
+                if lic_on {
+                    if let Some(fit) =
+                        crate::crf::core::illumination::search_lic(&g_hat, &frame.pixels)
+                    {
+                        if fit.worthwhile() {
+                            let mut lic_ref = vec![0i32; g_hat.len()];
+                            crate::crf::core::illumination::fit_into(
+                                &g_hat,
+                                fit.a_num,
+                                fit.b,
+                                &mut lic_ref,
+                            );
+                            let mut diff_lic = vec![0i32; frame.pixels.len()];
+                            crate::crf::backend::ops::sub_i32(
+                                &frame.pixels,
+                                &lic_ref,
+                                &mut diff_lic,
+                            );
+                            let data_lic = encode_diff(diff_lic)?;
+                            if data_lic.len() < data.len() {
+                                data = data_lic;
+                                lic_field = Some((fit.a_num as u8, fit.b as i8 as u8));
+                            }
+                        }
+                    }
+                }
+                // 写入帧头 LIC 信令（仅启用时；默认 (0,0) 由 assemble_frame 写出）
+                if let Some((a_num, b)) = lic_field {
+                    if data.len() > FRAME_HEADER_SIZE {
+                        data[LIC_A_NUM_OFFSET] = a_num;
+                        data[LIC_B_OFFSET] = b;
+                    }
+                }
                 // v1.15：golden 参考由帧头 reference_type=0 表达（assemble_frame
                 // 默认值），不再写 coding_params.bit7——差分帧恒参考首帧。
                 Ok((data, None, true))
@@ -516,7 +573,7 @@ pub(crate) fn encode_sequence_resolved(
         // 还原 F[i] = F[i-1] + 帧 i。v1.15：帧头 reference_type 显式标记为 1。
         all.extend(rest.into_iter().map(|(mut d, pm)| {
             if d.len() > FRAME_HEADER_SIZE {
-                d[FRAME_HEADER_SIZE - 1] = 1; // previous 链式参考
+                d[REFERENCE_TYPE_OFFSET] = 1; // previous 链式参考
             }
             (d, pm, false)
         }));
@@ -661,7 +718,7 @@ pub(crate) fn encode_sequence_resolved(
             if let Some((data, ref_type)) = adopted {
                 let mut d = data;
                 if d.len() > FRAME_HEADER_SIZE {
-                    d[FRAME_HEADER_SIZE - 1] = ref_type; // reference_type 字段
+                    d[REFERENCE_TYPE_OFFSET] = ref_type; // reference_type 字段
                 }
                 out[i] = (d, None, false);
             }
@@ -674,7 +731,7 @@ pub(crate) fn encode_sequence_resolved(
                 rgb = crate::crf::core::color::rct::rct_inverse(&rgb, components)?;
             }
             let ref_type = if out[i].0.len() > FRAME_HEADER_SIZE {
-                out[i].0[FRAME_HEADER_SIZE - 1]
+                out[i].0[REFERENCE_TYPE_OFFSET]
             } else {
                 0
             };
@@ -687,8 +744,30 @@ pub(crate) fn encode_sequence_resolved(
                 // previous 参考：recon[i-1]（旧 previous）+ rgb
                 Some(previous.iter().zip(&rgb).map(|(a, b)| a + b).collect())
             } else {
-                // golden 参考：首帧重建 + rgb
-                Some(golden_rgb.iter().zip(&rgb).map(|(a, b)| a + b).collect())
+                // golden 参考：首帧重建 + rgb。v1.16：若本帧启用 LIC 加权
+                // （帧头 lic_a_num != 0），参考先经乘加变换
+                // LIC(golden_rgb) = (lic_a_num·golden)/100 + lic_b，
+                // 与解码端 restore_referenced 严格对称。
+                let lic_a = if out[i].0.len() > FRAME_HEADER_SIZE {
+                    out[i].0[LIC_A_NUM_OFFSET]
+                } else {
+                    0
+                };
+                let lic_b = if out[i].0.len() > FRAME_HEADER_SIZE {
+                    out[i].0[LIC_B_OFFSET]
+                } else {
+                    0
+                };
+                let golden_ref: Vec<i32> = if lic_a != 0 {
+                    crate::crf::core::illumination::apply_lic_weighted(
+                        &golden_rgb,
+                        lic_a,
+                        lic_b,
+                    )
+                } else {
+                    golden_rgb.clone()
+                };
+                Some(golden_ref.iter().zip(&rgb).map(|(a, b)| a + b).collect())
             };
             prev2 = Some(previous);
             previous = base.unwrap_or_else(|| rgb.clone());

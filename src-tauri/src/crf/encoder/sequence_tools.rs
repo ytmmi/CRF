@@ -1,6 +1,15 @@
 //! P5 序列级工具：变化 mask、整数位移搜索与残差候选预处理。
 //! 这些函数是纯 CPU 参考实现，编码器可在不改变码流语义的前提下替换为 SIMD kernel。
 
+/// LIC 全局开关（A/B 验证与逃生门）：`CRF_DISABLE_LIC=1` 时编码端完全跳过
+/// LIC 竞争（产物与 v1.15 前的 golden 差分语义一致，除帧头固定 14 字节）。
+/// batch 与 streaming 共用，保证两条路径决策一致。
+pub fn lic_globally_enabled() -> bool {
+    !std::env::var("CRF_DISABLE_LIC")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
 /// 以 tile 为单位计算变化掩码。返回行优先 tile 标志，true 表示需要编码。
 pub fn change_mask(
     current: &[i32],

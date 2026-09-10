@@ -79,14 +79,11 @@ fn test_rct_first_frame_bypass_pure_color() {
     );
     // 首帧逐位一致（解码端跳过逆变换 → 即编码输入本身）
     assert_eq!(dec.frames[0].pixels, frames[0].pixels);
-    // 差分帧 golden 还原逐位一致
-    let restored: Vec<i32> = dec.frames[0]
-        .pixels
-        .iter()
-        .zip(dec.frames[1].pixels.iter())
-        .map(|(a, b)| a + b)
-        .collect();
-    assert_eq!(restored, frames[1].pixels);
+    // 差分帧还原逐位一致（生产逻辑收敛于 DecodeSession::restore_temporal，
+    // 规划 §8.2）。v1.16：LIC 帧还原公式为 LIC(首帧) + 残差，手工
+    // "首帧+残差" 不再成立，必须复用生产恢复逻辑（避免语义漂移）。
+    let restored_all = crate::crf::decoder::session::DecodeSession::restore_temporal(&dec);
+    assert_eq!(restored_all[1].pixels, frames[1].pixels);
 
     // decode_from_file 出口对称（Cursor 流式读取）
     let dec2 = crate::crf::decode_from_file(&mut std::io::Cursor::new(&encoded)).unwrap();
@@ -137,14 +134,10 @@ fn test_rct_first_frame_natural_keeps_rct() {
         "相关性强内容首帧 RCT 应胜出"
     );
     assert_eq!(dec.frames[0].pixels, frames[0].pixels);
+    // v1.16：LIC 帧还原须走生产恢复逻辑（LIC(首帧)+残差），手工累加不成立
+    let restored_all = crate::crf::decoder::session::DecodeSession::restore_temporal(&dec);
     for i in 1..frames.len() {
-        let restored: Vec<i32> = dec.frames[0]
-            .pixels
-            .iter()
-            .zip(dec.frames[i].pixels.iter())
-            .map(|(a, b)| a + b)
-            .collect();
-        assert_eq!(restored, frames[i].pixels);
+        assert_eq!(restored_all[i].pixels, frames[i].pixels);
     }
 }
 

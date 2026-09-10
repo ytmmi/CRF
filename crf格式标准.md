@@ -107,7 +107,7 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | 4 | `offset` | 该帧起始偏移（自文件头起算） |
 | 4 | `size` | 该帧总大小（含帧头） |
 
-### 3.5 帧头（Frame Header，12 字节，v1.15）
+### 3.5 帧头（Frame Header，14 字节，v1.16）
 
 | 偏移 | 长度 | 字段 | 说明 |
 | :-- | :-- | :-- | :-- |
@@ -117,7 +117,13 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 | 9 | 1 | `coding_params` | 语义随 frame_type：k 值 / 条带高度 / 保留(0) |
 | 10 | 1 | `pred_mode` | 本帧预测模式；`0xFF`=未指定（回退文件头全局设置） |
 | 11 | 1 | `reference_type` | **v1.15**：时间参考类型，见 3.5.1 |
+| 12 | 1 | `lic_a_num` | **v1.16**：LIC 乘数定点 `a = lic_a_num/100`（0=未启用，见 3.5.2） |
+| 13 | 1 | `lic_b` | **v1.16**：LIC 偏移 b（i8 语义，[-64,64]；仅 `lic_a_num≠0` 有效） |
 
+> **v1.16 破坏式更新（2026-09-08）**：帧头 12 → 14 字节，新增 `lic_a_num` /
+> `lic_b`（局部照明补偿乘加信令）。`reference_type`/`pred_mode` 保持固定偏移
+> （11/10），LIC 字段追加在末尾。旧文件（v1.15 及以下）不再兼容。
+>
 > **v1.15 破坏式更新（2026-09-07）**：帧头 11 → 12 字节，新增 `reference_type`
 > 字段，golden 参考语义从 `coding_params.bit7` 迁移至独立字段。旧文件（v1.14 及
 > 以下）不再兼容；`coding_params.bit7` 恒为 0（banded 高度 mask `& 0x7F` 保留防御）。
@@ -135,6 +141,22 @@ CRF **不做运动估计/运动补偿**——差分图的生成端（画师工�
 字节最小者胜出（单调不劣化）；`Previous` 模式保持纯 previous 链（不启用 prev2）；
 `Golden` 模式全 golden。场景切换检测命中时跳过 previous/prev2 候选回退 golden。
 首帧（i==0）reference_type 恒为 0（golden 基准自身，解码端特判不叠加）。
+
+#### 3.5.2 LIC 加权参考（lic_a_num / lic_b，v1.16）
+
+**局部照明补偿（LIC）**：对 golden 参考做整帧乘加加权后再差分，
+`LIC(x) = (lic_a_num·x)/100 + lic_b`（`lic_a_num∈[80,120]`、`lic_b∈[-64,64]`，
+向零截断整数语义）。仅对 `reference_type=0`（golden）生效：
+
+- 编码端在路径 G 差分帧上做 **golden 直接差分 vs golden+LIC 加权差分** 字节竞争
+  （`lic_a_num=0` 表示未启用，恒等退化）；仅在 LIC 差分码字更小时采用，**单调
+  不劣化**；
+- 还原公式（解码端 `restore_temporal`）：`restored = LIC(base) + 残差`，其中
+  `base` 为 golden 首帧重建 `G_hat`；
+- 适用于闪光/阴影/时间光照渐变等整帧亮度乘加内容（H.264 Weighted Prediction
+  同类技术）；高色数局部差分帧自动退化为恒等 `(100,0)` 不启用，零信令开销；
+- 编码端可用 `CRF_DISABLE_LIC=1` 关闭 LIC 竞争（A/B 验证/逃生门）；
+- 编码端本地重建链与解码端恢复严格对称（同一 `illumination` 纯数学模块）。
 
 ### 3.6 帧类型（frame_type）
 

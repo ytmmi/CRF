@@ -180,14 +180,11 @@ fn test_debug_golden_minimal() {
     }
     assert_eq!(dec.frames[0].pixels, f0);
 
-    // 时间维还原：frame[1] = 首帧 + golden 差分
-    let restored: Vec<i32> = dec.frames[0]
-        .pixels
-        .iter()
-        .zip(dec.frames[1].pixels.iter())
-        .map(|(a, b)| a + b)
-        .collect();
-    assert_eq!(restored, f1);
+    // 时间维还原（生产逻辑收敛于 DecodeSession::restore_temporal，规划 §8.2）。
+    // v1.16：LIC 帧还原公式为 LIC(首帧) + 残差，手工 "首帧+残差" 不再成立，
+    // 必须复用生产恢复逻辑（避免语义漂移）。
+    let restored_all = crate::crf::decoder::session::DecodeSession::restore_temporal(&dec);
+    assert_eq!(restored_all[1].pixels, f1);
 }
 
 #[test]

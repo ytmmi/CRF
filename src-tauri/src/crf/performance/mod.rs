@@ -23,6 +23,9 @@ pub mod probe_first_frame_bypass;
 pub mod probe_lambda;
 /// probe_lic：LIC 整帧乘加照明补偿收益探针（§9 建议 6 采纳探索前置验证）
 pub mod probe_lic;
+/// probe_lic_ab：LIC A/B 字节对比探针（v1.16 正式实现——on vs
+/// CRF_DISABLE_LIC=1 的实际编码字节差，§49 有效性验证工具）
+pub mod probe_lic_ab;
 /// probe_ma_tree：MA 树叶数分布与直方图共享(§8.2)可行性探针
 pub mod probe_ma_tree;
 /// probe_error_separation：首帧误差分离(§9 建议 3/10,JPEG2000 嵌入式)收益探针

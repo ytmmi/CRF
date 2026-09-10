@@ -45,6 +45,7 @@ impl DecodeSession {
         let mut frame_index = Vec::new();
         let mut golden_refs: Vec<bool> = Vec::new();
         let mut prev2_refs: Vec<bool> = Vec::new();
+        let mut lic_refs: Vec<(u8, u8)> = Vec::new();
         let mut offset = HEADER_SIZE;
 
         if header.flags.has_index() {
@@ -109,6 +110,8 @@ impl DecodeSession {
             frames.push(frame);
             golden_refs.push(packet.header.is_golden_ref());
             prev2_refs.push(packet.header.is_prev2_ref());
+            // v1.16：LIC 参数（lic_a_num, lic_b 原字节；首帧恒 (0,0)）
+            lic_refs.push((packet.header.lic_a_num, packet.header.lic_b));
 
             current_offset = frame_end;
         }
@@ -135,6 +138,7 @@ impl DecodeSession {
             frames,
             frame_golden_refs: golden_refs,
             frame_prev2_refs: prev2_refs,
+            frame_lic: lic_refs,
         })
     }
 
@@ -156,10 +160,12 @@ impl DecodeSession {
         for (i, frame) in result.frames.iter().enumerate() {
             let is_golden = result.frame_golden_refs.get(i).copied().unwrap_or(false);
             let is_prev2 = result.frame_prev2_refs.get(i).copied().unwrap_or(false);
+            // v1.16：该帧的 LIC 加权参数（lic_a_num, lic_b 原字节）
+            let lic = result.frame_lic.get(i).copied().unwrap_or((0, 0));
             let restored = if i == 0 {
                 frame.clone()
             } else if is_golden {
-                Self::restore_referenced(Some(golden_base), frame)
+                Self::restore_referenced(Some(golden_base), frame, lic)
             } else if is_prev2 {
                 // prev2 = 前前还原帧（i-2）；i<2 时退化为 golden
                 let base = if i >= 2 {
@@ -167,14 +173,14 @@ impl DecodeSession {
                 } else {
                     Some(golden_base)
                 };
-                Self::restore_referenced(base, frame)
+                Self::restore_referenced(base, frame, lic)
             } else {
                 let base = if i >= 1 {
                     Some(&out[i - 1])
                 } else {
                     Some(golden_base)
                 };
-                Self::restore_referenced(base, frame)
+                Self::restore_referenced(base, frame, lic)
             };
             out.push(restored);
         }
@@ -183,10 +189,23 @@ impl DecodeSession {
 
     /// 单帧时间维还原（i>0）：参考叠加基准（golden/prev/prev2）+ 残差。
     /// `restore_temporal` 与 `decode_bytes_streaming` 共用，保证恢复公式唯一。
-    fn restore_referenced(base: Option<&ImageData>, frame: &ImageData) -> ImageData {
-        let pixels = base
-            .expect("restore base must be set")
-            .pixels
+    ///
+    /// v1.16 LIC：`lic=(lic_a_num, lic_b)` 非零时，参考基准先经乘加加权
+    /// `LIC(base) = (lic_a_num·base)/100 + lic_b` 再叠加残差——与编码端
+    /// `diff = frame − LIC(golden)` 严格对称。
+    fn restore_referenced(
+        base: Option<&ImageData>,
+        frame: &ImageData,
+        lic: (u8, u8),
+    ) -> ImageData {
+        let base_img = base.expect("restore base must be set");
+        let (lic_a_num, lic_b) = lic;
+        let weighted: Vec<i32> = if lic_a_num != 0 {
+            crate::crf::core::illumination::apply_lic_weighted(&base_img.pixels, lic_a_num, lic_b)
+        } else {
+            base_img.pixels.clone()
+        };
+        let pixels = weighted
             .iter()
             .zip(&frame.pixels)
             .map(|(a, b)| a + b)
@@ -279,10 +298,12 @@ impl DecodeSession {
 
             let is_golden = packet.header.is_golden_ref();
             let is_prev2 = packet.header.is_prev2_ref();
+            // v1.16：LIC 参数（首帧恒 (0,0)，无加权）
+            let lic = (packet.header.lic_a_num, packet.header.lic_b);
             let restored = if i == 0 {
                 frame.clone()
             } else if is_golden {
-                Self::restore_referenced(golden_base.as_ref(), &frame)
+                Self::restore_referenced(golden_base.as_ref(), &frame, lic)
             } else if is_prev2 {
                 // prev2 = 前前还原帧（i-2）；i<2 时退化为 golden
                 let base = if i >= 2 {
@@ -290,14 +311,14 @@ impl DecodeSession {
                 } else {
                     golden_base.as_ref()
                 };
-                Self::restore_referenced(base, &frame)
+                Self::restore_referenced(base, &frame, lic)
             } else {
                 let base = if i >= 1 {
                     prev.as_ref()
                 } else {
                     golden_base.as_ref()
                 };
-                Self::restore_referenced(base, &frame)
+                Self::restore_referenced(base, &frame, lic)
             };
 
             on_frame(i, &restored)?;

@@ -39,6 +39,8 @@ mod integration_test;
 #[cfg(test)]
 mod intra_transform_tests;
 #[cfg(test)]
+mod lic_tests;
+#[cfg(test)]
 mod streaming_tests;
 #[cfg(test)]
 mod tests;

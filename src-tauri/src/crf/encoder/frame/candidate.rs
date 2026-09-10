@@ -322,7 +322,9 @@ pub fn encode_frame_adaptive(
                 // data[11] 为 reference_type——旧写法 FRAME_HEADER_SIZE-1 会
                 // 误写 reference_type 且使 pred_mode 恒为 PRED_MODE_UNSET，
                 // 导致解码端预测撤销失效（编解码不对称）。
-                let pm_off = FRAME_HEADER_SIZE - 2;
+                // v1.16 帧头 14B：FRAME_HEADER_SIZE-2 会错位到 lic_a_num，
+                // 必须用固定偏移 PRED_MODE_OFFSET。
+                let pm_off = crate::crf::core::bitstream::constants::PRED_MODE_OFFSET;
                 cab[pm_off] = best_mode as u8;
                 if best.as_ref().is_none_or(|(sz, ..)| cab.len() < *sz) {
                     best = Some((cab.len(), cab, Some(best_mode)));

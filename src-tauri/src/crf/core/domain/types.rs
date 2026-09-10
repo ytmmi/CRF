@@ -8,6 +8,9 @@
 //! 打破 core → format 反向依赖（format 依赖 core 常量，core 又依赖 format
 //! 类型形成的逻辑循环）。旧 `format/types.rs` 不再保留。
 
+use crate::crf::core::bitstream::constants::{
+    FRAME_HEADER_SIZE, LIC_A_NUM_OFFSET, LIC_B_OFFSET, REFERENCE_TYPE_OFFSET,
+};
 use crate::crf::error::{CrfError, CrfResult};
 
 /// 色彩格式枚举
@@ -266,6 +269,11 @@ pub struct FrameHeader {
     /// 替代旧 coding_params.bit7 的单 bit golden 语义，支持多参考帧
     /// （golden 首帧差分、前帧还原 prev、前前帧还原 prev2）。
     pub reference_type: u8,
+    /// v1.16：LIC 乘数定点 `a = lic_a_num/100`（0=未启用；80..=120 有效）。
+    /// 该帧以 `LIC(golden)` 为差分参考基准（reference_type 仍为 0）。
+    pub lic_a_num: u8,
+    /// v1.16：LIC 偏移 b（i8 语义，[-64,64]；仅 `lic_a_num != 0` 时有效）。
+    pub lic_b: u8,
 }
 
 impl FrameHeader {
@@ -279,6 +287,8 @@ impl FrameHeader {
             coding_params,
             pred_mode: PredictionMode::PRED_MODE_UNSET,
             reference_type: 0, // 默认 golden
+            lic_a_num: 0,      // 默认未启用 LIC
+            lic_b: 0,
         }
     }
 
@@ -291,14 +301,16 @@ impl FrameHeader {
             coding_params,
             pred_mode: PredictionMode::PRED_MODE_UNSET,
             reference_type: 0, // 默认 golden
+            lic_a_num: 0,      // 默认未启用 LIC
+            lic_b: 0,
         }
     }
 
     /// 从字节缓冲区解析
     pub fn from_bytes(data: &[u8]) -> CrfResult<Self> {
-        if data.len() < crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE {
+        if data.len() < FRAME_HEADER_SIZE {
             return Err(CrfError::InsufficientData {
-                expected: crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE,
+                expected: FRAME_HEADER_SIZE,
                 actual: data.len(),
             });
         }
@@ -309,7 +321,9 @@ impl FrameHeader {
             frame_type: data[8],
             coding_params: data[9],
             pred_mode: data[10],
-            reference_type: data[11],
+            reference_type: data[REFERENCE_TYPE_OFFSET],
+            lic_a_num: data[LIC_A_NUM_OFFSET],
+            lic_b: data[LIC_B_OFFSET],
         })
     }
 
@@ -321,6 +335,8 @@ impl FrameHeader {
         writer.write_all(&[self.coding_params])?;
         writer.write_all(&[self.pred_mode])?;
         writer.write_all(&[self.reference_type])?;
+        writer.write_all(&[self.lic_a_num])?;
+        writer.write_all(&[self.lic_b])?;
         Ok(())
     }
 
@@ -345,6 +361,28 @@ impl FrameHeader {
     #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
     pub fn set_reference_type(&mut self, reference_type: u8) {
         self.reference_type = reference_type;
+    }
+
+    /// 本帧是否启用 LIC 加权参考（lic_a_num != 0）
+    pub fn lic_enabled(&self) -> bool {
+        self.lic_a_num != 0
+    }
+
+    /// LIC 乘数定点 a（= lic_a_num/100，仅 `lic_enabled()` 时有意义）
+    pub fn lic_a(&self) -> i32 {
+        self.lic_a_num as i32
+    }
+
+    /// LIC 偏移 b（i8 语义，仅 `lic_enabled()` 时有意义）
+    pub fn lic_b(&self) -> i32 {
+        self.lic_b as i8 as i32
+    }
+
+    /// 设置 LIC 加权参考参数（lic_a_num=0 表示未启用）
+    #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
+    pub fn set_lic(&mut self, a_num: u8, b: u8) {
+        self.lic_a_num = a_num;
+        self.lic_b = b;
     }
 }
 
@@ -398,6 +436,10 @@ pub struct DecodeResult {
     /// v1.15：每帧是否以前前帧（prev2）为参考（与 frames 一一对应）。
     /// 仅当 frame_golden_refs[i]==false 时有意义：true=prev2，false=previous。
     pub frame_prev2_refs: Vec<bool>,
+    /// v1.16：每帧的 LIC 加权参考参数（lic_a_num, lic_b 原字节，与 frames
+    /// 一一对应）。lic_a_num==0 表示该帧未启用 LIC（以原始参考直接差分）。
+    /// 启用时还原公式为 `restored = LIC(reference_base) + 残差`。
+    pub frame_lic: Vec<(u8, u8)>,
 }
 
 /// 编码参数

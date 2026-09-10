@@ -16,7 +16,8 @@
 
 use crate::crf::checksum::crc32;
 use crate::crf::core::bitstream::constants::{
-    FOOTER_MAGIC, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE,
+    FOOTER_MAGIC, FOOTER_SIZE, FRAME_HEADER_SIZE, HEADER_SIZE, LIC_A_NUM_OFFSET, LIC_B_OFFSET,
+    REFERENCE_TYPE_OFFSET,
 };
 use crate::crf::core::bitstream::header::CrfHeader;
 use crate::crf::core::domain::{CompressionType, EncodeParams, ImageData};
@@ -242,75 +243,104 @@ impl StreamingEncoder {
                         | crate::crf::core::config::lossy_v2::ReferenceModeV2::Hybrid
                 );
 
-                // golden 差分候选（与批量路径阶段 2 对齐，使用 band_ref）
+                // 差分帧编码管线（golden / LIC 共用，与 streaming 既有 golden
+                // 路径逐参对齐）：RCT → band 步长 → 熵编码。入参为 RGB 域差分。
+                let encode_diff =
+                    |diff_rgb: Vec<i32>| -> crate::crf::error::CrfResult<Vec<u8>> {
+                        let mut diff = diff_rgb;
+                        crate::crf::core::color::rct::rct_forward_in_place(
+                            &mut diff,
+                            components,
+                        )?;
+                        let fq_band: Vec<u8> = if self.noise_on() || self.activity_on() {
+                            fq_band_steps(
+                                fq_base.step,
+                                &diff,
+                                width,
+                                height,
+                                components,
+                                self.tuning
+                                    .as_ref()
+                                    .expect("lossy config resolved before band quantization"),
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                        let band_ref: super::frame::BandSteps<'_> =
+                            if fq_band.is_empty() { None } else { Some(&fq_band) };
+                        if self.params.adaptive_prediction {
+                            Ok(encode_frame_adaptive(
+                                &ImageData {
+                                    width: frame.width,
+                                    height: frame.height,
+                                    bit_depth: frame.bit_depth,
+                                    color_format: frame.color_format,
+                                    pixels: diff,
+                                },
+                                self.compression_type,
+                                self.header.block_size,
+                                false,
+                                fq_base,
+                                None,
+                                band_ref,
+                            )?
+                            .data)
+                        } else {
+                            Ok(super::encode_frame(
+                                &ImageData {
+                                    width: frame.width,
+                                    height: frame.height,
+                                    bit_depth: frame.bit_depth,
+                                    color_format: frame.color_format,
+                                    pixels: diff,
+                                },
+                                self.compression_type,
+                                self.header.block_size,
+                                self.header.prediction_mode,
+                                false,
+                                fq_base,
+                                None,
+                            )?)
+                        }
+                    };
+
+                // golden 差分候选（帧头 reference_type=0）
                 let mut diff_golden = vec![0i32; frame.pixels.len()];
                 crate::crf::backend::ops::sub_i32(&frame.pixels, &golden.pixels, &mut diff_golden);
-                crate::crf::core::color::rct::rct_forward_in_place(&mut diff_golden, components)?;
-
-                let fq_band_golden: Vec<u8> = if self.noise_on() || self.activity_on() {
-                    fq_band_steps(
-                        fq_base.step,
-                        &diff_golden,
-                        width,
-                        height,
-                        components,
-                        self.tuning
-                            .as_ref()
-                            .expect("lossy config resolved before band quantization"),
-                    )
-                } else {
-                    Vec::new()
-                };
-                let band_ref_golden: super::frame::BandSteps<'_> = if fq_band_golden.is_empty() {
-                    None
-                } else {
-                    Some(&fq_band_golden)
-                };
-
-                let data_golden = if self.params.adaptive_prediction {
-                    encode_frame_adaptive(
-                        &ImageData {
-                            width: frame.width,
-                            height: frame.height,
-                            bit_depth: frame.bit_depth,
-                            color_format: frame.color_format,
-                            pixels: diff_golden,
-                        },
-                        self.compression_type,
-                        self.header.block_size,
-                        false,
-                        fq_base,
-                        None,
-                        band_ref_golden,
-                    )?
-                    .data
-                } else {
-                    super::encode_frame(
-                        &ImageData {
-                            width: frame.width,
-                            height: frame.height,
-                            bit_depth: frame.bit_depth,
-                            color_format: frame.color_format,
-                            pixels: diff_golden,
-                        },
-                        self.compression_type,
-                        self.header.block_size,
-                        self.header.prediction_mode,
-                        false,
-                        fq_base,
-                        None,
-                    )?
-                };
-
-                // v1.15：golden 参考由帧头 reference_type=0 表达（assemble_frame
-                // 默认值），不再写 coding_params.bit7。
-                let data_golden = data_golden;
-
-                // P5.1 + v1.15 prev2：重建参考竞争（golden / previous / prev2）。
-                // 与批量路径 sequence.rs 三候选逻辑对齐（change_mask / scene_cut /
-                // force_previous / 最小字节胜出）。
+                let mut final_data = encode_diff(diff_golden)?;
                 let mut ref_type: u8 = 0; // 0=golden
-                let mut final_data = data_golden;
+
+                // v1.16 LIC 加权 golden 差分候选（与批量路径同决策逻辑）：
+                // 采样扫描 → 预筛 → 同管线编码 → 字节竞争（单调不劣化）。
+                // 仅在更小时采用；字段延迟到 reference 竞争结束后写入
+                // （final_data 可能被 previous/prev2 覆盖）。
+                let mut lic_adopt: Option<(u8, u8)> = None;
+                if super::sequence_tools::lic_globally_enabled() {
+                    if let Some(fit) =
+                        crate::crf::core::illumination::search_lic(&golden.pixels, &frame.pixels)
+                    {
+                        if fit.worthwhile() {
+                            let mut lic_ref = vec![0i32; golden.pixels.len()];
+                            crate::crf::core::illumination::fit_into(
+                                &golden.pixels,
+                                fit.a_num,
+                                fit.b,
+                                &mut lic_ref,
+                            );
+                            let mut diff_lic = vec![0i32; frame.pixels.len()];
+                            crate::crf::backend::ops::sub_i32(
+                                &frame.pixels,
+                                &lic_ref,
+                                &mut diff_lic,
+                            );
+                            let data_lic = encode_diff(diff_lic)?;
+                            if data_lic.len() < final_data.len() {
+                                final_data = data_lic;
+                                lic_adopt = Some((fit.a_num as u8, fit.b as i8 as u8));
+                            }
+                        }
+                    }
+                }
                 if use_previous {
                     let previous = self
                         .previous_rgb
@@ -458,9 +488,20 @@ impl StreamingEncoder {
                     }
                 }
 
-                // 写入帧头 reference_type（v1.15）
+                // 写入帧头 reference_type（v1.15；固定偏移，不随帧头尺寸变化）
                 if final_data.len() > FRAME_HEADER_SIZE {
-                    final_data[FRAME_HEADER_SIZE - 1] = ref_type;
+                    final_data[REFERENCE_TYPE_OFFSET] = ref_type;
+                }
+                // v1.16：写入 LIC 信令（仅最终参考仍为 golden 且 LIC 胜出时；
+                // previous/prev2 候选为新编码帧、LIC 字段为默认 (0,0)，与
+                // 批量路径对称）
+                if ref_type == 0 {
+                    if let Some((a_num, b)) = lic_adopt {
+                        if final_data.len() > FRAME_HEADER_SIZE {
+                            final_data[LIC_A_NUM_OFFSET] = a_num;
+                            final_data[LIC_B_OFFSET] = b;
+                        }
+                    }
                 }
 
                 // 更新参考重建链（prev2 = 旧 previous；previous = 参考基准 + 当前差分重建）
@@ -493,9 +534,30 @@ impl StreamingEncoder {
                                 .collect()
                         })
                     } else {
-                        // golden 参考：golden + rgb
+                        // golden 参考：golden + rgb。v1.16：本帧启用 LIC 时
+                        // 参考先经乘加加权 LIC(golden)（与解码端
+                        // restore_referenced 严格对称）。
                         self.golden_rgb.as_ref().map(|g| {
-                            g.pixels
+                            let lic_a = if final_data.len() > FRAME_HEADER_SIZE {
+                                final_data[LIC_A_NUM_OFFSET]
+                            } else {
+                                0
+                            };
+                            let lic_b = if final_data.len() > FRAME_HEADER_SIZE {
+                                final_data[LIC_B_OFFSET]
+                            } else {
+                                0
+                            };
+                            let weighted: Vec<i32> = if lic_a != 0 {
+                                crate::crf::core::illumination::apply_lic_weighted(
+                                    &g.pixels,
+                                    lic_a,
+                                    lic_b,
+                                )
+                            } else {
+                                g.pixels.clone()
+                            };
+                            weighted
                                 .iter()
                                 .zip(rgb.iter())
                                 .map(|(a, b)| a + b)

@@ -472,14 +472,16 @@ fn test_prev2_used_in_hybrid_roundtrip() {
     let encoded = super::super::encode_sequence(&frames, &params).unwrap();
 
     // 解析每帧 reference_type：应存在 prev2（=2）帧（至少 frame3）
-    use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
+    use crate::crf::core::bitstream::constants::{
+        FRAME_HEADER_SIZE, HEADER_SIZE, REFERENCE_TYPE_OFFSET,
+    };
     let fcount = u16::from_le_bytes([encoded[8], encoded[9]]) as usize;
     let frames_start = HEADER_SIZE + fcount * 8;
     let mut off = frames_start;
     let mut ref_types = Vec::new();
     for _ in 0..fcount {
         let fs = u32::from_le_bytes(encoded[off..off + 4].try_into().unwrap()) as usize;
-        ref_types.push(encoded[off + FRAME_HEADER_SIZE - 1]);
+        ref_types.push(encoded[off + REFERENCE_TYPE_OFFSET]);
         off += FRAME_HEADER_SIZE + fs;
     }
     assert!(
@@ -583,13 +585,15 @@ fn test_prev2_not_used_in_previous_mode() {
     );
 
     let encoded = super::super::encode_sequence(&frames, &params).unwrap();
-    use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, HEADER_SIZE};
+    use crate::crf::core::bitstream::constants::{
+        FRAME_HEADER_SIZE, HEADER_SIZE, REFERENCE_TYPE_OFFSET,
+    };
     let fcount = u16::from_le_bytes([encoded[8], encoded[9]]) as usize;
     let frames_start = HEADER_SIZE + fcount * 8;
     let mut off = frames_start;
     for _ in 0..fcount {
         let fs = u32::from_le_bytes(encoded[off..off + 4].try_into().unwrap()) as usize;
-        let rt = encoded[off + FRAME_HEADER_SIZE - 1];
+        let rt = encoded[off + REFERENCE_TYPE_OFFSET];
         assert_ne!(
             rt, 2,
             "Previous 模式不得使用 prev2 参考（reference_type=2）"

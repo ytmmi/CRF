@@ -2360,3 +2360,76 @@ MA 树（深度 3、最多 8 叶）叶数充足且各叶分布有重叠；若树
    出现「残差缓冲非带宽瓶颈」的调用场景可复用，避免重复实现；
 3. 速度优化继续应聚焦「减少像素重复读取」或「减少候选数量」，
    而非对已生成的残差流再做 SIMD 求和。
+
+## 49. LIC 帧级乘加照明补偿正式实现：格式变更 + 编解码对称 + 内容定向有效（2026-09-08）
+
+**目标**：闭环 §40（LIC 探针整体 2.2% < 3% 门槛关闭格式变更，但证实
+「纯场景差分-1」类光照渐变 -30% 收益、模型有效）。本轮将 LIC 按 §40 裁决 2
+「竞争候选，仅当收益超阈值才启用」方向**正式构建为格式变更**，并确认有效。
+
+**格式变更（v1.16 破坏式更新）**：帧头 12 → 14 字节。
+- data[12] lic_a_num：LIC 乘数定点 =lic_a_num/100（0=未启用；80..=120 有效）；
+- data[13] lic_b：偏移 b（i8 语义，[-64,64]）；
+- eference_type/pred_mode 固定偏移 11/10 不变（新增 REFERENCE_TYPE_OFFSET/
+  PRED_MODE_OFFSET 常量；旧算式 FRAME_HEADER_SIZE-1/-2 在 14B 帧头下会错位，
+  全部消除）；VERSION_MINOR 4→5。
+
+**实现要点**：
+1. core/illumination.rs（纯数学，编解码共用）：it_predict（向零截断整数乘加）、
+   it_into/pply_lic_weighted、search_lic（粗 step32 → 精修 → 度量 step8 的
+   两遍定点扫描，与探针同口径）+ LicFit::worthwhile 预筛（采样 SAD 下降 ≥0.1% 才
+   进入完整编码竞争）；
+2. **编码端 batch 路径 G 阶段 2**：golden 差分帧新增 LIC 竞争候选——diff_lic =
+   frame − LIC(G_hat) 走与 golden 完全相同的管线（q95 soft1 / 噪声软阈值 / RCT /
+   band 步长 / 熵编码），字节最小者胜出（**单调不劣化**），采用时写帧头 LIC 字段；
+3. **streaming 对称**：push_frame golden 差分同决策逻辑，与 batch 逐字节一致
+   （	est_lic_batch_streaming_identical）；
+4. **解码端**：DecodeResult.frame_lic 收集每帧 LIC 字段；estore_temporal /
+   decode_bytes_streaming 还原公式 estored = LIC(base) + 残差（生产恢复逻辑
+   唯一实现，estore_referenced 加 lic 参数）；
+5. **重建链对称**：batch reference 竞争与 streaming 链式重建在 LIC 帧上以
+   LIC(golden_rgb) + rgb 更新 previous；
+6. **逃生门/A-B**：CRF_DISABLE_LIC=1 关闭 LIC 竞争（batch/streaming 共用
+   sequence_tools::lic_globally_enabled），产物退回纯 golden 差分语义；
+7. **作用域**：LIC 仅作用于 golden 参考（reference_type=0）；previous/prev2 候选
+   不叠加 LIC（H.264 WP 同类语义，保持简单与对称）。
+
+**修复伴随缺陷**：帧头 12→14 暴露的 FRAME_HEADER_SIZE-2 错位 bug（candidate.rs
+pred_mode 写入被写进 LIC 字段，导致首帧预测撤销不对称 ±4 误差）——改用固定偏移
+常量，三个受帧头尺寸影响的测试同步更新（streaming_tests reference_type 偏移）。
+
+**回归**：全量 cargo test **205 passed / 0 failed / 1 ignored**（较 0.3.2.8 的
+193 基线 +12 项）；新增 encoder/lic_tests.rs 5 项（帧头 LIC 字段往返、光照渐变
+序列端到端逐位还原 + LIC 自动启用断言、batch/streaming 逐字节一致、无乘加收益
+内容零 LIC 帧、默认开关语义）。
+
+**LIC 有效性确认（合成场景组字节 A/B，--probe-lic-ab 实测）**：
+构建 	est/lic-synthetic 纯光照渐变合成序列（6 组 × 4 帧，整帧乘加
+rame = (golden·a)/100 + b、无结构差分，模拟真实光照变化）做进程隔离
+A/B（LIC on vs CRF_DISABLE_LIC=1，同一参数无损自适应）：
+
+| 组 | LIC on | off | 差幅 |
+|---|---:|---:|---:|
+| sunset | 1485 | 1491 | −0.40% |
+| dawn | 1515 | 1704 | **−11.09%** |
+| night | 2179 | 2474 | **−11.92%** |
+| cloudy | 2184 | 2184 | 0.00% |
+| indoor | 2615 | 2615 | 0.00% |
+| sky | 2585 | 3078 | **−16.02%** |
+| **全组** | **12563** | **13546** | **−7.26%**（劣化组 0） |
+
+结论与定性：
+1. **纯光照渐变成分上 LIC 字节有效**（组级最高 −16%，全组 −7.26%），
+   且单调不劣化（0 劣化组）由字节竞争保证；
+2. **真实 test/png 场景组（纯场景差分-1）字节零启用**：--probe-lic-ab
+   实测其 LIC 差分**编码字节 ≥ golden**（如 golden=721131B vs LIC=726077B，
+   a=80 b=-20）——**RGB 域采样 SAD（−30%）与 RCT 域编码字节脱节**：整帧单
+   (a,b) 乘加对亮度通道有效，但同一乘加会放大已量化的色度微差分（Co/Cg），
+   无损熵编码字节不减反增。§40 探针（RGB SAD）与本次字节对比（RCT 域编码）
+   口径不同，这解释了探针的乐观结论；
+3. **工程语义成立**：LIC 是「仅当字节更小时采用」的竞争候选，对任意内容
+   单调不劣化（on ≤ off 恒成立，A/B 全量 test/png 实测 0 劣化组）；对纯光照
+   渐变内容自动启用并真实节省字节；对混合/结构差分内容自动退化恒等零启用，
+   无副作用；
+4. 真实光照渐变序列组扩充后可直接 --probe-lic-ab 复测并正式发布字节标定
+   （探针已就绪）。

@@ -469,7 +469,7 @@ bt709 colorspace + primaries + transfer / full range
 
 ## 13. 版本号命名规则
 
-项目版本号采用四段式 `a.b.c.d`，当前版本为 **0.3.2.8**，后续版本更新从此版本演绎递增。
+项目版本号采用四段式 `a.b.c.d`，当前版本为 **0.3.3.0**，后续版本更新从此版本演绎递增。
 
 | 段 | 含义 | 递增时机 |
 | :-- | :-- | :-- |
@@ -497,13 +497,13 @@ bt709 colorspace + primaries + transfer / full range
 
 | 位置 | 写法 | 说明 |
 | :-- | :-- | :-- |
-| 本文档 §13 | `0.3.2.8` | 唯一权威来源 |
-| `Cargo.toml`（`crf-viewer` 与 `crf-cuda`） | `0.3.2`（省略 `d`） | Cargo 仅支持三位 semver；`a.b.c` 三段必须与正式版一致 |
-| CLI（`crf-viewer --version`） | `0.3.2.8` | `src/main.rs` 常量 `APP_VERSION` 输出完整四位 |
-| git tag / 发布命名 | `v0.3.2.8` | 发布时打完整四位 tag |
+| 本文档 §13 | `0.3.3.0` | 唯一权威来源 |
+| `Cargo.toml`（`crf-viewer` 与 `crf-cuda`） | `0.3.3`（省略 `d`） | Cargo 仅支持三位 semver；`a.b.c` 三段必须与正式版一致 |
+| CLI（`crf-viewer --version`） | `0.3.3.0` | `src/main.rs` 常量 `APP_VERSION` 输出完整四位 |
+| git tag / 发布命名 | `v0.3.3.0` | 发布时打完整四位 tag |
 
-- `Cargo.toml` 的 patch 位与 `d` 段独立：Cargo 内的 `0.3.2` 不代表 `d=0` 已固化，
-  纯 bug 修复推送时只递增 `d`，`Cargo.toml` 三段保持 `0.3.2` 不动。
+- `Cargo.toml` 的 patch 位与 `d` 段独立：Cargo 内的 `0.3.3` 不代表 `d=0` 已固化，
+  纯 bug 修复推送时只递增 `d`，`Cargo.toml` 三段保持 `0.3.3` 不动。
 - 推送前检查：确认 §13 表格、`Cargo.toml`、`APP_VERSION` 常量三处版本一致且高于上一次推送，
   再执行 push。
 
