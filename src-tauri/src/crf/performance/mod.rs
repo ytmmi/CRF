@@ -52,6 +52,8 @@ pub mod probe_planar_sub;
 pub mod probe_palette;
 /// probe_palette_mtf：调色板排序 + MTF 编码收益探针（§56 新候选）
 pub mod probe_palette_mtf;
+/// probe_palette_dither：JPEG-XL 式抖动调色板收益探针（§56 低优先候选）
+pub mod probe_palette_dither;
 /// probe_ringing：P4.7 前置验证——ringing 信号（Laplacian 高响应）与
 /// edge 分类的独立性探针（S0）
 pub mod probe_ringing;
