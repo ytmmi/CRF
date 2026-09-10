@@ -869,6 +869,13 @@ components==1 预测 SIMD 端到端 ≈0（§33，三分量同理）；DCT 已�
 - 暂不搬 CABAC 和文件 I/O；
 - 记录驱动、compute capability、显存和构建方式。
 
+**✅ 已探针评估（2026-09-10，见 optimization-review.md §55）——不实施**：
+`--probe-gpu-kernel` 对现有 CUDA kernel（diff_i32/rct_forward）做 CPU vs GPU 端到端
+对拍（RTX 4060 Laptop，n=5,591,040 i32）：**加速比仅 0.32× / 0.35×**（GPU 更慢），
+远低于 §P3 门槛「端到端 ≥1.5×」——每次调用完整 alloc→HtoD→launch→sync→DtoH→free，
+传输（~67MB/调用）+ 同步开销主导，与 §33/§48 内存带宽瓶颈结论一致。§P3/§P4 关闭为
+「已探针评估、不实施」；GPU 路径保留为「能力保留」，CPU 为默认且唯一实用后端。
+
 ### P5：AMD HIP/ROCm 与 Vulkan/wgpu
 
 - Linux/ROCm 先验证 HIP；

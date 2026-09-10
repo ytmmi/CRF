@@ -2676,3 +2676,38 @@ SATD 收益（+6.8%/+7.1%）未兑现，反而字节劣化（+1.69%/+1.50%）—
 **裁决——证伪，不实施**：整体净收益 **−0.61%**（即使仅对 Y 应用也仅 −1.62%），
 低于 §4.6 的 3% 门槛；建议 9 关闭为「已探针评估、不实施」，探针
 `--probe-planar-band-mode` 保留为回归锚点。
+
+## 55. GPU kernel 端到端加速比探针（P3/P4）：证伪不实施（2026-09-10）
+
+**目标**：闭环性能优化规划 §P3（GPU 抽象与 Hybrid 探针）/§P4（NVIDIA CUDA）——
+对现有 CUDA kernel（`diff_i32` / `rct_forward`）做 CPU vs GPU 端到端对拍，回答 P3
+门槛「端到端 ≥1.5×」是否达成。
+
+**环境**：NVIDIA GeForce RTX 4060 Laptop（8GB，驱动 610.88，compute 8.9）；
+`crf_cuda.dll`（内嵌 PTX，Driver API 动态加载 nvcuda.dll）已构建。
+
+**探针**（`performance/probe_gpu_kernel.rs`，`--probe-gpu-kernel`）：对
+1024×1820×3 分量（5,591,040 i32）分别测 CPU（AVX2）与 GPU（含完整 device 分配 →
+HtoD → launch → sync → DtoH → 释放）的 p50 耗时（5 轮中位），并校验逐位一致。
+
+**实测**：
+
+| kernel | CPU p50 | GPU p50 | 加速比 | 一致 |
+|---|---:|---:|---:|---:|
+| diff_i32 | 3.72 ms | 11.60 ms | **0.32×** | ✅ |
+| rct_forward | 2.08 ms | 6.03 ms | **0.35×** | ✅ |
+
+**根因**：
+1. 现有 GPU 实现每次调用都完整 alloc→HtoD→launch→sync→DtoH→free，无缓冲复用/
+   异步/双缓冲；diff 单次传输约 67MB（2 入 1 出 ×22MB），PCIe + 同步开销主导。
+2. 数据规模（单帧 5.6M i32）不足以隐藏传输/启动开销——与 §33/§48「内存带宽瓶颈」
+   结论一致；CPU AVX2 在 2~4ms 内完成，GPU 传输已 4ms+。
+3. 即使按 §P4 规划加异步/双缓冲，diff/rct 为独立无重叠操作，传输下限（~4ms）
+   仍使加速比 <1.5×。
+
+**裁决——证伪，不实施**：
+1. GPU 端到端 0.32~0.35×，远低于 P3 门槛（≥1.5×）；§P3/§P4 关闭为「已探针评估、
+   不实施」；
+2. `crf_cuda.dll` 与 GPU 分派路径（`backend/gpu/*`、`backend/ops.rs`）保留为
+   「能力保留」（同 §33 先例），CPU 为默认且唯一实用后端；
+3. 未来若出现「超大图/超长序列批量」且单次传输可摊销到足够计算量的场景，可复评。
