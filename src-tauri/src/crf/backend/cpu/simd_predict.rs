@@ -15,6 +15,7 @@
 //! 与 Rust 整数除法的截断舍入逐位一致（SIMD 只有算术右移 floor 语义，
 //! 故用「负值加偏置」修正）。
 
+#[cfg(target_arch = "x86_64")]
 use super::simd::has_avx2;
 
 /// 对 components==1 平面执行 SIMD 预测。返回 true 表示已写入 `out`；
