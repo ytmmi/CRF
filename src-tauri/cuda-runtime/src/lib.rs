@@ -7,16 +7,23 @@
 //! on the target machine. The application distributes this DLL next to its
 //! executable and falls back to CPU when it cannot be loaded or executed.
 
+#[cfg(windows)]
 use std::ffi::{c_char, c_void, CString};
+#[cfg(windows)]
 use std::ptr;
+#[cfg(windows)]
 use std::sync::{Mutex, OnceLock};
 
 type R = i32;
+#[cfg(windows)]
 type Dev = i32;
+#[cfg(windows)]
 type DevPtr = u64;
+#[cfg(windows)]
 type Handle = *mut c_void;
 const OK: R = 0;
 
+#[cfg(windows)]
 const PTX: &[u8] = br#".version 7.0
 .target sm_50
 .address_size 64
