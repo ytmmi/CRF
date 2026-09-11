@@ -1,11 +1,11 @@
-# CRF - 差分图片无损压缩查看器
+# CRF - 差分图片压缩编解码器
 
 <p align="center">
   <img src="docs/icon.png" alt="CRF Logo" width="128" height="128">
 </p>
 
 <p align="center">
-  <strong>面向二次元插画差分场景的跨平台无损/有损压缩工具（纯 Rust CLI）</strong>
+  <strong>CRF（Compressing Residual Frames）：面向二次元插画差分场景的跨平台无损/有损压缩编解码器（纯 Rust CLI）</strong>
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
 
 ## 版本说明
 
-**当前版本：`0.3.4.5`**
+**当前版本：`0.3.4.6`**
 
 版本号采用四段式 `a.b.c.d` 命名规则：
 
@@ -36,8 +36,8 @@
 每次 git push 前必须递增版本号（禁止同一版本号重复推送），变更属于哪一档就递增
 对应段位并清零右侧所有段位。完整规则见 [docs/project-standards.md §13](docs/project-standards.md)。
 
-> `Cargo.toml` 遵循三位 semver 同步为 `0.3.4`（省略 `d`）；完整四位 `0.3.4.5`
-> 通过 `crf-viewer --version` 显示，git tag 发布使用 `v0.3.4.5`。
+> `Cargo.toml` 遵循三位 semver 同步为 `0.3.4`（省略 `d`）；完整四位 `0.3.4.6`
+> 通过 `crf-viewer --version` 显示，git tag 发布使用 `v0.3.4.6`。
 
 ---
 
@@ -47,15 +47,14 @@
 
 - **差分图片处理**：批量接口支持 2~50 张差分图；流式接口支持超过 50 帧的序列
 - **无损压缩**：基于 H.264 算法的完全无损压缩，保证像素级精确还原
-- **CRF 格式支持**：自研 `.crf` (Compressing Residual Frames) 轻量级格式
+- **CRF 格式（Compressing Residual Frames）**：自研 `.crf` 轻量级编解码格式
 - **高速编解码**：针对短序列优化，编解码延迟低于 100ms/帧
 - **多平台支持**：Windows、macOS、Linux 全平台覆盖
 
-### 查看功能
+### 编解码能力
 
-> ⚠️ **当前项目为纯 CLI**：仓库没有 React/Tauri 前端源码，以下查看功能尚未实现。
-> 命令行提供编解码、元数据 dump、基准与探针；图像序列通过 `--test` 集成测试路径
-> 做端到端校验。
+> **纯 CLI 编解码器**：仓库没有 React/Tauri 前端源码。命令行提供编码、解码、
+> 元数据 dump、基准与探针；图像序列通过 `--test` 集成测试路径做端到端校验。
 
 ### 压缩特性
 

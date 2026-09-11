@@ -4,7 +4,7 @@ name = "crf-viewer"
 # 版本号命名规则见 docs/project-standards.md §13;每次 git push 前必须递增。
 version = "0.3.4"
 edition = "2021"
-description = "CRF - Diff Image Lossless Compression Viewer"
+description = "CRF (Compressing Residual Frames) - Differential Image Compression Codec"
 
 [workspace]
 members = [".", "cuda-runtime"]

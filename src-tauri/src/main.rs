@@ -10,7 +10,7 @@ use std::io::BufReader;
 /// 项目正式版本号(四位 `a.b.c.d`),规则见 docs/project-standards.md §13。
 /// Cargo.toml 的三位 semver(`a.b.c`)与 `d` 段(bug 修复位)合并而来;
 /// 升级时须与 Cargo.toml 及项目标准同步。
-pub const APP_VERSION: &str = "0.3.4.5";
+pub const APP_VERSION: &str = "0.3.4.6";
 
 fn main() {
     // 检查命令行参数，决定运行模式
