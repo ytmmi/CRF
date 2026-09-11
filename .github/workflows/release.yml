@@ -48,32 +48,30 @@ jobs:
 
       - name: 按平台打包
         id: package
-        shell: bash
+        shell: pwsh
         run: |
-          case "${{ matrix.os }}" in
-            windows-latest)
-              mkdir -p staging
-              cp src-tauri/target/release/crf-viewer.exe staging/
-              cp src-tauri/target/release/crf_cuda.dll staging/
-              ARCHIVE="crf-viewer-windows.zip"
-              (cd staging && zip -r "../${ARCHIVE}" .)
-              ;;
-            ubuntu-latest)
-              mkdir -p staging
-              cp src-tauri/target/release/crf-viewer staging/
-              cp src-tauri/target/release/libcrf_cuda.so staging/
-              ARCHIVE="crf-viewer-linux.tar.gz"
-              tar -czf "${ARCHIVE}" -C staging .
-              ;;
-            macos-latest)
-              mkdir -p staging
-              cp src-tauri/target/release/crf-viewer staging/
-              cp src-tauri/target/release/libcrf_cuda.dylib staging/
-              ARCHIVE="crf-viewer-macos.tar.gz"
-              tar -czf "${ARCHIVE}" -C staging .
-              ;;
-          esac
-          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          switch ('${{ matrix.os }}') {
+            'windows-latest' {
+              Copy-Item src-tauri/target/release/crf-viewer.exe staging/
+              Copy-Item src-tauri/target/release/crf_cuda.dll staging/
+              Compress-Archive -Path staging/* -DestinationPath crf-viewer-windows.zip -Force
+              $archive = 'crf-viewer-windows.zip'
+            }
+            'ubuntu-latest' {
+              Copy-Item src-tauri/target/release/crf-viewer staging/
+              Copy-Item src-tauri/target/release/libcrf_cuda.so staging/
+              tar -czf crf-viewer-linux.tar.gz -C staging .
+              $archive = 'crf-viewer-linux.tar.gz'
+            }
+            default {
+              Copy-Item src-tauri/target/release/crf-viewer staging/
+              Copy-Item src-tauri/target/release/libcrf_cuda.dylib staging/
+              tar -czf crf-viewer-macos.tar.gz -C staging .
+              $archive = 'crf-viewer-macos.tar.gz'
+            }
+          }
+          "archive=$archive" >> $env:GITHUB_OUTPUT
 
       - name: 上传归档到 GitHub Release
         uses: softprops/action-gh-release@v2
