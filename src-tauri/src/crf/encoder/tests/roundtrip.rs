@@ -1,11 +1,13 @@
 //! 基础编解码往返测试（golomb / banded / palette / planar）
 
 use crate::crf::core::color::rct::rct_forward;
-use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
+use crate::crf::core::domain::{
+    ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode,
+};
 
-use super::super::frame::candidate::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
 use super::super::banded::encode_banded_payload;
 use super::super::encode_sequence;
+use super::super::frame::candidate::{encode_frame_adaptive, ADAPTIVE_CANDIDATES};
 use super::super::frame::{assemble_frame, encode_frame_inner, FrameQuant};
 use super::super::planar::encode_planar_payload;
 use super::{create_test_frames, indices_only, BAND_HEIGHT_ALT_TEST};
@@ -110,7 +112,6 @@ fn test_banded_payload_roundtrip() {
 /// 且大图平坦场景下编码器竞争可产出 coding_params=64 的帧。
 #[test]
 fn test_banded_payload_roundtrip_height64() {
-    use crate::crf::core::bitstream::constants::BAND_HEIGHT;
     let width = 48usize;
     let height = 128usize; // 恰好 2 个 64 行条带
     let mut pixels = vec![0i32; width * height];
@@ -236,9 +237,11 @@ fn test_palette_copy_above_benefit() {
 
     // 直接对比两种索引流编码的载荷大小
     let payload_v2 =
-        crate::crf::encoder::frame::candidate::test_hooks::encode_palette_payload_for_test(&pixels, width)
-            .unwrap()
-            .unwrap();
+        crate::crf::encoder::frame::candidate::test_hooks::encode_palette_payload_for_test(
+            &pixels, width,
+        )
+        .unwrap()
+        .unwrap();
     let baseline = crate::crf::encoder::frame::candidate::test_hooks::palette_index_baseline_size(
         &indices_only(&pixels),
     );

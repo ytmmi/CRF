@@ -330,12 +330,7 @@ pub fn run(root: &str) -> Result<(), String> {
             };
             println!(
                 "{:<14} {:>4} {:>8} {:>12} {:>12} {:>8.1}",
-                name,
-                fi,
-                cc_show,
-                best,
-                dp_show,
-                gain_pct
+                name, fi, cc_show, best, dp_show, gain_pct
             );
         }
     }
@@ -351,9 +346,7 @@ pub fn run(root: &str) -> Result<(), String> {
     println!("色数 ≤{MAX_COLORS} 可行帧: {feasible_frames}/{total_frames}");
     println!("delta 估算 < 最优候选: {win_frames} 帧");
     println!("收益 ≥{GAIN_THRESHOLD_PCT}%: {ge3_frames} 帧");
-    println!(
-        "整体字节: 最优候选 {sum_best} → 候选竞争兜底 {sum_min}（{overall_gain:+.2}%）"
-    );
+    println!("整体字节: 最优候选 {sum_best} → 候选竞争兜底 {sum_min}（{overall_gain:+.2}%）");
     println!(
         "判定: {}",
         if overall_gain >= GAIN_THRESHOLD_PCT && ge3_frames > 0 {

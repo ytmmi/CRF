@@ -1,6 +1,6 @@
-use crate::crf::error::CrfResult;
 use crate::crf::core::entropy::golomb::{adaptive_k, best_k_by_histogram};
 use crate::crf::core::entropy::scan::zigzag_encode;
+use crate::crf::error::CrfResult;
 
 /// RLE+Golomb 混合编码器
 ///
@@ -402,7 +402,7 @@ mod tests {
             {
                 let mut v = Vec::new();
                 for run in [1usize, 2, 3, 55, 56, 57, 4096, 70000] {
-                    v.extend(std::iter::repeat(0).take(run));
+                    v.extend(std::iter::repeat_n(0, run));
                     v.push(((rnd() % 200) as i32) - 100);
                 }
                 v
@@ -417,7 +417,7 @@ mod tests {
                     }
                 })
                 .collect(),
-            (0..2000).map(|i| (i % 7 - 3) as i32).collect(),
+            (0..2000).map(|i| i % 7 - 3).collect(),
             vec![i32::MIN / 2, i32::MAX / 2, -1, 1, 0],
         ];
 

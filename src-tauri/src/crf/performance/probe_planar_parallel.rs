@@ -384,7 +384,11 @@ pub fn run(dir: &str) -> Result<(), String> {
             );
             println!(
                 "调度字节透明 B==A2      : {}",
-                if b_bytes == a2_bytes { "是" } else { "否 ⚠" }
+                if b_bytes == a2_bytes {
+                    "是"
+                } else {
+                    "否 ⚠"
+                }
             );
             let gain = 1.0 - ms(b_wall) / ms(a1_total).max(1e-9);
             println!("planar 阶段预估收益      : {:+.1}%", gain * 100.0);

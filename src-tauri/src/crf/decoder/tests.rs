@@ -159,7 +159,7 @@ fn test_lossy_golden_sequence_roundtrip() {
         let mut px = Vec::with_capacity(w as usize * h as usize * 3);
         for y in 0..h {
             for x in 0..w {
-                px.push((((x as i32 + shift * 3) % 200) + 40));
+                px.push(((x as i32 + shift * 3) % 200) + 40);
                 px.push(120 - ((y as i32 + shift) % 80));
                 px.push(((x as i32 * 2 + y as i32 + shift * 5) % 180) + 30);
             }
@@ -227,13 +227,14 @@ fn test_lossy_golden_sequence_roundtrip() {
 /// 本测试手动组装 2 帧文件：
 /// - frame0 = type8 无损 golden（luma=1, chroma=1），RGB 直通（has_rct=false）；
 /// - frame1 = type8 有损差分（luma=2, chroma=3）；
+///
 /// 走 decode_from_bytes → restore_temporal 全链路（文件头/索引/帧头/CRC/分派）。
 #[test]
 fn test_lossy_frame_type8_file_roundtrip() {
     use crate::crf::checksum::crc32;
-    use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FRAME_HEADER_SIZE, HEADER_SIZE};
+    use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, HEADER_SIZE};
     use crate::crf::core::bitstream::header::CrfHeader;
-    use crate::crf::core::domain::{CompressionType, Flags, PredictionMode};
+    use crate::crf::core::domain::CompressionType;
     use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 
     let w = 32u16;
@@ -242,9 +243,9 @@ fn test_lossy_frame_type8_file_roundtrip() {
         let mut px = Vec::with_capacity(w as usize * h as usize * 3);
         for y in 0..h {
             for x in 0..w {
-                px.push((((x as i32 * 5 + y as i32 * 3 + shift) % 200) + 28) as i32);
-                px.push(((x as i32 * 7 - y as i32 * 2 + shift).rem_euclid(180) + 40) as i32);
-                px.push(((x as i32 * 3 + y as i32 * 11) % 220 + 20) as i32);
+                px.push(((x as i32 * 5 + y as i32 * 3 + shift) % 200) + 28);
+                px.push((x as i32 * 7 - y as i32 * 2 + shift).rem_euclid(180) + 40);
+                px.push((x as i32 * 3 + y as i32 * 11) % 220 + 20);
             }
         }
         ImageData {

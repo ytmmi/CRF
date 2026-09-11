@@ -131,7 +131,9 @@ pub(crate) fn encode_sequence_resolved(
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(4_000_000_000);
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let batch_frames = (batch_mem_limit / per_frame_bytes.max(1))
         .clamp(1, frames.len())
         .min(cores);
@@ -341,10 +343,7 @@ pub(crate) fn encode_sequence_resolved(
                     }
                     // P1：原地 RCT——diff_rgb 已是独占缓冲，直接改写省去 rct_forward
                     // 内部的 to_vec 全帧克隆，逐位一致。
-                    crate::crf::core::color::rct::rct_forward_in_place(
-                        &mut diff_rgb,
-                        components,
-                    )?;
+                    crate::crf::core::color::rct::rct_forward_in_place(&mut diff_rgb, components)?;
                     let eff_frame = ImageData {
                         width: frame.width,
                         height: frame.height,
@@ -798,11 +797,7 @@ pub(crate) fn encode_sequence_resolved(
                     0
                 };
                 let golden_ref: Vec<i32> = if lic_a != 0 {
-                    crate::crf::core::illumination::apply_lic_weighted(
-                        &golden_rgb,
-                        lic_a,
-                        lic_b,
-                    )
+                    crate::crf::core::illumination::apply_lic_weighted(&golden_rgb, lic_a, lic_b)
                 } else {
                     golden_rgb.clone()
                 };

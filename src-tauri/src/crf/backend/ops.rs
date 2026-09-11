@@ -60,7 +60,7 @@ fn try_nvidia_sub_i32(a: &[i32], b: &[i32], out: &mut [i32]) -> bool {
 fn try_nvidia_rct_forward(pixels: &mut [i32]) -> bool {
     use std::sync::{Mutex, OnceLock};
     const GPU_THRESHOLD: usize = 1_048_576;
-    if pixels.len() % 3 != 0 || pixels.len() < GPU_THRESHOLD {
+    if !pixels.len().is_multiple_of(3) || pixels.len() < GPU_THRESHOLD {
         return false;
     }
     enum GpuState {
@@ -96,7 +96,7 @@ fn try_nvidia_rct_forward(pixels: &mut [i32]) -> bool {
 fn try_nvidia_rct_inverse(pixels: &mut [i32]) -> bool {
     use std::sync::{Mutex, OnceLock};
     const GPU_THRESHOLD: usize = 1_048_576;
-    if pixels.len() % 3 != 0 || pixels.len() < GPU_THRESHOLD {
+    if !pixels.len().is_multiple_of(3) || pixels.len() < GPU_THRESHOLD {
         return false;
     }
     enum GpuState {
@@ -163,18 +163,8 @@ pub fn soft_threshold_plane(pixels: &mut [i32], t: i32) {
 
 /// 固定步长/偏置的批量死区量化，输出有符号 level。
 #[inline]
-pub fn quantize_levels_biased(
-    values: &[i32],
-    out: &mut [i32],
-    q_step: u8,
-    deadzone_bias: i8,
-) {
-    crate::crf::backend::cpu::simd::quantize_levels_biased(
-        values,
-        out,
-        q_step,
-        deadzone_bias,
-    )
+pub fn quantize_levels_biased(values: &[i32], out: &mut [i32], q_step: u8, deadzone_bias: i8) {
+    crate::crf::backend::cpu::simd::quantize_levels_biased(values, out, q_step, deadzone_bias)
 }
 
 /// CfL 亮度预测扣除：`out[i] = chroma[i] - ((alpha * (y[i] - 128)) >> 4)`
@@ -187,6 +177,23 @@ pub fn cfl_luma_subtract(chroma: &[i32], y: &[i32], alpha: i32, out: &mut [i32])
 #[inline]
 pub fn cfl_luma_add_in_place(plane: &mut [i32], y: &[i32], alpha: i32) {
     crate::crf::backend::cpu::simd::cfl_luma_add_in_place(plane, y, alpha)
+}
+
+/// 帧内预测条带批量（CPU SIMD 运行时 AVX2 分派）。
+/// components==1 且模式受支持时写入 out 并返回 true；否则返回 false，
+/// 由调用方回退标量循环（字节逐位一致）。
+#[inline]
+pub fn predict_plane(
+    pixels: &[i32],
+    out: &mut [i32],
+    width: usize,
+    mode: u8,
+    y_start: usize,
+    y_end: usize,
+) -> bool {
+    crate::crf::backend::cpu::simd_predict::predict_plane_avx2(
+        pixels, out, width, mode, y_start, y_end,
+    )
 }
 
 #[cfg(all(test, feature = "nvidia-cuda"))]

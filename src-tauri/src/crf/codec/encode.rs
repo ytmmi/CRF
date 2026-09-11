@@ -29,6 +29,7 @@ pub struct EncodeRequest {
 ///
 /// 编码完成后的结构化结果。包含产物字节流与诊断信息。
 #[derive(Debug)]
+#[allow(dead_code)] // 报告诊断字段，当前 CLI 入口未读取
 pub struct EncodeReport {
     /// CRF 码流字节
     pub bytes: Vec<u8>,
@@ -51,7 +52,10 @@ pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError>
         .as_ref()
         .map(|v| {
             v.resolve_for_input(crate::crf::core::config::lossy_v2::ResolveContext {
-                components: request.frames.first().map(|f| f.color_format.component_count()),
+                components: request
+                    .frames
+                    .first()
+                    .map(|f| f.color_format.component_count()),
                 frame_count: Some(request.frames.len()),
             })
         })
@@ -62,12 +66,16 @@ pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError>
         .map(|r| r.warnings.iter().map(|w| w.message.clone()).collect())
         .unwrap_or_default();
     // 解析并冻结不可变配置（批量和 streaming 共用同一解析逻辑）
-    let resolved = crate::crf::core::contract::ResolvedConfig::resolve(&request.params, &request.frames)
-        .map_err(super::CodecError::from)?;
+    let resolved =
+        crate::crf::core::contract::ResolvedConfig::resolve(&request.params, &request.frames)
+            .map_err(super::CodecError::from)?;
 
     // 通过 EncodeSession 编排（规划文档 §4.2）；主流程直接消费已解析配置（P3.b 完成）
-    let bytes = crate::crf::encoder::session::session::EncodeSession::encode_sequence(&request.frames, &resolved)
-        .map_err(super::CodecError::from)?;
+    let bytes = crate::crf::encoder::session::session::EncodeSession::encode_sequence(
+        &request.frames,
+        &resolved,
+    )
+    .map_err(super::CodecError::from)?;
 
     Ok(EncodeReport {
         bytes,
@@ -81,6 +89,7 @@ pub fn encode(request: EncodeRequest) -> Result<EncodeReport, super::CodecError>
 ///
 /// 写入指定 writer。streaming 路径内存占用 O(golden + 单帧 + 码流)。
 /// 当前转发到批量路径（streaming 语义统一为整改第 6 条，暂未拆分）。
+#[allow(dead_code)] // codec facade 预留流式入口，待接线
 pub fn encode_to_writer(
     request: EncodeRequest,
     writer: &mut impl std::io::Write,

@@ -72,7 +72,8 @@ fn encode_pixel_palette(pixels: &[i32]) -> Option<usize> {
     let mut order: Vec<(i32, i32, i32)> = Vec::new();
     let mut indices: Vec<i32> = Vec::with_capacity(pixels.len() / 3);
     for px in pixels.chunks_exact(3) {
-        let key = ((px[0] as u32 as u64) << 32) | ((px[1] as u32 as u64) << 16) | (px[2] as u32 as u64);
+        let key =
+            ((px[0] as u32 as u64) << 32) | ((px[1] as u32 as u64) << 16) | (px[2] as u32 as u64);
         let next = map.len() as u16;
         match map.get(&key) {
             Some(&ix) => indices.push(ix as i32),

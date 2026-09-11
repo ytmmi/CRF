@@ -14,4 +14,6 @@
 
 pub mod batch;
 pub mod reference;
+#[allow(clippy::module_inception)]
+// session 层内聚命名，保持 encoder::session::session 既有路径契约
 pub mod session;

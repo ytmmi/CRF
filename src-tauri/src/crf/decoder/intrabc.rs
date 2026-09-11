@@ -4,9 +4,9 @@
 //! 编码端保证，此处按同判定防御性校验）；PRED 块从残差流消费
 //! BS²·comp 个样本并逐像素逆预测（邻居取自含已填充 COPY 块的缓冲）。
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::domain::PredictionMode;
 use crate::crf::core::prediction::intra::predict_at;
+use crate::crf::error::{CrfError, CrfResult};
 
 const BS: usize = 8;
 

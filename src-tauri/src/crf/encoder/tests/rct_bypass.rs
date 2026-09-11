@@ -1,6 +1,6 @@
 //! v1.13 RCT 首帧自适应（首帧 YCoCg-R vs RGB 直通双路竞争）
 
-use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
+use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
 
 use super::super::encode_sequence;
 
@@ -32,7 +32,7 @@ fn test_rct_first_frame_bypass_pure_color() {
         [
             40 + (x * y * 7 % 180) + sat,
             0,
-            (x * 13 + y * 29 % 170) as i32 % 200 + (sat * 2).min(55),
+            (x * 13 + y * 29 % 170) % 200 + (sat * 2).min(55),
         ]
     };
     let mut f0 = Vec::with_capacity(w as usize * h as usize * 3);

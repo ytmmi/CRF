@@ -29,6 +29,7 @@ impl LossyOptionsV2 {
         Ok(value)
     }
 
+    #[allow(dead_code)] // V2 JSON 预留序列化 API，待 CLI/前端接线
     pub fn to_json_pretty(&self) -> Result<String, ConfigError> {
         serde_json::to_string_pretty(self).map_err(|e| ConfigError {
             field: "lossy",

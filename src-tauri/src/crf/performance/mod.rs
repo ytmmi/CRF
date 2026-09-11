@@ -22,6 +22,8 @@ pub mod probe_dct_simd;
 /// probe_delta_palette：JPEG-XL 式 delta palette（§8.4）收益探针——像素级色数
 /// + delta 条目编码 + 索引流竞争，与当前最优候选逐帧对比（不写码流）
 pub mod probe_delta_palette;
+/// probe_error_separation：首帧误差分离(§9 建议 3/10,JPEG2000 嵌入式)收益探针
+pub mod probe_error_separation;
 /// probe_first_frame：首帧内部候选阶段 profile 探针
 pub mod probe_first_frame;
 /// probe_first_frame_bypass：首帧 RCT 双路竞争的 RGB 直通胜出率 + G 零值特征探针
@@ -39,10 +41,14 @@ pub mod probe_lic;
 pub mod probe_lic_ab;
 /// probe_ma_tree：MA 树叶数分布与直方图共享(§8.2)可行性探针
 pub mod probe_ma_tree;
-/// probe_error_separation：首帧误差分离(§9 建议 3/10,JPEG2000 嵌入式)收益探针
-pub mod probe_error_separation;
 /// probe_monotonicity：DAT.1 跨内容单调性验收探针
 pub mod probe_monotonicity;
+/// probe_palette：palette 色数分布（分量级/像素级 + RCT 残差域可行性）探针
+pub mod probe_palette;
+/// probe_palette_dither：JPEG-XL 式抖动调色板收益探针（§56 低优先候选）
+pub mod probe_palette_dither;
+/// probe_palette_mtf：调色板排序 + MTF 编码收益探针（§56 新候选）
+pub mod probe_palette_mtf;
 /// probe_planar：planar 剪枝信号（色度平坦度）的 profile 验证探针
 pub mod probe_planar;
 /// probe_planar_band_mode：planar 子平面条带级模式切换收益探针（§9 建议 9）
@@ -54,17 +60,11 @@ pub mod probe_planar_candidate;
 pub mod probe_planar_parallel;
 /// probe_planar_sub：planar 子平面次级候选胜出频率探针（profile 验证）
 pub mod probe_planar_sub;
-/// probe_palette：palette 色数分布（分量级/像素级 + RCT 残差域可行性）探针
-pub mod probe_palette;
-/// probe_palette_mtf：调色板排序 + MTF 编码收益探针（§56 新候选）
-pub mod probe_palette_mtf;
-/// probe_palette_dither：JPEG-XL 式抖动调色板收益探针（§56 低优先候选）
-pub mod probe_palette_dither;
+/// probe_rest_frames：差分帧候选 profile 探针（胜出率 + 阶段耗时分离）
+pub mod probe_rest_frames;
 /// probe_ringing：P4.7 前置验证——ringing 信号（Laplacian 高响应）与
 /// edge 分类的独立性探针（S0）
 pub mod probe_ringing;
-/// probe_rest_frames：差分帧候选 profile 探针（胜出率 + 阶段耗时分离）
-pub mod probe_rest_frames;
 /// probe_valid_set：扩展验证集质量趋势探针（30 张分层首帧，§6.1）
 pub mod probe_valid_set;
 pub mod telemetry;

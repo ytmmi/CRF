@@ -9,7 +9,7 @@
 //! **迁移说明（P4）**：RC 常量（RC_BITS/RC_MOVE/RC_TOP/INIT_PROB）统一
 //! 由 `core/entropy/cabac.rs` 提供。
 
-use crate::crf::core::entropy::cabac::{RC_BITS, RC_MOVE, RC_TOP, INIT_PROB};
+use crate::crf::core::entropy::cabac::{INIT_PROB, RC_BITS, RC_MOVE, RC_TOP};
 
 // ===== Range Coder 解码端 =====
 

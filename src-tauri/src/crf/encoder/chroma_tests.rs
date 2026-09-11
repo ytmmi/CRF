@@ -8,8 +8,8 @@
 //!    （单元边界见 core/transform/quant.rs::tests），本模块验证其经完整管线
 //!    （planar 三平面候选参与竞争）的端到端自洽。
 
-use crate::crf::LossyOptionsV2Builder;
 use crate::crf::core::domain::ColorFormat;
+use crate::crf::LossyOptionsV2Builder;
 use crate::crf::{self, EncodeParams, ImageData, PredictionMode};
 
 fn synthetic_sequence(frames: usize, w: u16, h: u16) -> Vec<ImageData> {
@@ -68,7 +68,12 @@ fn p1_chroma_half_res_decoupled_from_step_q95() {
     // 解耦后 chroma_half_res=true 应真实进入 planar 候选。
     let originals = synthetic_sequence(3, 64, 48);
     let params = EncodeParams {
-        lossy: Some(LossyOptionsV2Builder::preset(9500).chroma_sampling(crate::crf::core::config::lossy_v2::ChromaSampling::Cs420).build().unwrap()),
+        lossy: Some(
+            LossyOptionsV2Builder::preset(9500)
+                .chroma_sampling(crate::crf::core::config::lossy_v2::ChromaSampling::Cs420)
+                .build()
+                .unwrap(),
+        ),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q95 编码失败");
@@ -87,7 +92,12 @@ fn p1_chroma_half_res_disabled_explicitly() {
     // 显式关闭半分辨率：参数独立可控性的另一面
     let originals = synthetic_sequence(3, 64, 48);
     let params = EncodeParams {
-        lossy: Some(LossyOptionsV2Builder::preset(7500).chroma_sampling(crate::crf::core::config::lossy_v2::ChromaSampling::Cs444).build().unwrap()),
+        lossy: Some(
+            LossyOptionsV2Builder::preset(7500)
+                .chroma_sampling(crate::crf::core::config::lossy_v2::ChromaSampling::Cs444)
+                .build()
+                .unwrap(),
+        ),
         ..base_params()
     };
     let encoded = crf::encode_sequence(&originals, &params).expect("q75 编码失败");

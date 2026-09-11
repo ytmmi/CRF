@@ -16,10 +16,26 @@ use crate::crf::performance::bench::load_frames;
 fn leaf_histogram(tree: &MaTree, pixels: &[i32], stride: usize) -> Vec<usize> {
     let mut hist: HashMap<usize, usize> = HashMap::new();
     for i in 0..pixels.len() {
-        let l = if i >= 1 { pixels[i - 1].unsigned_abs() } else { 0 };
-        let t = if i >= stride { pixels[i - stride].unsigned_abs() } else { 0 };
-        let tl = if i > stride { pixels[i - stride - 1].unsigned_abs() } else { 0 };
-        let tr = if i + 1 >= stride { pixels[i + 1 - stride].unsigned_abs() } else { 0 };
+        let l = if i >= 1 {
+            pixels[i - 1].unsigned_abs()
+        } else {
+            0
+        };
+        let t = if i >= stride {
+            pixels[i - stride].unsigned_abs()
+        } else {
+            0
+        };
+        let tl = if i > stride {
+            pixels[i - stride - 1].unsigned_abs()
+        } else {
+            0
+        };
+        let tr = if i + 1 >= stride {
+            pixels[i + 1 - stride].unsigned_abs()
+        } else {
+            0
+        };
         let leaf = tree.walk(l, t, tl, tr);
         *hist.entry(leaf).or_insert(0) += 1;
     }
@@ -96,8 +112,8 @@ pub fn run(root: &str) -> Result<(), String> {
             // 最大单叶占比
             let total_samples: usize = hist.iter().sum();
             if total_samples > 0 {
-                let max_share = hist.iter().max().copied().unwrap_or(0) as f64
-                    / total_samples as f64;
+                let max_share =
+                    hist.iter().max().copied().unwrap_or(0) as f64 / total_samples as f64;
                 if max_share > worst_skew.0 {
                     worst_skew = (max_share, n_leaves);
                 }
@@ -126,7 +142,11 @@ pub fn run(root: &str) -> Result<(), String> {
     }
 
     println!("\n--- 叶使用特征 ---");
-    println!("最大单叶占比: {:.1}%（叶数 {}）", worst_skew.0 * 100.0, worst_skew.1);
+    println!(
+        "最大单叶占比: {:.1}%（叶数 {}）",
+        worst_skew.0 * 100.0,
+        worst_skew.1
+    );
     println!(
         "最小非零叶占比: {:.2}%（叶数 {}, 组 {}）",
         min_leaf_share * 100.0,
@@ -144,7 +164,10 @@ pub fn run(root: &str) -> Result<(), String> {
     if avg_leaves < 4.0 {
         println!("判定: 平均叶数 <4，直方图共享收益窗口小——维持独立概率槽位");
     } else if worst_skew.0 > 0.8 {
-        println!("判定: 存在极端单叶主导（>{:.0}%），共享需谨慎避免稀释主导叶", worst_skew.0 * 100.0);
+        println!(
+            "判定: 存在极端单叶主导（>{:.0}%），共享需谨慎避免稀释主导叶",
+            worst_skew.0 * 100.0
+        );
     } else {
         println!("判定: 叶数充足且分布不过度偏斜——直方图共享有实施价值，需进一步对比压缩率");
     }

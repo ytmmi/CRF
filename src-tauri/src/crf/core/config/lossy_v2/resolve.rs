@@ -5,6 +5,7 @@ use super::types::*;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResolveContext {
     pub components: Option<usize>,
+    #[allow(dead_code)] // 预留：序列帧数上下文，待序列级解析接入
     pub frame_count: Option<usize>,
 }
 

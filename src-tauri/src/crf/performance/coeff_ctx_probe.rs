@@ -625,7 +625,7 @@ mod tests {
             .map(|_| {
                 let mut arr = [0i32; 64];
                 for v in arr.iter_mut() {
-                    *v = if xorshift32(&mut st) % 3 == 0 {
+                    *v = if xorshift32(&mut st).is_multiple_of(3) {
                         (xorshift32(&mut st) % 9) as i32 - 4
                     } else {
                         0
@@ -658,7 +658,7 @@ mod tests {
         let all_zigzag = [ScanMajor::Zigzag; N_MODES];
         let baseline = encode_blocks(&blocks, 64, 64, &all_zigzag, false);
         let v3 = encode_blocks(&blocks, 64, 64, &mode_scan_a(), true);
-        assert!(baseline.len() > 0);
-        assert!(v3.len() > 0);
+        assert!(!baseline.is_empty());
+        assert!(!v3.is_empty());
     }
 }

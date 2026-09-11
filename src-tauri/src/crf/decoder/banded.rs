@@ -1,6 +1,6 @@
 use crate::crf::core::domain::PredictionMode;
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::prediction::intra::undo_prediction_range;
+use crate::crf::error::{CrfError, CrfResult};
 
 use super::rle_golomb;
 /// 解码条带级自适应帧载荷（frame_type=2）并逐条带撤销预测

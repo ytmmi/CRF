@@ -170,9 +170,7 @@ pub fn run(root: &str) -> Result<(), String> {
         0.0
     };
     println!("帧数: {frames_seen}  改善帧数: {frames_improved}");
-    println!(
-        "总基线 SAD: {total_base}  总 LIC SAD: {total_lic}  总体下降: {total_pct:.1}%"
-    );
+    println!("总基线 SAD: {total_base}  总 LIC SAD: {total_lic}  总体下降: {total_pct:.1}%");
     if total_pct >= 3.0 {
         println!("判定: LIC 收益 ≥3% 门槛 → 值得实现帧级全局 a,b 信令(2 字节定点,破坏式更新许可)");
     } else {

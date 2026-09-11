@@ -3,8 +3,8 @@
 //! 3 上下文（nonzero/run/level_q）+ 直通余数/sign。
 //! 解码每块 zigzag 系数 → 逆 run-level → 按模式重建。
 
-use crate::crf::decoder::rle_cabac::RangeDecoder;
 use crate::crf::core::entropy::cabac::INIT_PROB;
+use crate::crf::decoder::rle_cabac::RangeDecoder;
 
 pub struct CoeffCABACDecoder<'a> {
     rc: RangeDecoder<'a>,

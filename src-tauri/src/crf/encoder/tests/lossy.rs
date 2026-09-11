@@ -1,6 +1,6 @@
 //! 有损模式误差边界、golden 还原、噪声感知 A/B 测试
 
-use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData, PredictionMode};
+use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
 use crate::crf::LossyOptionsV2Builder;
 
 use super::super::encode_sequence;
@@ -19,8 +19,8 @@ fn test_lossy_mode_error_bound_and_size() {
         .map(|fi| {
             let pixels: Vec<i32> = (0..64 * 64 * 3)
                 .map(|j| {
-                    let base = ((j * 31) % 211) as i32 - 105;
-                    let delta = (((j * 7 + fi * 13) % 9) as i32) - 4;
+                    let base = ((j * 31) % 211) - 105;
+                    let delta = ((j * 7 + fi * 13) % 9) - 4;
                     base + delta
                 })
                 .collect();
@@ -39,9 +39,16 @@ fn test_lossy_mode_error_bound_and_size() {
         block_size: None,
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
-        lossy: q.map(|q| LossyOptionsV2Builder::preset(q as u16 * 100)
-            .chroma_sampling(if half_res { crate::crf::core::config::lossy_v2::ChromaSampling::Cs420 } else { crate::crf::core::config::lossy_v2::ChromaSampling::Cs444 })
-            .build().unwrap()),
+        lossy: q.map(|q| {
+            LossyOptionsV2Builder::preset(q as u16 * 100)
+                .chroma_sampling(if half_res {
+                    crate::crf::core::config::lossy_v2::ChromaSampling::Cs420
+                } else {
+                    crate::crf::core::config::lossy_v2::ChromaSampling::Cs444
+                })
+                .build()
+                .unwrap()
+        }),
         // 对比测试启用原始帧输入：预差分序列在量化后仍保留链式
         // 累积噪声（残差能量不降反升），无法体现有损的滤噪收益。
         input_original_frames: true,
@@ -233,7 +240,7 @@ fn test_first_frame_dual_path_competition() {
 fn test_noise_adaptive_lossy_ab() {
     let w = 48u16;
     let h = 96u16; // 3 个 32 行条带
-    let mut state: u64 = 0x0A11CE_5EED_BEEF;
+    let _state: u64 = 0x000A_11CE_5EED_BEEF;
     let noise = |state: &mut u64| -> i32 {
         *state = state
             .wrapping_mul(6364136223846793005)
@@ -274,7 +281,9 @@ fn test_noise_adaptive_lossy_ab() {
         prediction_mode: PredictionMode::Average,
         adaptive_prediction: true,
         lossy: q.map(|q| {
-            let mut o = LossyOptionsV2Builder::preset(q as u16 * 100).build().unwrap();
+            let mut o = LossyOptionsV2Builder::preset(q as u16 * 100)
+                .build()
+                .unwrap();
             if noise_on {
                 o.perceptual.noise_mode = crate::crf::core::config::lossy_v2::NoiseMode::Manual;
                 o.perceptual.noise_tau_x100 = Some(150);

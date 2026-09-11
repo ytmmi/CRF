@@ -22,12 +22,15 @@ pub struct KernelLossyConfig {
     pub edge_protection_x100: u16,
     pub reference_mode: ReferenceModeV2,
     pub change_mask: ToolMode,
+    #[allow(dead_code)] // V2 预留：运动补偿工具开关，待接入
     pub motion_mode: MotionModeV2,
+    #[allow(dead_code)]
     pub motion_range: u8,
     pub scene_cut: SceneCutModeV2,
     pub scene_cut_threshold_x1000: u16,
     pub anchor_interval: u16,
     pub rate: RateControlV2,
+    #[allow(dead_code)] // V2 预留：调色板工具开关，待接入
     pub palette: ToolMode,
     pub q95_perceptual: bool,
 }
@@ -90,10 +93,9 @@ impl KernelLossyConfig {
             FirstFrameMode::MatchSequence => global_step,
             FirstFrameMode::QualityOffset => quality_step(
                 base_quality
-                    .ok_or_else(|| ConfigError::new(
-                        "firstFrame.mode",
-                        "quality-offset requires a preset base",
-                    ))?
+                    .ok_or_else(|| {
+                        ConfigError::new("firstFrame.mode", "quality-offset requires a preset base")
+                    })?
                     .saturating_add_signed(effective.first_frame.quality_offset_x100.unwrap_or(0))
                     .clamp(100, 10000),
             ),
@@ -104,10 +106,12 @@ impl KernelLossyConfig {
         } else {
             quality_step(
                 base_quality
-                    .ok_or_else(|| ConfigError::new(
-                        "temporal.anchorQualityOffsetX100",
-                        "a non-zero anchor quality offset requires a preset base",
-                    ))?
+                    .ok_or_else(|| {
+                        ConfigError::new(
+                            "temporal.anchorQualityOffsetX100",
+                            "a non-zero anchor quality offset requires a preset base",
+                        )
+                    })?
                     .saturating_add_signed(effective.temporal.anchor_quality_offset_x100)
                     .clamp(100, 10000),
             )
@@ -138,10 +142,7 @@ impl KernelLossyConfig {
             motion_mode: effective.temporal.motion_mode,
             motion_range: effective.temporal.motion_range.unwrap_or(2),
             scene_cut: effective.temporal.scene_cut,
-            scene_cut_threshold_x1000: effective
-                .temporal
-                .scene_cut_threshold_x1000
-                .unwrap_or(500),
+            scene_cut_threshold_x1000: effective.temporal.scene_cut_threshold_x1000.unwrap_or(500),
             anchor_interval: effective.temporal.anchor_interval.unwrap_or(0),
             rate: effective.rate,
             palette,

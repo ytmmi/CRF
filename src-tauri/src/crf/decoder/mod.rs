@@ -37,9 +37,9 @@ mod tests;
 
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::bitstream::constants::{FOOTER_SIZE, HEADER_SIZE};
 use crate::crf::core::domain::DecodeResult;
+use crate::crf::error::{CrfError, CrfResult};
 
 // 测试/对称 API 路径依赖的转发（encoder 测试与集成测试使用）
 #[allow(unused_imports)]
@@ -82,9 +82,7 @@ pub fn decode_from_file(reader: &mut (impl Read + Seek)) -> CrfResult<DecodeResu
 
     // 验证 CRC32（如果存在文件尾），使用 container::footer（P2 容器层拆分）
     if file_size >= (HEADER_SIZE + FOOTER_SIZE) as u64 {
-        if let Err(e) = container::footer::verify_file_crc(reader) {
-            return Err(e);
-        }
+        container::footer::verify_file_crc(reader)?;
     }
 
     // 读入全部字节后交给会话层编排（解码语义与 decode_bytes 完全一致）

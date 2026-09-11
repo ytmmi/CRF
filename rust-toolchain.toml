@@ -1,0 +1,10 @@
+# CRF Rust 工具链锁定（可复现构建）
+#
+# 依据 docs/project-standards.md §9（构建流程）与 §10（代码质量）。
+# 锁定具体版本而非 stable，避免 stable 漂移在 CI 中引入新的 clippy lint，
+# 导致门禁非预期变红。升级工具链时须同步更新本文件与 .github/workflows/。
+#
+# 本地与 CI 均使用该版本；`rustup show` 会读取本文件自动切换。
+[toolchain]
+channel = "1.96.1"
+components = ["rustfmt", "clippy"]

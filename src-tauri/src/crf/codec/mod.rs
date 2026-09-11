@@ -27,7 +27,7 @@ pub mod error;
 #[allow(unused_imports)]
 pub use decode::{decode_from_bytes, decode_from_reader, DecodeRequest};
 #[allow(unused_imports)]
-pub use encode::{encode, encode_to_writer, EncodeRequest, EncodeReport};
+pub use encode::{encode, encode_to_writer, EncodeReport, EncodeRequest};
 
 // 对外错误类型（公共 API 面）
 #[allow(unused_imports)]

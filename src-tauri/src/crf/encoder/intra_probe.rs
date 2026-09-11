@@ -12,8 +12,8 @@
 //!   "专用系数语法"的方向，与现行通用平面编码（q 倍数域）形成对照；
 //! - 预测一律引用本地重建像素（编码/解码闭环一致，§5-P2 关键约束）。
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::transform::{dct8x8_forward_into, dct8x8_inverse_into};
+use crate::crf::error::{CrfError, CrfResult};
 
 /// 变换块尺寸（v1 固定 8×8）
 const BLK: usize = 8;
@@ -196,10 +196,7 @@ pub fn encode_intra_probe(
                 let mut qres = [0i32; 64];
                 let mut dequant = [0i32; 64];
                 crate::crf::backend::ops::quantize_levels_biased(
-                    &block,
-                    &mut qres,
-                    q_step,
-                    deadzone,
+                    &block, &mut qres, q_step, deadzone,
                 );
                 for (dequantized, &level) in dequant.iter_mut().zip(qres.iter()) {
                     *dequantized = level * q;
@@ -279,7 +276,6 @@ mod tests {
     #[test]
     #[ignore]
     fn p2_probe_vs_adaptive_png1000() {
-        use crate::crf::{self, PredictionMode};
         use crate::test::{collect_png_paths, load_frame_sequence};
 
         let dir = r"E:\CRF\test\png\1000";
@@ -289,7 +285,7 @@ mod tests {
 
         let components = 3usize;
         for qi in [95u8, 90, 75] {
-            let q_step = (((100u16 - qi as u16) + 4) / 5).clamp(1, 20) as u8;
+            let q_step = (100u16 - qi as u16).div_ceil(5).clamp(1, 20) as u8;
             println!("=== q{} (step={}) ===", qi, q_step);
             for (fi, frame) in frames.iter().enumerate().skip(1).take(3) {
                 let diff: Vec<i32> = frame

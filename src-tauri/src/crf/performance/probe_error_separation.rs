@@ -10,7 +10,6 @@
 //! 若前者 < 后者，误差分离（嵌入/渐进式）有净收益，值得进一步实现；
 //! 若 ≥，则两层冗余抵消收益，维持现状。零外部数据集，仅扫 test/png。
 
-use crate::crf::core::color::rct;
 use crate::crf::core::config::lossy_v2::LossyOptionsV2Builder;
 use crate::crf::core::domain::{ColorFormat, CompressionType, EncodeParams, ImageData};
 use crate::crf::decoder::decode_from_bytes;
@@ -159,14 +158,15 @@ pub fn run(root: &str) -> Result<(), String> {
         return Ok(());
     }
     println!("组数: {groups_seen}  误差分离更小组数: {groups_win}");
-    let total_pct = (total_lossy_plus_e as f64 - total_lossless as f64) / total_lossless as f64 * 100.0;
-    println!(
-        "总无损 {total_lossless}  vs  总有损+E {total_lossy_plus_e}  总体差 {total_pct:+.1}%"
-    );
+    let total_pct =
+        (total_lossy_plus_e as f64 - total_lossless as f64) / total_lossless as f64 * 100.0;
+    println!("总无损 {total_lossless}  vs  总有损+E {total_lossy_plus_e}  总体差 {total_pct:+.1}%");
     if total_pct < 0.0 {
         println!("判定: 误差分离总字节更小 → JPEG2000 式分层有价值，可深入实现");
     } else {
-        println!("判定: 误差分离总字节更大 → 两层冗余抵消收益，维持现状（与 §16 方向一致但机制不同）");
+        println!(
+            "判定: 误差分离总字节更大 → 两层冗余抵消收益，维持现状（与 §16 方向一致但机制不同）"
+        );
     }
     Ok(())
 }

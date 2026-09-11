@@ -6,6 +6,9 @@
 //! **迁移状态（P2）**：定义 [`BoundedSlice`] 和 [`BoundedReader`] 类型。
 //! 当前解码器仍使用原始 slice 操作，后续 P2.b 阶段逐步接入本模块。
 
+// P2.b 预留安全读取类型，暂无调用方；契约冻结期允许 dead_code。
+#![allow(dead_code)]
+
 use crate::crf::error::{CrfError, CrfResult};
 
 /// 边界保护的字节切片
@@ -23,9 +26,9 @@ impl<'a> BoundedSlice<'a> {
     ///
     /// 在构造时即校验边界，尽早失败。
     pub fn new(data: &'a [u8], offset: usize, len: usize) -> CrfResult<Self> {
-        let end = offset.checked_add(len).ok_or_else(|| {
-            CrfError::InvalidCodingParams("offset + len 溢出".to_string())
-        })?;
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| CrfError::InvalidCodingParams("offset + len 溢出".to_string()))?;
         if end > data.len() {
             return Err(CrfError::InsufficientData {
                 expected: end,
@@ -70,9 +73,10 @@ impl<'a> BoundedReader<'a> {
 
     /// 读取指定长度的字节
     pub fn read_bytes(&mut self, count: usize) -> CrfResult<&'a [u8]> {
-        let end = self.pos.checked_add(count).ok_or_else(|| {
-            CrfError::InvalidCodingParams("read_bytes 位置溢出".to_string())
-        })?;
+        let end = self
+            .pos
+            .checked_add(count)
+            .ok_or_else(|| CrfError::InvalidCodingParams("read_bytes 位置溢出".to_string()))?;
         if end > self.slice.len {
             return Err(CrfError::InsufficientData {
                 expected: end,

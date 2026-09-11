@@ -197,6 +197,22 @@ cargo test --manifest-path src-tauri/Cargo.toml --features nvidia-cuda `
 
 ---
 
+## CI/CD（GitHub Actions）
+
+仓库使用 GitHub Actions 执行门禁与发布，工作流位于 `.github/workflows/`：
+
+| 工作流 | 触发 | 内容 |
+| :--- | :--- | :--- |
+| `ci.yml` | push 到 `main` / PR | lint（源码行数 → 分层依赖 → `cargo fmt` → `cargo clippy`）+ 三平台 `cargo test` + 三平台 release 构建 |
+| `release.yml` | 推送 `v*` tag | 三平台 release 构建（`--features nvidia-cuda`），打包并创建 GitHub Release |
+
+- 工具链锁定见仓库根 `rust-toolchain.toml`（当前 `1.96.1`），CI 使用同一版本以保证可复现。
+- `check_file_lines.ps1` 的退出码 2（>=800 行预警）在 CI 中视为通过，仅退出码 1（>1000 行）判失败。
+- Clippy 以 `-D warnings` 为硬门禁（既有告警已全部清零；预留 API 以带注释的针对性 allow 标注）。
+- 发布归档遵循 §11.1：Windows 为 `crf-viewer.exe + crf_cuda.dll` 的 zip，Linux/macOS 为二进制 + sidecar 库的 tar.gz。
+
+---
+
 ## 测试说明
 
 ### Rust 测试

@@ -104,7 +104,9 @@ pub fn run(dir: &str) -> Result<(), String> {
         }
         // 默认每组前 2 帧（快速扫描，与 probe_rest_frames 口径一致）；
         // CRF_PROBE_ALL_FRAMES=1 覆盖全部帧（多组时可能超时，建议单组使用）。
-        let all_frames = std::env::var("CRF_PROBE_ALL_FRAMES").map(|v| v == "1").unwrap_or(false);
+        let all_frames = std::env::var("CRF_PROBE_ALL_FRAMES")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let frame_take = if all_frames { usize::MAX } else { 2 };
         groups_seen += 1;
         // 聚合：sub[子平面下标][frame_type] = 胜出次数
@@ -183,13 +185,11 @@ pub fn run(dir: &str) -> Result<(), String> {
 
     println!("\n=== 全组汇总（{groups_seen} 组, {total_sub} 子平面）===");
     let names = ["Y", "Co", "Cg"];
-    let per_plane: [usize; 3] = std::array::from_fn(|pi| {
-        (0..9).map(|t| sub_wins_total[pi][t]).sum()
-    });
+    let per_plane: [usize; 3] =
+        std::array::from_fn(|pi| (0..9).map(|t| sub_wins_total[pi][t]).sum());
     for pi in 0..3 {
         println!("  {} 平面:", names[pi]);
-        for t in 0..9 {
-            let c = sub_wins_total[pi][t];
+        for (t, &c) in sub_wins_total[pi].iter().enumerate() {
             if c > 0 {
                 println!(
                     "    {:<14} {:>3}  ({:>5.1}%)",

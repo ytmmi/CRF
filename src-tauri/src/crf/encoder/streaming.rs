@@ -245,64 +245,63 @@ impl StreamingEncoder {
 
                 // 差分帧编码管线（golden / LIC 共用，与 streaming 既有 golden
                 // 路径逐参对齐）：RCT → band 步长 → 熵编码。入参为 RGB 域差分。
-                let encode_diff =
-                    |diff_rgb: Vec<i32>| -> crate::crf::error::CrfResult<Vec<u8>> {
-                        let mut diff = diff_rgb;
-                        crate::crf::core::color::rct::rct_forward_in_place(
-                            &mut diff,
+                let encode_diff = |diff_rgb: Vec<i32>| -> crate::crf::error::CrfResult<Vec<u8>> {
+                    let mut diff = diff_rgb;
+                    crate::crf::core::color::rct::rct_forward_in_place(&mut diff, components)?;
+                    let fq_band: Vec<u8> = if self.noise_on() || self.activity_on() {
+                        fq_band_steps(
+                            fq_base.step,
+                            &diff,
+                            width,
+                            height,
                             components,
-                        )?;
-                        let fq_band: Vec<u8> = if self.noise_on() || self.activity_on() {
-                            fq_band_steps(
-                                fq_base.step,
-                                &diff,
-                                width,
-                                height,
-                                components,
-                                self.tuning
-                                    .as_ref()
-                                    .expect("lossy config resolved before band quantization"),
-                            )
-                        } else {
-                            Vec::new()
-                        };
-                        let band_ref: super::frame::BandSteps<'_> =
-                            if fq_band.is_empty() { None } else { Some(&fq_band) };
-                        if self.params.adaptive_prediction {
-                            Ok(encode_frame_adaptive(
-                                &ImageData {
-                                    width: frame.width,
-                                    height: frame.height,
-                                    bit_depth: frame.bit_depth,
-                                    color_format: frame.color_format,
-                                    pixels: diff,
-                                },
-                                self.compression_type,
-                                self.header.block_size,
-                                false,
-                                fq_base,
-                                None,
-                                band_ref,
-                            )?
-                            .data)
-                        } else {
-                            Ok(super::encode_frame(
-                                &ImageData {
-                                    width: frame.width,
-                                    height: frame.height,
-                                    bit_depth: frame.bit_depth,
-                                    color_format: frame.color_format,
-                                    pixels: diff,
-                                },
-                                self.compression_type,
-                                self.header.block_size,
-                                self.header.prediction_mode,
-                                false,
-                                fq_base,
-                                None,
-                            )?)
-                        }
+                            self.tuning
+                                .as_ref()
+                                .expect("lossy config resolved before band quantization"),
+                        )
+                    } else {
+                        Vec::new()
                     };
+                    let band_ref: super::frame::BandSteps<'_> = if fq_band.is_empty() {
+                        None
+                    } else {
+                        Some(&fq_band)
+                    };
+                    if self.params.adaptive_prediction {
+                        Ok(encode_frame_adaptive(
+                            &ImageData {
+                                width: frame.width,
+                                height: frame.height,
+                                bit_depth: frame.bit_depth,
+                                color_format: frame.color_format,
+                                pixels: diff,
+                            },
+                            self.compression_type,
+                            self.header.block_size,
+                            false,
+                            fq_base,
+                            None,
+                            band_ref,
+                        )?
+                        .data)
+                    } else {
+                        Ok(super::encode_frame(
+                            &ImageData {
+                                width: frame.width,
+                                height: frame.height,
+                                bit_depth: frame.bit_depth,
+                                color_format: frame.color_format,
+                                pixels: diff,
+                            },
+                            self.compression_type,
+                            self.header.block_size,
+                            self.header.prediction_mode,
+                            false,
+                            fq_base,
+                            None,
+                        )?)
+                    }
+                };
 
                 // golden 差分候选（帧头 reference_type=0）
                 let mut diff_golden = vec![0i32; frame.pixels.len()];
@@ -550,9 +549,7 @@ impl StreamingEncoder {
                             };
                             let weighted: Vec<i32> = if lic_a != 0 {
                                 crate::crf::core::illumination::apply_lic_weighted(
-                                    &g.pixels,
-                                    lic_a,
-                                    lic_b,
+                                    &g.pixels, lic_a, lic_b,
                                 )
                             } else {
                                 g.pixels.clone()

@@ -27,9 +27,7 @@ fn upsample_2x_bilinear(small: &[i32], sw: usize, sh: usize, dw: usize, dh: usiz
         // SIMD 使用 i32 中间量；最坏 N ≤ 36·|v|，要求 |v| ≤ 2^25 才无溢出。
         // 色度平面幅值远低于此界（≤ 16bit），实测恒走 SIMD；超界自动回退标量。
         const SIMD_ABS_BOUND: u32 = 1 << 25;
-        let bounded = small
-            .iter()
-            .all(|&v| v.unsigned_abs() <= SIMD_ABS_BOUND);
+        let bounded = small.iter().all(|&v| v.unsigned_abs() <= SIMD_ABS_BOUND);
         if bounded && std::arch::is_x86_feature_detected!("avx2") {
             // SAFETY: AVX2 已检测；输入幅值受 SIMD_ABS_BOUND 限制，i32 中间量无溢出。
             unsafe { upsample_2x_bilinear_avx2(small, sw, sh, dw, dh, &mut out) };
@@ -150,14 +148,8 @@ unsafe fn upsample_2x_bilinear_avx2(
             let v01 = _mm256_i32gather_epi32(row1, x0, 4);
             let v11 = _mm256_i32gather_epi32(row1, x1, 4);
 
-            let top4 = _mm256_add_epi32(
-                _mm256_mullo_epi32(v00, w0),
-                _mm256_mullo_epi32(v10, w1),
-            );
-            let bot4 = _mm256_add_epi32(
-                _mm256_mullo_epi32(v01, w0),
-                _mm256_mullo_epi32(v11, w1),
-            );
+            let top4 = _mm256_add_epi32(_mm256_mullo_epi32(v00, w0), _mm256_mullo_epi32(v10, w1));
+            let bot4 = _mm256_add_epi32(_mm256_mullo_epi32(v01, w0), _mm256_mullo_epi32(v11, w1));
             let n = _mm256_add_epi32(
                 _mm256_mullo_epi32(top4, wy0v),
                 _mm256_mullo_epi32(bot4, wy1v),
@@ -311,7 +303,13 @@ mod tests {
     use super::*;
 
     /// 原 f64 实现（作为逐位一致的参考基准）
-    fn upsample_f64_reference(small: &[i32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<i32> {
+    fn upsample_f64_reference(
+        small: &[i32],
+        sw: usize,
+        sh: usize,
+        dw: usize,
+        dh: usize,
+    ) -> Vec<i32> {
         let mut out = vec![0i32; dw * dh];
         for y in 0..dh {
             let sy = (y as f64 + 0.5) / 2.0 - 0.5;

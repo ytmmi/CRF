@@ -47,9 +47,7 @@ pub fn run(dir: &str) -> Result<(), String> {
         println!("{:<10} {:>12.1} {:>14}", format!("{bw}x{bh}"), ms, cmax);
     }
 
-    println!(
-        "\nDCT 阶段 wall ≈ max(变体) = {max_ms:.1}ms（生产 4 变体并行，P1c）"
-    );
+    println!("\nDCT 阶段 wall ≈ max(变体) = {max_ms:.1}ms（生产 4 变体并行，P1c）");
     println!(
         "encode p50(组1000 无损) = {ENCODE_P50_MS:.0}ms  → DCT 阶段占比 ≈ {:.1}%",
         max_ms / ENCODE_P50_MS * 100.0

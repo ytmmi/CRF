@@ -11,7 +11,6 @@ use crate::crf::core::domain::{ColorFormat, EncodeParams, FrameHeader, ImageData
 use crate::crf::decoder::session::DecodeSession;
 use crate::crf::encoder::sequence::encode_sequence;
 use crate::crf::encoder::streaming::StreamingEncoder;
-use crate::crf::error::CrfResult;
 
 /// 构建光照渐变差分序列：frame_k = golden × a_k + b_k（三分量**一致的**整帧
 /// 乘加——模拟真实场景变暗/提亮，LIC 全局 (a,b) 模型前提）+ 少量局部内容。
@@ -78,10 +77,7 @@ fn frame_lic_fields(data: &[u8], frame_count: usize) -> Vec<(u8, u8)> {
     let mut off = frames_start;
     for _ in 0..frame_count {
         let fs = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
-        out.push((
-            data[off + LIC_A_NUM_OFFSET],
-            data[off + LIC_B_OFFSET],
-        ));
+        out.push((data[off + LIC_A_NUM_OFFSET], data[off + LIC_B_OFFSET]));
         off += FRAME_HEADER_SIZE + fs;
     }
     out
@@ -151,7 +147,8 @@ fn test_lic_shading_sequence_roundtrip() {
     assert_eq!(restored.len(), frames.len());
     for (i, (r, o)) in restored.iter().zip(&frames).enumerate() {
         assert_eq!(
-            r.pixels, o.pixels,
+            r.pixels,
+            o.pixels,
             "第 {i} 帧（lic={:?}）无损还原必须逐位一致",
             lic_fields.get(i)
         );
@@ -168,7 +165,9 @@ fn test_lic_shading_sequence_roundtrip() {
 fn test_lic_globally_enabled_default() {
     // 进程环境在本文件路径下不应出现 CRF_DISABLE_LIC=1（A/B 在 CLI 层做）；
     // 此处断言默认开启，防止误关闭影响其他 LIC 测试。
-    assert_eq!(std::env::var("CRF_DISABLE_LIC").map(|v| v != "1").unwrap_or(true), true);
+    assert!(std::env::var("CRF_DISABLE_LIC")
+        .map(|v| v != "1")
+        .unwrap_or(true));
     assert!(crate::crf::encoder::sequence_tools::lic_globally_enabled());
 }
 
@@ -206,9 +205,9 @@ fn test_lic_no_benefit_content_no_lic_frames() {
         let mut px = Vec::with_capacity(w as usize * h as usize * 3);
         for y in 0..h {
             for x in 0..w {
-                px.push(((x as i32 * 5 + y as i32 * 11) % 256));
-                px.push(((x as i32 * 7 + y as i32 * 3) % 256));
-                px.push(((x as i32 * 13 + y as i32 * 17) % 256));
+                px.push((x as i32 * 5 + y as i32 * 11) % 256);
+                px.push((x as i32 * 7 + y as i32 * 3) % 256);
+                px.push((x as i32 * 13 + y as i32 * 17) % 256);
             }
         }
         px
@@ -220,7 +219,7 @@ fn test_lic_no_benefit_content_no_lic_frames() {
             for y in 8..16 {
                 for x in 8..16 {
                     let p = (y * w as usize + x) * 3;
-                    let shift = k as i32 * 5;
+                    let shift = k * 5;
                     px[p] = (px[p] + 40 + shift) % 256;
                     px[p + 1] = (px[p + 1] + 30 + shift) % 256;
                     px[p + 2] = (px[p + 2] + 20 + shift) % 256;

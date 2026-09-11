@@ -54,7 +54,9 @@ where
         .unwrap_or(4_000_000_000);
     // 帧级并行度：内存预算/单帧，并受核数上限约束（帧级并行比帧内并行更有效，
     // 实测 batch_frames 越大越快；超过核数无益）。
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     // 批内并行度：默认按内存预算自动切分；CRF_BATCH_FRAMES 可显式覆盖（调优/诊断）。
     let batch_frames = std::env::var("CRF_BATCH_FRAMES")
         .ok()
@@ -164,7 +166,8 @@ where
     }
     let mut g_hat_img = crate::crf::decoder::reconstruct::reconstruct_frame(&data_first, &header)?;
     if header.flags.has_rct() && !header.flags.first_frame_no_rct() {
-        g_hat_img.pixels = crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
+        g_hat_img.pixels =
+            crate::crf::core::color::rct::rct_inverse(&g_hat_img.pixels, components)?;
     }
     let g_hat = g_hat_img.pixels; // RGB 域重建首帧
     drop(first_span);
@@ -174,7 +177,8 @@ where
     let mut rest_results: Vec<(Vec<u8>, Option<u8>, bool)> = Vec::with_capacity(frame_count - 1);
     for start in (1..frame_count).step_by(batch_frames) {
         let end = (start + batch_frames).min(frame_count);
-        let batch: Vec<ImageData> = (start..end).map(|i| load(i)).collect::<CrfResult<_>>()?;        let batch_results: Vec<(Vec<u8>, Option<u8>, bool)> = batch
+        let batch: Vec<ImageData> = (start..end).map(&mut load).collect::<CrfResult<_>>()?;
+        let batch_results: Vec<(Vec<u8>, Option<u8>, bool)> = batch
             .par_iter()
             .enumerate()
             .map(|(j, frame)| -> CrfResult<(Vec<u8>, Option<u8>, bool)> {
@@ -191,29 +195,32 @@ where
                 let encode_diff = |diff_rgb: Vec<i32>, already_rct: bool| -> CrfResult<Vec<u8>> {
                     let mut diff_rgb = diff_rgb;
                     if !already_rct {
-                    if q95_soft {
-                        soft1(&mut diff_rgb);
-                    }
-                    if noise_on {
-                        use crate::crf::core::perceptual::noise::{
-                            estimate_interleaved_band_thresholds, soft_threshold_interleaved,
-                        };
-                        let thresholds = estimate_interleaved_band_thresholds(
-                            &diff_rgb,
-                            frame.width as usize,
-                            frame.height as usize,
-                            components,
-                            tuning.noise_tau_x100,
-                        );
-                        soft_threshold_interleaved(
+                        if q95_soft {
+                            soft1(&mut diff_rgb);
+                        }
+                        if noise_on {
+                            use crate::crf::core::perceptual::noise::{
+                                estimate_interleaved_band_thresholds, soft_threshold_interleaved,
+                            };
+                            let thresholds = estimate_interleaved_band_thresholds(
+                                &diff_rgb,
+                                frame.width as usize,
+                                frame.height as usize,
+                                components,
+                                tuning.noise_tau_x100,
+                            );
+                            soft_threshold_interleaved(
+                                &mut diff_rgb,
+                                frame.width as usize,
+                                frame.height as usize,
+                                components,
+                                &thresholds,
+                            );
+                        }
+                        crate::crf::core::color::rct::rct_forward_in_place(
                             &mut diff_rgb,
-                            frame.width as usize,
-                            frame.height as usize,
                             components,
-                            &thresholds,
-                        );
-                    }
-                    crate::crf::core::color::rct::rct_forward_in_place(&mut diff_rgb, components)?;
+                        )?;
                     }
                     let eff_frame = ImageData {
                         width: frame.width,
@@ -252,8 +259,11 @@ where
                     } else {
                         Vec::new()
                     };
-                    let band_ref: super::frame::BandSteps<'_> =
-                        if noise_on || activity_on { Some(&band_steps) } else { None };
+                    let band_ref: super::frame::BandSteps<'_> = if noise_on || activity_on {
+                        Some(&band_steps)
+                    } else {
+                        None
+                    };
                     if params.adaptive_prediction {
                         Ok(encode_frame_adaptive(
                             &eff_frame,

@@ -12,8 +12,8 @@
 use crate::crf::core::bitstream::constants::{FRAME_HEADER_SIZE, LIC_A_NUM_OFFSET};
 use crate::crf::core::domain::{ColorFormat, EncodeParams, ImageData, PredictionMode};
 use crate::crf::encoder::sequence::encode_sequence;
-use crate::crf::performance::bench::load_frames;
 use crate::crf::error::CrfResult;
+use crate::crf::performance::bench::load_frames;
 
 fn mk_params() -> EncodeParams {
     EncodeParams {
@@ -114,9 +114,10 @@ fn diag_encode_compare(frames: &[ImageData], name: &str) {
             color_format: f.color_format,
             pixels: rg,
         };
-        let bytes_g = encode_frame_adaptive(&img_g, comp, 8, false, FrameQuant::lossless(), None, None)
-            .map(|o| o.data.len())
-            .unwrap_or(0);
+        let bytes_g =
+            encode_frame_adaptive(&img_g, comp, 8, false, FrameQuant::lossless(), None, None)
+                .map(|o| o.data.len())
+                .unwrap_or(0);
         // LIC 差分
         let mut lic_ref = vec![0i32; golden.len()];
         crate::crf::core::illumination::fit_into(golden, fit.a_num, fit.b, &mut lic_ref);
@@ -130,9 +131,10 @@ fn diag_encode_compare(frames: &[ImageData], name: &str) {
             color_format: f.color_format,
             pixels: rl,
         };
-        let bytes_l = encode_frame_adaptive(&img_l, comp, 8, false, FrameQuant::lossless(), None, None)
-            .map(|o| o.data.len())
-            .unwrap_or(0);
+        let bytes_l =
+            encode_frame_adaptive(&img_l, comp, 8, false, FrameQuant::lossless(), None, None)
+                .map(|o| o.data.len())
+                .unwrap_or(0);
         println!(
             "    [enc] {name} 帧{i}: golden={bytes_g}B LIC={bytes_l}B (a={} b={}) LIC更小={}",
             fit.a_num,
@@ -205,9 +207,7 @@ pub fn run(root: &str) -> Result<(), String> {
             worse_groups += 1;
         }
         let diff_frames = frames.len() - 1;
-        println!(
-            "{name:<16} {on:>12} {off:>12} {pct:>8.2}% {lic_frames:>4}/{diff_frames}"
-        );
+        println!("{name:<16} {on:>12} {off:>12} {pct:>8.2}% {lic_frames:>4}/{diff_frames}");
         all_on += on;
         all_off += off;
         all_frames += diff_frames;
@@ -223,7 +223,10 @@ pub fn run(root: &str) -> Result<(), String> {
     println!("\n--- 汇总 ---");
     let fmt_pct = |on: usize, off: usize| -> String {
         if off > 0 {
-            format!("{:.2}%", (on as isize - off as isize) as f64 / off as f64 * 100.0)
+            format!(
+                "{:.2}%",
+                (on as isize - off as isize) as f64 / off as f64 * 100.0
+            )
         } else {
             "—".to_string()
         }

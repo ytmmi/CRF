@@ -79,6 +79,7 @@ impl Span {
     }
 
     /// 提前结束并记录（幂等；与 Drop 二选一）。
+    #[allow(dead_code)] // 预留显式结束 span API，当前统一走 Drop
     #[inline]
     pub fn finish(mut self) {
         if self.active {

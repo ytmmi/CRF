@@ -83,7 +83,7 @@ mod tests {
                     .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
                 // 混合 [-255, 255] 与 [0, 255] 两种取值域
-                let v = ((state >> 33) as i32 % 256);
+                let v = (state >> 33) as i32 % 256;
                 let v = if ch % 2 == 0 { v } else { v - 255 };
                 pixels.push(v);
             }

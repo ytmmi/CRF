@@ -3,7 +3,10 @@
 use crate::crf;
 use std::time::Instant;
 
-use super::{clean_dir, collect_png_paths, load_frame_sequence, save_frame_lossless, verify_crf_against_pngs, OutputFormat, Scheme, TEST_CRF_OUTPUT_DIR, TEST_IMG_OUTPUT_DIR};
+use super::{
+    clean_dir, collect_png_paths, load_frame_sequence, save_frame_lossless,
+    verify_crf_against_pngs, OutputFormat, Scheme, TEST_CRF_OUTPUT_DIR, TEST_IMG_OUTPUT_DIR,
+};
 
 /// 运行所有测试（png_dir 为图像组目录）
 ///
@@ -74,7 +77,11 @@ pub fn run_streaming_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &st
 
         let frames = load_frame_sequence(paths);
         let params = crf::EncodeParams {
-            lossy: quality.map(|q| crate::crf::LossyOptionsV2Builder::preset(q as u16 * 100).build().unwrap()),
+            lossy: quality.map(|q| {
+                crate::crf::LossyOptionsV2Builder::preset(q as u16 * 100)
+                    .build()
+                    .unwrap()
+            }),
             compression_type: "golomb-rice".to_string(),
             block_size: None,
             prediction_mode: crf::PredictionMode::Med,
@@ -197,7 +204,11 @@ pub fn run_batch_suite(paths: &[String], crf_out_dir: &str, img_out_dir: &str) {
         let t = Instant::now();
 
         let params = crf::EncodeParams {
-            lossy: scheme.quality.map(|q| crate::crf::LossyOptionsV2Builder::preset(q as u16 * 100).build().unwrap()),
+            lossy: scheme.quality.map(|q| {
+                crate::crf::LossyOptionsV2Builder::preset(q as u16 * 100)
+                    .build()
+                    .unwrap()
+            }),
             compression_type: "golomb-rice".to_string(),
             block_size: None,
             prediction_mode: scheme.mode,

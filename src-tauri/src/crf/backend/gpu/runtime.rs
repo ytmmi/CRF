@@ -165,7 +165,7 @@ fn run_inplace_rct(
     pick: impl Fn(&Sidecar) -> RctForwardFn,
     label: &str,
 ) -> Result<(), BackendError> {
-    if pixels.len() % 3 != 0 {
+    if !pixels.len().is_multiple_of(3) {
         return Err(BackendError::Unsupported(
             "rct requires interleaved 3-component pixels",
         ));

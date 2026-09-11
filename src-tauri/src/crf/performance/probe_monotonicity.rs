@@ -25,6 +25,7 @@ struct AggRow {
     quality: u16,
     total_bytes: u64,
     global_psnr: f64,
+    #[allow(dead_code)] // 预留最差帧质量指标，当前汇总未输出
     worst_frame_psnr: f64,
 }
 
@@ -145,7 +146,10 @@ pub(crate) fn make_params(quality: u16) -> Result<EncodeParams, String> {
 }
 
 /// 流式编码：逐文件加载原帧 → push_frame → finish，返回完整码流字节。
-pub(crate) fn encode_streaming(paths: &[PathBuf], params: &EncodeParams) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_streaming(
+    paths: &[PathBuf],
+    params: &EncodeParams,
+) -> Result<Vec<u8>, String> {
     let mut enc = StreamingEncoder::new(params).map_err(|e| e.to_string())?;
     for p in paths {
         let frame = load_one(p)?;

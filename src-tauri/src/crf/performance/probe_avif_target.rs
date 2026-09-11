@@ -41,9 +41,7 @@ pub fn run(dir: &str) -> Result<(), String> {
     }
     println!("=== AVIF 对标标定探针（批量路径口径）===");
     println!("目录: {dir}  ({} 帧)", frames.len());
-    println!(
-        "AVIF CQ18 基准: {AVIF_BYTES} B @ {AVIF_PSNR:.3} dB, 最差帧 {AVIF_WORST_PSNR:.3} dB"
-    );
+    println!("AVIF CQ18 基准: {AVIF_BYTES} B @ {AVIF_PSNR:.3} dB, 最差帧 {AVIF_WORST_PSNR:.3} dB");
     println!("阶段 A ≤{STAGE_A_BYTES} B / 阶段 B ≤{STAGE_B_BYTES} B（匹配质量 ±{PSNR_TOL} dB）\n");
     println!(
         "{:<4} {:>12} {:>10} {:>10} {:>12} {:>10}",
@@ -63,7 +61,11 @@ pub fn run(dir: &str) -> Result<(), String> {
                 let b = &decoded.frames[fi].pixels;
                 let av = &a[..6.min(a.len())];
                 let bv = &b[..6.min(b.len())];
-                println!("  DEBUG f{fi} orig={av:?} dec={bv:?} len={}/{}", a.len(), b.len());
+                println!(
+                    "  DEBUG f{fi} orig={av:?} dec={bv:?} len={}/{}",
+                    a.len(),
+                    b.len()
+                );
             }
         }
         let (mse, pixels, worst, ssim_avg) = quality_batch(&frames, &decoded.frames);
@@ -130,9 +132,12 @@ fn make_params_avif(quality: u16) -> Result<EncodeParams, String> {
         };
         let l: f64 = ls.parse().map_err(|_| "bad luma step".to_string())?;
         let c: f64 = cs.parse().map_err(|_| "bad chroma step".to_string())?;
-        LossyOptionsV2Builder::explicit_steps((l * 256.0).round() as u16, (c * 256.0).round() as u16)
-            .build()
-            .map_err(|e| e.to_string())?
+        LossyOptionsV2Builder::explicit_steps(
+            (l * 256.0).round() as u16,
+            (c * 256.0).round() as u16,
+        )
+        .build()
+        .map_err(|e| e.to_string())?
     } else {
         LossyOptionsV2Builder::preset(quality * 100)
             .build()
@@ -165,7 +170,10 @@ fn quality_batch(orig: &[ImageData], restored: &[ImageData]) -> (f64, u64, f64, 
         worst = worst.min(p);
         ssim_sum += ssim(&orig[i], &restored[i]);
         if verbose {
-            println!("    f{i}: PSNR {p:.3} dB, SSIM {:.6}", ssim(&orig[i], &restored[i]));
+            println!(
+                "    f{i}: PSNR {p:.3} dB, SSIM {:.6}",
+                ssim(&orig[i], &restored[i])
+            );
         }
     }
     (total_mse, total_pixels, worst, ssim_sum / n.max(1) as f64)

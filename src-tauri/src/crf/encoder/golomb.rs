@@ -1,6 +1,6 @@
-use crate::crf::error::CrfResult;
 use crate::crf::core::entropy::golomb::{adaptive_k, block_adaptive_k};
 use crate::crf::core::entropy::scan::zigzag_encode;
+use crate::crf::error::CrfResult;
 
 /// Golomb-Rice 编码器
 ///
@@ -278,9 +278,9 @@ mod tests {
         let _bits2 = finish_to_bits(encoder2);
 
         // 验证第一个编码
-        assert_eq!(bits[0], false); // 商 0 的前导 0
-        assert_eq!(bits[1], false); // 余数位 1
-        assert_eq!(bits[2], false); // 余数位 0
+        assert!(!bits[0]); // 商 0 的前导 0
+        assert!(!bits[1]); // 余数位 1
+        assert!(!bits[2]); // 余数位 0
     }
 
     #[test]

@@ -23,11 +23,11 @@
 
 #![allow(dead_code)]
 
-/// context：上下文模型定义和更新契约（CtxModel/CtxIds/MaTree）
-pub mod context;
-/// scan：Zigzag 扫描与符号编码（P4 迁入，原 format/zigzag.rs）
-pub mod scan;
-/// golomb：Golomb-Rice 参数 k 的自适应选择（P4 迁入，原 format/k_value.rs）
-pub mod golomb;
 /// cabac：CABAC range coder 共享语法常量（RC_BITS/RC_MOVE/RC_TOP/INIT_PROB）
 pub mod cabac;
+/// context：上下文模型定义和更新契约（CtxModel/CtxIds/MaTree）
+pub mod context;
+/// golomb：Golomb-Rice 参数 k 的自适应选择（P4 迁入，原 format/k_value.rs）
+pub mod golomb;
+/// scan：Zigzag 扫描与符号编码（P4 迁入，原 format/zigzag.rs）
+pub mod scan;

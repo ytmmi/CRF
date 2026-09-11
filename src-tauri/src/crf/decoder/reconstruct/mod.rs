@@ -11,11 +11,9 @@
 
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::bitstream::header::CrfHeader;
-use crate::crf::core::domain::{
-    CompressionType, FrameHeader, ImageData, PredictionMode,
-};
-use crate::crf::error::{CrfError, CrfResult};
+use crate::crf::core::domain::{CompressionType, FrameHeader, ImageData, PredictionMode};
 use crate::crf::core::prediction::intra::undo_prediction;
+use crate::crf::error::{CrfError, CrfResult};
 
 use super::banded::decode_banded_with_undo;
 use super::palette::decode_palette_payload;

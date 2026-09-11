@@ -113,7 +113,7 @@ mod tests {
     fn test_transform_roundtrip() {
         let width = 8;
         let height = 8;
-        let original: Vec<i32> = (0..64).map(|i| (i as i32) - 32).collect();
+        let original: Vec<i32> = (0..64).map(|i| i - 32).collect();
         let block_size = 4;
 
         // 编码

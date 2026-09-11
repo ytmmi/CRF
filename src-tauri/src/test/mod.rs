@@ -8,13 +8,12 @@
 mod batch;
 mod probe;
 
-pub use batch::{run_all_tests, run_batch_suite, run_streaming_suite};
+pub use batch::run_all_tests;
 pub use probe::run_probe_split_tests;
 
 use crate::crf;
 use image::{ImageReader, RgbImage};
 use std::fs;
-use std::path::Path;
 
 /// 默认测试图片目录（快速验证图片组）
 #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
@@ -30,12 +29,16 @@ const TEST_IMG_OUTPUT_DIR: &str = r"E:\CRF\test\output\img";
 ///
 /// 可通过环境变量 CRF_OUTPUT_FORMAT=webp 切换默认输出格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
+pub(crate) enum OutputFormat {
     Png,
+    // 预留：CRF_OUTPUT_FORMAT=webp 切换路径，当前调用方硬编码 Png
+    #[allow(dead_code)]
     WebP,
 }
 
 impl OutputFormat {
+    // 预留：环境变量输出格式切换，待接线到调用方
+    #[allow(dead_code)]
     fn from_env() -> Self {
         match std::env::var("CRF_OUTPUT_FORMAT").as_deref() {
             Ok(s) if s.eq_ignore_ascii_case("webp") => OutputFormat::WebP,
@@ -43,6 +46,7 @@ impl OutputFormat {
         }
     }
 
+    #[allow(dead_code)]
     fn ext(self) -> &'static str {
         match self {
             OutputFormat::Png => "png",
@@ -144,7 +148,10 @@ pub(crate) fn collect_png_paths(dir: &str) -> Vec<String> {
         })
         .collect();
     entries.sort_by_key(|e| e.file_name());
-    entries.iter().map(|e| e.path().to_string_lossy().to_string()).collect()
+    entries
+        .iter()
+        .map(|e| e.path().to_string_lossy().to_string())
+        .collect()
 }
 
 /// 加载单张 PNG 为 ImageData
@@ -171,18 +178,11 @@ pub(crate) fn load_single_png(path: &str) -> Option<crf::ImageData> {
 
 /// 加载图像路径序列为帧序列
 pub(crate) fn load_frame_sequence(paths: &[String]) -> Vec<crf::ImageData> {
-    paths
-        .iter()
-        .filter_map(|p| load_single_png(p))
-        .collect()
+    paths.iter().filter_map(|p| load_single_png(p)).collect()
 }
 
 /// 将解码结果与原始 PNG 逐帧比对
-pub(crate) fn verify_crf_against_pngs(
-    crf_path: &str,
-    png_paths: &[String],
-    label: &str,
-) -> bool {
+pub(crate) fn verify_crf_against_pngs(crf_path: &str, png_paths: &[String], label: &str) -> bool {
     let data = std::fs::read(crf_path).expect("无法读取 CRF 文件");
     let result = crf::decode(&data).expect("CRF 解码失败");
 
@@ -208,11 +208,7 @@ pub(crate) fn verify_crf_against_pngs(
                 .unwrap_or(usize::MAX);
             eprintln!(
                 "[{}] 帧{} 不一致！首个差异索引 {} (CRF={} vs PNG={})",
-                label,
-                i,
-                pos,
-                frame.pixels[pos],
-                orig.pixels[pos]
+                label, i, pos, frame.pixels[pos], orig.pixels[pos]
             );
             all_ok = false;
         }
@@ -224,11 +220,7 @@ pub(crate) fn verify_crf_against_pngs(
 }
 
 /// 保存单帧为无损图像
-pub(crate) fn save_frame_lossless(
-    frame: &crf::ImageData,
-    path: &str,
-    fmt: OutputFormat,
-) {
+pub(crate) fn save_frame_lossless(frame: &crf::ImageData, path: &str, fmt: OutputFormat) {
     match fmt {
         OutputFormat::Png => {
             let mut img: RgbImage = ImageReader::open(path)

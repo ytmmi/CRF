@@ -1,0 +1,153 @@
+# CRF 持续集成工作流（纯 Rust CLI，无前端）
+#
+# 门禁顺序严格遵循 docs/project-standards.md §9.2（强制）：
+#   源码行数检查 → 分层依赖检查 → 格式检查 → Clippy → 测试 → Release 构建
+# 通过 needs 链式依赖强制顺序：lint → test → build，任一前置门禁失败即阻断后续 job。
+#
+# 工具链：锁定 1.96.1（见仓库根 rust-toolchain.toml），避免 stable 漂移引入新 lint。
+#
+# 说明：
+#   - lint 仅在 ubuntu-latest 单跑（不跑矩阵），包含两个 PowerShell 门禁脚本。
+#   - check_file_lines.ps1 退出码：0=通过，1=存在 >1000 行文件（硬失败），
+#     2=仅存在 >=800 行预警——CI 将退出码 2 视为通过，仅退出码 1 判失败。
+#   - check_layer_dependencies.ps1 退出码：0=通过，1=存在分层依赖违规。
+#   - Clippy 以 `-D warnings` 为硬门禁；既有告警已全部清零（预留 API 以带注释的
+#     针对性 allow 标注），新增告警将直接阻断。
+#   - test/build 覆盖 ubuntu/windows/macos 三平台（fail-fast: false）。
+#   - build 上传的产物同时包含主程序与 CUDA sidecar 动态库（§11.1：exe+dll 必须一起分发）。
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: 门禁检查（lint）
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链（1.96.1：rustfmt + clippy）
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          components: rustfmt, clippy
+
+      - name: 缓存 Cargo 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 源码行数门禁（>1000 行失败，>=800 行仅警告）
+        shell: pwsh
+        run: |
+          pwsh ./scripts/check_file_lines.ps1
+          $code = $LASTEXITCODE
+          if ($code -eq 1) {
+            Write-Error "源码行数门禁失败：存在超过 1000 行硬限制的文件（禁止构建/合并/发布）"
+            exit 1
+          }
+          if ($code -eq 2) {
+            Write-Host "源码行数门禁通过（存在 >=800 行预警文件，CI 视为通过）"
+          }
+
+      - name: 分层依赖门禁
+        shell: pwsh
+        run: pwsh ./scripts/check_layer_dependencies.ps1
+
+      - name: 格式检查（cargo fmt）
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Clippy（-D warnings）
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings
+
+  test:
+    name: 测试（${{ matrix.os }}）
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链（1.96.1）
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+
+      - name: 缓存 Cargo 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 运行测试（cargo test）
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace
+
+  build:
+    name: Release 构建（${{ matrix.os }}）
+    needs: [lint, test]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链（1.96.1）
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+
+      - name: 缓存 Cargo 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Release 构建（cargo build）
+        run: cargo build --manifest-path src-tauri/Cargo.toml --workspace --release
+
+      - name: 上传产物（Windows：exe + dll）
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crf-viewer-windows
+          path: |
+            src-tauri/target/release/crf-viewer.exe
+            src-tauri/target/release/crf_cuda.dll
+
+      - name: 上传产物（Linux：二进制 + .so）
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crf-viewer-linux
+          path: |
+            src-tauri/target/release/crf-viewer
+            src-tauri/target/release/libcrf_cuda.so
+
+      - name: 上传产物（macOS：二进制 + .dylib）
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crf-viewer-macos
+          path: |
+            src-tauri/target/release/crf-viewer
+            src-tauri/target/release/libcrf_cuda.dylib

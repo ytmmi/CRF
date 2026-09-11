@@ -12,6 +12,5 @@ pub mod memory;
 #[cfg(feature = "nvidia-cuda")]
 mod runtime;
 
-pub use capability::{probe_nvidia, NvidiaDeviceInfo};
-pub use cuda::{resolve_backend, BackendRequest, BackendSelection, NvidiaCudaBackend};
-pub use memory::{estimate_i32_batch, GpuMemoryEstimate, TransferMode};
+pub use capability::probe_nvidia;
+pub use cuda::NvidiaCudaBackend;

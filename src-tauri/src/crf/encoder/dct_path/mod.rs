@@ -124,13 +124,13 @@ mod tests {
     // 逆变换经公共路径访问（规划 §3.6：不保留 dct_path 转发层）
     use crate::crf::core::transform::reconstruct::{
         dct_dequantize_inverse, dct_dequantize_inverse_interleaved,
-        dct_dequantize_inverse_interleaved_bs, dct_plane_inverse, dct_plane_inverse_bs,
+        dct_dequantize_inverse_interleaved_bs,
     };
 
     #[test]
     fn test_dct_quant_roundtrip_q1() {
         // Q=1 时量化恒等 → DCT 往返应精确还原
-        let pixels: Vec<i32> = (0..256).map(|i| ((i * 37) % 200) as i32 - 100).collect();
+        let pixels: Vec<i32> = (0..256).map(|i| ((i * 37) % 200) - 100).collect();
         let quantized = dct_quantize(&pixels, 16, 16, 1);
         let restored = dct_dequantize_inverse(&quantized, 16, 16);
         assert_eq!(pixels, restored, "Q=1 应精确还原");

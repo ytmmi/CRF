@@ -8,11 +8,11 @@
 pub(crate) mod candidate;
 pub(crate) mod intrabc;
 
-use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::domain::{CompressionType, FrameHeader, ImageData, PredictionMode};
 use crate::crf::core::prediction::intra::apply_prediction_into;
 use crate::crf::core::transform::closed_loop::closed_loop_predict_quant_banded_into;
+use crate::crf::error::CrfResult;
 
 use super::scratch::FrameScratch;
 

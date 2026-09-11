@@ -211,14 +211,7 @@ pub(crate) fn apply_prediction_into(
 ) {
     assert_eq!(pixels.len(), residuals.len(), "预测输入/输出长度必须一致");
     apply_prediction_range_into(
-        pixels,
-        residuals,
-        width,
-        height,
-        components,
-        mode,
-        0,
-        height,
+        pixels, residuals, width, height, components, mode, 0, height,
     );
 }
 
@@ -270,13 +263,8 @@ fn apply_prediction_range_into(
     // false，回退下方标量循环，字节逐位一致。
     if components == 1
         && y_start == 0
-        && crate::crf::backend::cpu::simd_predict::predict_plane_avx2(
-            pixels,
-            residuals,
-            width,
-            mode as u8,
-            y_start,
-            y_end,
+        && crate::crf::backend::ops::predict_plane(
+            pixels, residuals, width, mode as u8, y_start, y_end,
         )
     {
         return;
@@ -374,9 +362,7 @@ pub fn apply_prediction_band(
     let height = pixels.len() / stride.max(1);
     let y_end = y_end.min(height);
     let mut out = vec![0i32; (y_end.saturating_sub(y_start)) * stride];
-    apply_prediction_band_into(
-        pixels, &mut out, width, components, mode, y_start, y_end,
-    );
+    apply_prediction_band_into(pixels, &mut out, width, components, mode, y_start, y_end);
     out
 }
 
@@ -410,14 +396,7 @@ pub(crate) fn apply_prediction_band_into(
     // 紧凑缓冲（out 长度 = (y_end-y_start)*stride）与内核契约一致。不支持的
     // 模式回退下方标量循环，字节逐位一致。
     if components == 1
-        && crate::crf::backend::cpu::simd_predict::predict_plane_avx2(
-            pixels,
-            out,
-            width,
-            mode as u8,
-            y_start,
-            y_end,
-        )
+        && crate::crf::backend::ops::predict_plane(pixels, out, width, mode as u8, y_start, y_end)
     {
         return;
     }
@@ -514,7 +493,7 @@ mod tests {
     #[test]
     fn test_directional_modes_exact_values() {
         let width = 3usize;
-        let pixels: Vec<i32> = (0..9).map(|i| i as i32).collect();
+        let pixels: Vec<i32> = (0..9).collect();
 
         // Diagonal 内部点 (2,2)：k=min(2,2)=2 → 上溯 2*(stride+1)=idx-8 → 像素(0,0)=0
         assert_eq!(
@@ -648,7 +627,7 @@ mod tests {
         // 原点 (0,0)：x==0 且 y==0 → 预测 0；像素 (0%2)*80=0 → 残差 0
         assert_eq!(res_h2[0], 0);
         // (0,1)：x==0 回退 top=(0,0)=0；像素 0 → 残差 0
-        assert_eq!(res_h2[w + 0], 0);
+        assert_eq!(res_h2[w], 0);
         // (1,0)：y==0 且 x==1 回退 left=(0,0)=0；像素 80 → 残差 80
         //（首两行/列的边界代价——内部点恒零才是模式价值所在）
         assert_eq!(res_h2[1], 80);
@@ -675,8 +654,8 @@ mod tests {
             }
         }
         // y==0 行：x>0 回退 left（行 0 全零）→ 残差 = 像素 = 0；原点亦零
-        for x in 0..w {
-            assert_eq!(res_v2[x], 0, "Vertical2 行0 ({},0) 应归零", x);
+        for (x, v) in res_v2.iter().take(w).enumerate() {
+            assert_eq!(*v, 0, "Vertical2 行0 ({},0) 应归零", x);
         }
         // y==1 行：回退 top（行 0 全零）→ 残差 = 像素 = 60
         for x in 0..w {

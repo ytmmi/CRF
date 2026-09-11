@@ -153,6 +153,7 @@ pub(crate) fn load_frames(dir: &str) -> Result<Vec<ImageData>, String> {
 }
 
 /// 供外部探测基准组目录是否可用。
+#[allow(dead_code)] // 预留基准组探测辅助，待 CLI 探针入口接线
 pub fn group_exists(dir: &str) -> bool {
     Path::new(dir).is_dir()
 }

@@ -7,6 +7,9 @@
 //! **迁移状态（P3）**：定义类型，当前 `sequence.rs` 内联管理参考状态。
 //! P3.b 阶段将 `encode_sequence` 中的 G_hat 管理迁移到本模块。
 
+// P3.b 预留参考状态类型，暂无调用方；契约冻结期允许 dead_code。
+#![allow(dead_code)]
+
 use crate::crf::core::domain::ImageData;
 
 /// 编码器参考状态

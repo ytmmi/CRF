@@ -11,7 +11,7 @@
 
 use rayon::prelude::*;
 
-use crate::crf::core::entropy::cabac::{RC_BITS, RC_MOVE, RC_TOP, INIT_PROB};
+use crate::crf::core::entropy::cabac::{INIT_PROB, RC_BITS, RC_MOVE, RC_TOP};
 use crate::crf::core::entropy::context::{CtxModel, N_CTX};
 
 // ===== Range Coder（32 位区间 + 64 位低位累积）=====
@@ -169,12 +169,18 @@ impl CabacEncoder {
         let v = run + 1;
         let m = 31 - v.leading_zeros();
         if m < 15 {
-            self.bit(false, crate::crf::core::entropy::context::ctx_run_lead_pub(0));
+            self.bit(
+                false,
+                crate::crf::core::entropy::context::ctx_run_lead_pub(0),
+            );
             for i in (0..4).rev() {
                 self.direct_bit((m >> i) & 1 == 1);
             }
         } else {
-            self.bit(true, crate::crf::core::entropy::context::ctx_run_lead_pub(0));
+            self.bit(
+                true,
+                crate::crf::core::entropy::context::ctx_run_lead_pub(0),
+            );
             let mm = m - 15;
             for i in (0..5).rev() {
                 self.direct_bit((mm >> i) & 1 == 1);
@@ -329,8 +335,6 @@ pub fn encode_frame_rle_cabac_adaptive_limited(
     stride: Option<usize>,
     byte_limit: usize,
 ) -> crate::crf::error::CrfResult<Option<(Vec<u8>, u8)>> {
-    use crate::crf::core::entropy::context::build_ma_tree;
-
     // 共用 k（同像素集直方图竞争结果一致）
     let probe = CabacEncoder::adaptive(pixels);
     let k = probe.k;
@@ -348,19 +352,19 @@ pub fn encode_frame_rle_cabac_adaptive_limited(
     };
     let results: Vec<Option<(Vec<u8>, usize)>> = variants
         .par_iter()
-        .map(|&variant| -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
-            encode_cabac_variant(pixels, k, stride, byte_limit, variant)
-        })
+        .map(
+            |&variant| -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
+                encode_cabac_variant(pixels, k, stride, byte_limit, variant)
+            },
+        )
         .collect::<crate::crf::error::CrfResult<Vec<_>>>()?;
 
     let mut best: Option<(Vec<u8>, usize)> = None;
     let mut best_len = byte_limit;
-    for r in results {
-        if let Some((body, total)) = r {
-            if total < best_len {
-                best_len = total;
-                best = Some((body, total));
-            }
+    for (body, total) in results.into_iter().flatten() {
+        if total < best_len {
+            best_len = total;
+            best = Some((body, total));
         }
     }
     Ok(best.map(|(body, _)| (body, k)))
@@ -459,7 +463,7 @@ fn encode_cabac_variant(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crf::decoder::rle_cabac::{decode_frame_rle_cabac, RangeDecoder};
+    use crate::crf::decoder::rle_cabac::decode_frame_rle_cabac;
 
     /// Fast-Fail 等价性：limited(巨大上限) 必须与 unlimited 逐位一致。
     #[test]
@@ -556,9 +560,9 @@ mod tests {
         let mut values = Vec::new();
         for g in 0..1000 {
             values.extend_from_slice(&[0i32; 500]);
-            values.push((g % 7) as i32 + 1);
+            values.push((g % 7) + 1);
             values.extend_from_slice(&[0i32; 37]);
-            values.push((g % 3) as i32 - 1);
+            values.push((g % 3) - 1);
         }
         let (cabac_data, _) = encode_frame_rle_cabac_adaptive(&values, None).unwrap();
 

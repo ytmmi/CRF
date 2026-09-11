@@ -4,7 +4,10 @@
 //! 自动选择 AVX2 或标量回退。每个 kernel 必须有 scalar 实现，
 //! SIMD 实现与 scalar 逐位一致。
 
-use crate::crf::backend::{BackendError, BackendKernel, KernelInput, KernelLayout, KernelOutput};
+// P5.b 预留 kernel 骨架，暂无调用方；契约冻结期允许 dead_code。
+#![allow(dead_code)]
+
+use crate::crf::backend::{BackendError, BackendKernel, KernelInput, KernelOutput};
 
 /// 差分 kernel（骨架，P5.b 细化多平面输入时扩展）
 pub struct SubKernel;
@@ -25,7 +28,9 @@ pub struct RctForwardKernel;
 
 impl BackendKernel for RctForwardKernel {
     fn execute(&self, _input: &KernelInput) -> Result<KernelOutput, BackendError> {
-        Err(BackendError::Unsupported("RctForwardKernel 需要像素数据参数"))
+        Err(BackendError::Unsupported(
+            "RctForwardKernel 需要像素数据参数",
+        ))
     }
 
     fn backend_id(&self) -> &'static str {
@@ -38,7 +43,9 @@ pub struct RctInverseKernel;
 
 impl BackendKernel for RctInverseKernel {
     fn execute(&self, _input: &KernelInput) -> Result<KernelOutput, BackendError> {
-        Err(BackendError::Unsupported("RctInverseKernel 需要像素数据参数"))
+        Err(BackendError::Unsupported(
+            "RctInverseKernel 需要像素数据参数",
+        ))
     }
 
     fn backend_id(&self) -> &'static str {

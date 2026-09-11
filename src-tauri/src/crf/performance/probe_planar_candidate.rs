@@ -68,7 +68,11 @@ pub fn run(dir: &str) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
         let ft = out.data.get(8).copied().unwrap_or(0);
-        println!("--- 子平面 {}  胜出 frame_type={ft}  帧字节={} ---", names[pi], out.data.len());
+        println!(
+            "--- 子平面 {}  胜出 frame_type={ft}  帧字节={} ---",
+            names[pi],
+            out.data.len()
+        );
         let report = telemetry::report();
         if report.is_empty() {
             println!("(无采样)");

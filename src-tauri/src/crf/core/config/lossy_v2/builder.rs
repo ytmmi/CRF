@@ -35,6 +35,7 @@ impl LossyOptionsV2Builder {
     pub fn explicit_steps(luma_q8: u16, chroma_q8: u16) -> Self {
         Self::explicit().with_explicit_steps(luma_q8, chroma_q8)
     }
+    #[allow(dead_code)] // V2 builder 预留 API，待 CLI/前端接线
     pub fn revision(mut self, revision: u16) -> Self {
         if let LossyBase::Preset { revision: r, .. } = &mut self.value.base {
             *r = Some(revision);
@@ -46,6 +47,7 @@ impl LossyOptionsV2Builder {
         self.value.rate.target_bytes = Some(bytes);
         self
     }
+    #[allow(dead_code)] // V2 builder 预留 API，待 CLI/前端接线
     pub fn min_quality(mut self, quality_x100: u16) -> Self {
         self.value.rate.min_quality_x100 = Some(quality_x100);
         self

@@ -6,7 +6,7 @@
 //! - [`assemble_crf_output`]：文件头/帧索引/帧数据/CRC 组装。
 
 use crate::crf::checksum::crc32;
-use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE, HEADER_SIZE};
+use crate::crf::core::bitstream::constants::{FOOTER_MAGIC, FOOTER_SIZE};
 use crate::crf::core::bitstream::header::CrfHeader;
 use crate::crf::core::config::lossy_v2::KernelLossyConfig;
 use crate::crf::encoder::frame::FrameQuant;

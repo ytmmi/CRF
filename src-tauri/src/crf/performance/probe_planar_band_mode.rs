@@ -45,6 +45,8 @@ fn satd4x4(block: &[i32; 16]) -> u64 {
         rows[r] = [a0 + a2, a1 + a3, a0 - a2, a1 - a3];
     }
     let mut total = 0u64;
+    // c 为 Hadamard 列索引：需同时读取 4 行的同一列，无法用行迭代器替代。
+    #[allow(clippy::needless_range_loop)]
     for c in 0..4 {
         let a0 = rows[0][c] + rows[1][c];
         let a1 = rows[0][c] - rows[1][c];
@@ -217,6 +219,8 @@ pub fn run(dir: &str) -> Result<(), String> {
             (b_bytes as f64 - a2_bytes as f64) / a2_bytes as f64 * 100.0,
         );
     }
-    println!("\n判定参考：条带级 SATD 收益 >3% 且扣除条带头开销后仍有净收益，才值得实施（§9 建议 9）。");
+    println!(
+        "\n判定参考：条带级 SATD 收益 >3% 且扣除条带头开销后仍有净收益，才值得实施（§9 建议 9）。"
+    );
     Ok(())
 }

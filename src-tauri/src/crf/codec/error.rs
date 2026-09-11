@@ -3,7 +3,6 @@
 //! 将内部 `CrfError` 映射为 facade 层稳定错误类型，避免内部错误变体直接暴露给应用层。
 //!
 /// **迁移状态（P0）**：定义错误枚举。映射逻辑在 P2/P3 facade 接入时补全。
-
 use crate::crf::error::CrfError;
 
 /// codec facade 错误类型
@@ -12,6 +11,7 @@ pub enum CodecError {
     /// 内部 CRF 错误（透传，后续阶段可细化为稳定错误码）
     Internal(CrfError),
     /// 功能尚未实现（迁移期占位）
+    #[allow(dead_code)]
     NotImplemented(&'static str),
     /// 输入校验失败
     InvalidInput(String),

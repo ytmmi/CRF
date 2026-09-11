@@ -2,8 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
     use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
+    use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 
     fn make_frame(w: u16, h: u16, seed: u64) -> ImageData {
         let mut s = seed;
@@ -99,7 +99,9 @@ mod tests {
         let mut px = Vec::with_capacity(w as usize * h as usize * 3);
         let mut s = 0x1234_5678_9ABC_DEF0u64;
         for _ in 0..(w as usize * h as usize) {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let y = ((s >> 33) as i32 % 256) - 128;
             let co = ((s >> 40) as i32 % 512) - 256;
             let cg = ((s >> 48) as i32 % 400) - 200;
@@ -114,20 +116,10 @@ mod tests {
             color_format: ColorFormat::Rgb,
             pixels: px,
         };
-        let payload = encode_intra_transform_payload(
-            &img,
-            CompressionType::GolombRice,
-            1,
-            0,
-            1,
-            0,
-        )
-        .expect("encode failed");
+        let payload = encode_intra_transform_payload(&img, CompressionType::GolombRice, 1, 0, 1, 0)
+            .expect("encode failed");
         let decoded = crate::crf::decoder::intra_transform::decode_intra_transform(
-            &payload,
-            w as usize,
-            h as usize,
-            3,
+            &payload, w as usize, h as usize, 3,
         )
         .expect("decode failed");
         let max_err = decoded
@@ -136,7 +128,11 @@ mod tests {
             .map(|(a, b)| (a - b).unsigned_abs())
             .max()
             .unwrap_or(0);
-        assert_eq!(max_err, 0, "RCT 域无损往返应有零误差，实际 max_err={}", max_err);
+        assert_eq!(
+            max_err, 0,
+            "RCT 域无损往返应有零误差，实际 max_err={}",
+            max_err
+        );
     }
 
     #[test]
@@ -178,11 +174,7 @@ mod tests {
             .map(|(a, b)| (a - b).unsigned_abs())
             .max()
             .unwrap_or(0);
-        assert!(
-            max_err < 100,
-            "步长信令往返 max_err={} 应 <100",
-            max_err
-        );
+        assert!(max_err < 100, "步长信令往返 max_err={} 应 <100", max_err);
     }
 
     #[test]

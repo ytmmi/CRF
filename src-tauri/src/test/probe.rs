@@ -40,7 +40,8 @@ pub fn run_probe_split_tests(png_dir: &str) {
                     .map(|(a, b)| a - b)
                     .collect()
             };
-            let eff = crate::crf::core::color::rct::rct_forward(&diff_rgb, components).expect("RCT 失败");
+            let eff =
+                crate::crf::core::color::rct::rct_forward(&diff_rgb, components).expect("RCT 失败");
             let img = crf::ImageData {
                 width: frame.width,
                 height: frame.height,
@@ -86,6 +87,7 @@ pub fn run_probe_split_tests(png_dir: &str) {
 }
 
 /// 分析差分数据分布
+#[allow(dead_code)] // 预留探针辅助，待探针入口接线
 pub(crate) fn analyze_residual_distribution(residuals: &[crf::ImageData]) {
     println!("--- 差分数据分布分析 ---");
 

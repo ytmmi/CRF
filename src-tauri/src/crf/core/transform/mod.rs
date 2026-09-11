@@ -29,14 +29,14 @@ pub mod rect;
 /// reconstruct：逆变换与块重建（原 encoder/dct_path 逆变换部分）
 pub mod reconstruct;
 
-/// quant：残差死区标量量化（原 format/quant.rs；P4 增补 quant_scalar 单点舍入）
-pub mod quant;
 /// closed_loop：闭环预测 + 死区量化（原 format/closed_loop.rs）
 pub mod closed_loop;
 /// plane：分块 DCT 正变换（P4 迁入，原 encoder/dct_path/mod.rs）
 pub mod plane;
 /// qm：感知量化矩阵（P4 迁入，原 encoder/dct_path/qm.rs）
 pub mod qm;
+/// quant：残差死区标量量化（原 format/quant.rs；P4 增补 quant_scalar 单点舍入）
+pub mod quant;
 /// rdoq：Trellis 率失真优化量化（P4 迁入，原 encoder/rdoq.rs）
 pub mod rdoq;
 

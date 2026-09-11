@@ -12,7 +12,9 @@ mod integration_tests {
             .expect("无法读取目录")
             .filter_map(|e| e.ok())
             .filter(|e| {
-                let ext = e.path().extension()
+                let ext = e
+                    .path()
+                    .extension()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_lowercase();
@@ -20,7 +22,7 @@ mod integration_tests {
             })
             .collect();
         entries.sort_by_key(|e| e.file_name());
-        
+
         for entry in entries {
             let path = entry.path();
             if let Ok(reader) = image::ImageReader::open(&path) {
@@ -69,18 +71,29 @@ mod integration_tests {
         let decoded = crf::decode_from_bytes(&encoded).expect("解码失败");
         let decode_time = t.elapsed().as_secs_f64() * 1000.0;
 
-        println!("[{}] 编码: {} B ({:.1}ms), 解码: {} 帧 ({:.1}ms)",
-            label, encoded.len(), encode_time, decoded.frames.len(), decode_time);
+        println!(
+            "[{}] 编码: {} B ({:.1}ms), 解码: {} 帧 ({:.1}ms)",
+            label,
+            encoded.len(),
+            encode_time,
+            decoded.frames.len(),
+            decode_time
+        );
 
         assert_eq!(decoded.frames.len(), frames.len(), "帧数不匹配");
-        
+
         for (i, (orig, dec)) in frames.iter().zip(decoded.frames.iter()).enumerate() {
             if orig.pixels != dec.pixels {
-                let pos = orig.pixels.iter().zip(dec.pixels.iter())
+                let pos = orig
+                    .pixels
+                    .iter()
+                    .zip(dec.pixels.iter())
                     .position(|(a, b)| a != b)
                     .unwrap_or(usize::MAX);
-                panic!("帧{} 逐位不一致！首个差异索引 {} (orig={} vs dec={})", 
-                    i, pos, orig.pixels[pos], dec.pixels[pos]);
+                panic!(
+                    "帧{} 逐位不一致！首个差异索引 {} (orig={} vs dec={})",
+                    i, pos, orig.pixels[pos], dec.pixels[pos]
+                );
             }
         }
         println!("  ✓ 无损往返校验通过（{} 帧逐像素一致）", frames.len());
@@ -96,8 +109,7 @@ mod integration_tests {
         let mut lossy = crf::LossyOptionsV2Builder::preset(quality as u16 * 100)
             .build()
             .expect("预设质量档位应为合法 V2 配置");
-        lossy.first_frame.mode =
-            crate::crf::core::config::lossy_v2::FirstFrameMode::Lossless;
+        lossy.first_frame.mode = crate::crf::core::config::lossy_v2::FirstFrameMode::Lossless;
         let params = crf::EncodeParams {
             compression_type: "golomb-rice".to_string(),
             block_size: None,
@@ -116,14 +128,21 @@ mod integration_tests {
         let decoded = crf::decode_from_bytes(&encoded).expect("有损解码失败");
         let decode_time = t.elapsed().as_secs_f64() * 1000.0;
 
-        println!("[{} q{}] 编码: {} B ({:.1}ms), 解码: {} 帧 ({:.1}ms)",
-            label, quality, encoded.len(), encode_time, decoded.frames.len(), decode_time);
+        println!(
+            "[{} q{}] 编码: {} B ({:.1}ms), 解码: {} 帧 ({:.1}ms)",
+            label,
+            quality,
+            encoded.len(),
+            encode_time,
+            decoded.frames.len(),
+            decode_time
+        );
 
         assert_eq!(decoded.frames.len(), frames.len(), "帧数不匹配");
         assert!(decoded.header.flags.has_lossy_quant(), "应标记有损");
         // lossy_quant 存储的是量化步长 Q = clamp((100 - q + 4) / 5, 1, 20)，不是质量参数
         assert!(decoded.header.lossy_quant > 0, "有损量化步长应 > 0");
-        
+
         // 首帧应无损（golden_lossless）
         assert_eq!(decoded.frames[0].pixels, frames[0].pixels, "首帧应无损");
         println!("  ✓ 有损编解码通过（首帧无损，有损标记正确）");
@@ -167,10 +186,15 @@ mod integration_tests {
     fn test_full_pipeline_1000() {
         let frames = load_test_frames(r"E:\CRF\test\png\1000");
         assert!(frames.len() >= 2, "1000 组至少需要 2 张图片");
-        
+
         println!("\n=== 1000 图片组完整管线测试 ===");
-        println!("输入: {} 帧, {}x{}", frames.len(), frames[0].width, frames[0].height);
-        
+        println!(
+            "输入: {} 帧, {}x{}",
+            frames.len(),
+            frames[0].width,
+            frames[0].height
+        );
+
         // 无损编码
         let params = crf::EncodeParams {
             compression_type: "golomb-rice".to_string(),
@@ -184,20 +208,28 @@ mod integration_tests {
 
         let t = Instant::now();
         let encoded = crf::encode_sequence(&frames, &params).expect("编码失败");
-        println!("编码完成: {} B ({:.1}ms)", encoded.len(), t.elapsed().as_secs_f64() * 1000.0);
-        
+        println!(
+            "编码完成: {} B ({:.1}ms)",
+            encoded.len(),
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
         // 写入文件
         let crf_path = r"E:\CRF\test\output\integration_1000_lossless.crf";
         std::fs::create_dir_all(r"E:\CRF\test\output").ok();
         std::fs::write(crf_path, &encoded).expect("写入失败");
         println!("写入: {}", crf_path);
-        
+
         // 从文件解码
         let t = Instant::now();
         let data = std::fs::read(crf_path).expect("读取失败");
         let decoded = crf::decode_from_bytes(&data).expect("解码失败");
-        println!("解码完成: {} 帧 ({:.1}ms)", decoded.frames.len(), t.elapsed().as_secs_f64() * 1000.0);
-        
+        println!(
+            "解码完成: {} 帧 ({:.1}ms)",
+            decoded.frames.len(),
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
         // 校验
         assert_eq!(decoded.frames.len(), frames.len());
         for (i, (orig, dec)) in frames.iter().zip(decoded.frames.iter()).enumerate() {
@@ -210,10 +242,15 @@ mod integration_tests {
     fn test_full_pipeline_2000() {
         let frames = load_test_frames(r"E:\CRF\test\png\2000");
         assert!(frames.len() >= 2, "2000 组至少需要 2 张图片");
-        
+
         println!("\n=== 2000 图片组完整管线测试 ===");
-        println!("输入: {} 帧, {}x{}", frames.len(), frames[0].width, frames[0].height);
-        
+        println!(
+            "输入: {} 帧, {}x{}",
+            frames.len(),
+            frames[0].width,
+            frames[0].height
+        );
+
         // 无损编码
         let params = crf::EncodeParams {
             compression_type: "golomb-rice".to_string(),
@@ -227,20 +264,28 @@ mod integration_tests {
 
         let t = Instant::now();
         let encoded = crf::encode_sequence(&frames, &params).expect("编码失败");
-        println!("编码完成: {} B ({:.1}ms)", encoded.len(), t.elapsed().as_secs_f64() * 1000.0);
-        
+        println!(
+            "编码完成: {} B ({:.1}ms)",
+            encoded.len(),
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
         // 写入文件
         let crf_path = r"E:\CRF\test\output\integration_2000_lossless.crf";
         std::fs::create_dir_all(r"E:\CRF\test\output").ok();
         std::fs::write(crf_path, &encoded).expect("写入失败");
         println!("写入: {}", crf_path);
-        
+
         // 从文件解码
         let t = Instant::now();
         let data = std::fs::read(crf_path).expect("读取失败");
         let decoded = crf::decode_from_bytes(&data).expect("解码失败");
-        println!("解码完成: {} 帧 ({:.1}ms)", decoded.frames.len(), t.elapsed().as_secs_f64() * 1000.0);
-        
+        println!(
+            "解码完成: {} 帧 ({:.1}ms)",
+            decoded.frames.len(),
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
         // 校验
         assert_eq!(decoded.frames.len(), frames.len());
         for (i, (orig, dec)) in frames.iter().zip(decoded.frames.iter()).enumerate() {

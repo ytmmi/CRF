@@ -64,6 +64,7 @@ pub fn apply_change_mask(
 }
 
 /// 小范围整数位移搜索。返回 (dx,dy,SAD)，位移超出边界的像素被忽略。
+#[allow(dead_code)] // 预留轻量位移搜索原语，待序列参考竞争接入
 pub fn search_integer_motion(
     current: &[i32],
     reference: &[i32],
@@ -105,6 +106,7 @@ pub fn search_integer_motion(
 }
 
 /// 轻量残差专用预处理：对给定阈值做稀疏化并返回非零比例。
+#[allow(dead_code)] // 预留残差稀疏化原语，待接入
 pub fn sparsify_residual(residual: &mut [i32], threshold: i32) -> f32 {
     let mut nz = 0usize;
     for v in &mut *residual {
@@ -123,6 +125,7 @@ pub fn sparsify_residual(residual: &mut [i32], threshold: i32) -> f32 {
 
 /// 按帧复杂度分配量化步长（P5.6）。复杂帧获得较小步长（更多码率），
 /// 并受最小/最大步长约束；结果确定性且不依赖浮点运算。
+#[allow(dead_code)] // 预留序列码率控制原语，待接入
 pub fn allocate_quant_steps(
     complexity: &[u64],
     base_step: u8,
@@ -138,12 +141,12 @@ pub fn allocate_quant_steps(
     complexity
         .iter()
         .map(|&c| {
-            let inv = if span == 0 {
-                128
-            } else {
-                ((max_c.saturating_sub(c)).saturating_mul(255) / span).min(255) as u8
-            };
-            let delta = (base_step as i32 * (inv as i32 - 128) / 256) as i32;
+            let inv = max_c
+                .saturating_sub(c)
+                .saturating_mul(255)
+                .checked_div(span)
+                .map_or(128, |v| v.min(255) as u8);
+            let delta = base_step as i32 * (inv as i32 - 128) / 256;
             (base_step as i32 + delta).clamp(min_step as i32, max_step as i32) as u8
         })
         .collect()

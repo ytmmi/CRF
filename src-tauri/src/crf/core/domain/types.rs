@@ -364,16 +364,19 @@ impl FrameHeader {
     }
 
     /// 本帧是否启用 LIC 加权参考（lic_a_num != 0）
+    #[allow(dead_code)] // 编解码器对称 API，当前入口未直接调用
     pub fn lic_enabled(&self) -> bool {
         self.lic_a_num != 0
     }
 
     /// LIC 乘数定点 a（= lic_a_num/100，仅 `lic_enabled()` 时有意义）
+    #[allow(dead_code)]
     pub fn lic_a(&self) -> i32 {
         self.lic_a_num as i32
     }
 
     /// LIC 偏移 b（i8 语义，仅 `lic_enabled()` 时有意义）
+    #[allow(dead_code)]
     pub fn lic_b(&self) -> i32 {
         self.lic_b as i8 as i32
     }
@@ -432,13 +435,16 @@ pub struct DecodeResult {
     pub frames: Vec<ImageData>,
     /// 每帧的差分参考模式（与 frames 一一对应）：
     /// true = 首帧参考（golden）；false = 见 frame_prev2_refs
+    #[allow(dead_code)] // 预留逐帧参考诊断信息，当前解码入口未读取
     pub frame_golden_refs: Vec<bool>,
     /// v1.15：每帧是否以前前帧（prev2）为参考（与 frames 一一对应）。
     /// 仅当 frame_golden_refs[i]==false 时有意义：true=prev2，false=previous。
+    #[allow(dead_code)]
     pub frame_prev2_refs: Vec<bool>,
     /// v1.16：每帧的 LIC 加权参考参数（lic_a_num, lic_b 原字节，与 frames
     /// 一一对应）。lic_a_num==0 表示该帧未启用 LIC（以原始参考直接差分）。
     /// 启用时还原公式为 `restored = LIC(reference_base) + 残差`。
+    #[allow(dead_code)]
     pub frame_lic: Vec<(u8, u8)>,
 }
 

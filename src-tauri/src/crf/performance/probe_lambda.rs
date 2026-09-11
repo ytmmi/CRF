@@ -88,6 +88,7 @@ fn dct_variant_best(
 }
 
 /// 指定 λ 下 Trellis + CABAC 的 DCT 载荷体积（candidate.rs Trellis 轮复刻）。
+#[allow(clippy::too_many_arguments)] // 探针复刻生产 Trellis 轮，参数为算法固有维度
 fn trellis_payload_len(
     pixels: &[i32],
     width: usize,
@@ -155,7 +156,6 @@ pub fn run(dir: &str) -> Result<(), String> {
     let mut dct_wins = 0usize;
     let mut flat_best = 0usize;
     let mut qm_best = 0usize;
-    let mut dct_skipped_worth = 0usize;
     let mut wins_under_scan: [usize; LAMBDA_SCANS.len()] = [0; LAMBDA_SCANS.len()];
     let mut dct_total = 0usize;
 
@@ -191,7 +191,6 @@ pub fn run(dir: &str) -> Result<(), String> {
                 "frame {:>3}: winner=type{winner_type} len={winner_len}  dct=<skip>\n",
                 i,
             );
-            dct_skipped_worth += 1;
             continue;
         };
         dct_total += 1;

@@ -1,4 +1,4 @@
-﻿//! frame_type=8 正式格式：三平面预测后变换 + CABAC 系数编码
+//! frame_type=8 正式格式：三平面预测后变换 + CABAC 系数编码
 //!
 //! 载荷布局（v1.14）：
 //! ```text
@@ -18,11 +18,10 @@
 
 use rayon::prelude::*;
 
+use crate::crf::core::domain::{CompressionType, ImageData};
+use crate::crf::core::transform::{dct8x8_forward_into, dct8x8_inverse_into};
 use crate::crf::encoder::coeff_cabac::CoeffCABAC;
 use crate::crf::error::CrfResult;
-use crate::crf::core::domain::{CompressionType, ImageData};
-use crate::crf::core::prediction::intra::{apply_prediction, undo_prediction};
-use crate::crf::core::transform::{dct8x8_forward_into, dct8x8_inverse_into};
 
 const BLK: usize = 8;
 const MODE_DC: i32 = 0;
@@ -82,10 +81,7 @@ fn encode_plane(
                 let mut qres = [0i32; 64];
                 let mut dq = [0i32; 64];
                 crate::crf::backend::ops::quantize_levels_biased(
-                    &block,
-                    &mut qres,
-                    q_step,
-                    deadzone,
+                    &block, &mut qres, q_step, deadzone,
                 );
                 for (dequantized, &level) in dq.iter_mut().zip(qres.iter()) {
                     *dequantized = level * q;
@@ -102,12 +98,7 @@ fn encode_plane(
                 dct8x8_forward_into(&block, &mut freq);
                 let mut qc = [0i32; 64];
                 let mut dq = [0i32; 64];
-                crate::crf::backend::ops::quantize_levels_biased(
-                    &freq,
-                    &mut qc,
-                    q_step,
-                    deadzone,
-                );
+                crate::crf::backend::ops::quantize_levels_biased(&freq, &mut qc, q_step, deadzone);
                 for (dequantized, &level) in dq.iter_mut().zip(qc.iter()) {
                     *dequantized = level * q;
                 }
@@ -189,11 +180,11 @@ pub fn encode_intra_transform_payload(
         .collect::<CrfResult<Vec<_>>>()?;
 
     let mut out = vec![0b110u8]; // flags: bit1=luma_step_present, bit2=chroma_step_present
-    // type8 载荷自包含步长信令（修复缺陷）：解码端不依赖文件头 lossy_quant
-    // 推断步长。旧缺陷：decoder 以 (q_step, q_step) 反量化，chroma_scale>1000
-    // 或显式 chroma_step 配置下色度步长错误；且无损 type8 帧出现在有损
-    // 文件（lossy_quant>0）时会以错误亮度步长解码。无条件写入 luma_step +
-    // chroma_step，解码端完全从载荷读取，语义自包含。
+                                 // type8 载荷自包含步长信令（修复缺陷）：解码端不依赖文件头 lossy_quant
+                                 // 推断步长。旧缺陷：decoder 以 (q_step, q_step) 反量化，chroma_scale>1000
+                                 // 或显式 chroma_step 配置下色度步长错误；且无损 type8 帧出现在有损
+                                 // 文件（lossy_quant>0）时会以错误亮度步长解码。无条件写入 luma_step +
+                                 // chroma_step，解码端完全从载荷读取，语义自包含。
     out.push(q_step);
     out.push(chroma_step);
     for payload in plane_payloads {

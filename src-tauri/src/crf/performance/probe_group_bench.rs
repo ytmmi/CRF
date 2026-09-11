@@ -127,10 +127,7 @@ pub fn run(dir: &str) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             encode_sequence_batched(
                 paths.len(),
-                |i| {
-                    load_frame(&paths[i])
-                        .map_err(crate::crf::error::CrfError::InvalidCodingParams)
-                },
+                |i| load_frame(&paths[i]).map_err(crate::crf::error::CrfError::InvalidCodingParams),
                 &resolved,
             )
             .map_err(|e| e.to_string())?

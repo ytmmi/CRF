@@ -314,12 +314,7 @@ unsafe fn soft_thr_avx2(pixels: &mut [i32], t: i32) {
 /// AVX2 没有整数除法指令，因此用 4-lane f64 向量除法实现。i32 绝对值
 /// 乘 64 后仍可被 f64 精确表示；除法后向零转换与 Rust 整数除法一致。
 /// `i32::{MIN,MAX}` 单独走标量参考，避免转换结果越出 i32 level 范围。
-pub fn quantize_levels_biased(
-    values: &[i32],
-    out: &mut [i32],
-    q_step: u8,
-    deadzone_bias: i8,
-) {
+pub fn quantize_levels_biased(values: &[i32], out: &mut [i32], q_step: u8, deadzone_bias: i8) {
     assert_eq!(values.len(), out.len(), "量化输入/输出长度必须一致");
     #[cfg(target_arch = "x86_64")]
     {
@@ -329,12 +324,7 @@ pub fn quantize_levels_biased(
             return;
         }
     }
-    crate::crf::backend::scalar::quantize_levels_biased(
-        values,
-        out,
-        q_step,
-        deadzone_bias,
-    );
+    crate::crf::backend::scalar::quantize_levels_biased(values, out, q_step, deadzone_bias);
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -485,6 +475,7 @@ unsafe fn cfl_add_avx2(plane: &mut [i32], y: &[i32], alpha: i32) {
 /// 补码绝对值对 i32::MIN 保留 0x80000000 位模式——作为 u32 解释即
 /// 2147483648，与 `unsigned_abs()` 语义一致（不饱和、不溢出），
 /// 因此 AVX2 路径与标量逐位等价。
+#[allow(dead_code)] // 预留 SAD 预筛原语（banded 条带候选统计），待接入
 pub fn sad_abs_sum(values: &[i32]) -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -498,6 +489,7 @@ pub fn sad_abs_sum(values: &[i32]) -> u64 {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[allow(dead_code)] // 仅由预留的 sad_abs_sum 调用
 unsafe fn sad_abs_sum_avx2(values: &[i32]) -> u64 {
     use std::arch::x86_64::*;
     let mut acc_lo = _mm256_setzero_si256(); // 低 4 个 u64 累加器
@@ -522,6 +514,50 @@ unsafe fn sad_abs_sum_avx2(values: &[i32]) -> u64 {
         sum = sum.wrapping_add(v.unsigned_abs() as u64);
     }
     sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn rct_inv_avx2(pixels: &mut [i32]) {
+    use std::arch::x86_64::*;
+    let mut off = 0;
+    while off + 24 <= pixels.len() {
+        let p = pixels.as_ptr().add(off);
+        let mut y = [0i32; 8];
+        let mut co = [0i32; 8];
+        let mut cg = [0i32; 8];
+        for k in 0..8 {
+            y[k] = *p.add(k * 3);
+            co[k] = *p.add(k * 3 + 1);
+            cg[k] = *p.add(k * 3 + 2);
+        }
+        let vy = _mm256_loadu_si256(y.as_ptr().cast::<__m256i>());
+        let vco = _mm256_loadu_si256(co.as_ptr().cast::<__m256i>());
+        let vcg = _mm256_loadu_si256(cg.as_ptr().cast::<__m256i>());
+        let vt = _mm256_sub_epi32(vy, _mm256_srai_epi32(vcg, 1));
+        let vg = _mm256_add_epi32(vcg, vt);
+        let vb = _mm256_sub_epi32(vt, _mm256_srai_epi32(vco, 1));
+        let vr = _mm256_add_epi32(vco, vb);
+        let rv: [i32; 8] = std::mem::transmute(vr);
+        let gv: [i32; 8] = std::mem::transmute(vg);
+        let bv: [i32; 8] = std::mem::transmute(vb);
+        for k in 0..8 {
+            let q = pixels.as_mut_ptr().add(off).add(k * 3);
+            *q = rv[k];
+            *q.add(1) = gv[k];
+            *q.add(2) = bv[k];
+        }
+        off += 24;
+    }
+    for px in pixels[off..].chunks_exact_mut(3) {
+        let (y, co, cg) = (px[0], px[1], px[2]);
+        let t = y - (cg >> 1);
+        let g = cg + t;
+        let b = t - (co >> 1);
+        px[0] = co + b;
+        px[1] = g;
+        px[2] = b;
+    }
 }
 
 #[cfg(test)]
@@ -598,7 +634,7 @@ mod tests {
     #[test]
     fn test_rct_roundtrip_non_aligned_batch() {
         // 11 像素会经过一个 AVX2 批次并留下标量尾部。
-        let original: Vec<i32> = (0..33).map(|i| (i as i32 * 17) - 240).collect();
+        let original: Vec<i32> = (0..33).map(|i| (i * 17) - 240).collect();
         let mut transformed = original.clone();
         rct_forward_interleaved(&mut transformed);
         let expected_forward: Vec<i32> = original
@@ -644,7 +680,7 @@ mod tests {
 
         // i32::MIN 显式用例（补码绝对值为 0x8000_0000 → 2147483648）
         let min_case = [i32::MIN, 0, -1, 1, 5, -5];
-        assert_eq!(sad_abs_sum(&min_case), 2147483648u64 + 0 + 1 + 1 + 5 + 5);
+        assert_eq!(sad_abs_sum(&min_case), 2147483648u64 + 1 + 1 + 5 + 5);
     }
 
     #[test]
@@ -681,12 +717,7 @@ mod tests {
         let values = [-10, -6, -5, -4, -1, 0, 1, 4, 5, 6, 10];
         let mut expected = [0i32; 11];
         let mut actual = [0i32; 11];
-        crate::crf::backend::scalar::quantize_levels_biased(
-            &values,
-            &mut expected,
-            10,
-            4,
-        );
+        crate::crf::backend::scalar::quantize_levels_biased(&values, &mut expected, 10, 4);
         quantize_levels_biased(&values, &mut actual, 10, 4);
         assert_eq!(actual, expected);
     }
@@ -694,7 +725,7 @@ mod tests {
     /// CfL 亮度预测扣除/还原：AVX2 与标量逐位一致，sub/add 互逆。
     #[test]
     fn test_cfl_luma_subtract_add_matches_scalar_and_roundtrips() {
-        let mut state: u64 = 0xC0FFEE_1234_5678;
+        let mut state: u64 = 0x00C0_FFEE_1234_5678;
         let next = |state: &mut u64| -> i32 {
             *state = state
                 .wrapping_mul(6364136223846793005)
@@ -732,49 +763,5 @@ mod tests {
                 assert_eq!(restored, chroma, "alpha={alpha} n={n} roundtrip");
             }
         }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn rct_inv_avx2(pixels: &mut [i32]) {
-    use std::arch::x86_64::*;
-    let mut off = 0;
-    while off + 24 <= pixels.len() {
-        let p = pixels.as_ptr().add(off);
-        let mut y = [0i32; 8];
-        let mut co = [0i32; 8];
-        let mut cg = [0i32; 8];
-        for k in 0..8 {
-            y[k] = *p.add(k * 3);
-            co[k] = *p.add(k * 3 + 1);
-            cg[k] = *p.add(k * 3 + 2);
-        }
-        let vy = _mm256_loadu_si256(y.as_ptr().cast::<__m256i>());
-        let vco = _mm256_loadu_si256(co.as_ptr().cast::<__m256i>());
-        let vcg = _mm256_loadu_si256(cg.as_ptr().cast::<__m256i>());
-        let vt = _mm256_sub_epi32(vy, _mm256_srai_epi32(vcg, 1));
-        let vg = _mm256_add_epi32(vcg, vt);
-        let vb = _mm256_sub_epi32(vt, _mm256_srai_epi32(vco, 1));
-        let vr = _mm256_add_epi32(vco, vb);
-        let rv: [i32; 8] = std::mem::transmute(vr);
-        let gv: [i32; 8] = std::mem::transmute(vg);
-        let bv: [i32; 8] = std::mem::transmute(vb);
-        for k in 0..8 {
-            let q = pixels.as_mut_ptr().add(off).add(k * 3);
-            *q = rv[k];
-            *q.add(1) = gv[k];
-            *q.add(2) = bv[k];
-        }
-        off += 24;
-    }
-    for px in pixels[off..].chunks_exact_mut(3) {
-        let (y, co, cg) = (px[0], px[1], px[2]);
-        let t = y - (cg >> 1);
-        let g = cg + t;
-        let b = t - (co >> 1);
-        px[0] = co + b;
-        px[1] = g;
-        px[2] = b;
     }
 }

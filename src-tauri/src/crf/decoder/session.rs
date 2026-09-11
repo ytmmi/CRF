@@ -153,6 +153,7 @@ impl DecodeSession {
     ///
     /// 这是**生产恢复逻辑的唯一实现**。测试与调用方不得各自复制
     /// 一份恢复公式（避免语义漂移）。
+    #[allow(dead_code)] // 生产恢复逻辑的唯一实现，供 facade/测试路径调用
     pub fn restore_temporal(result: &DecodeResult) -> Vec<ImageData> {
         let mut out: Vec<ImageData> = Vec::with_capacity(result.frames.len());
         // 全 golden 架构的固定差分基准 = 文件自身解码出的 frame0
@@ -193,11 +194,7 @@ impl DecodeSession {
     /// v1.16 LIC：`lic=(lic_a_num, lic_b)` 非零时，参考基准先经乘加加权
     /// `LIC(base) = (lic_a_num·base)/100 + lic_b` 再叠加残差——与编码端
     /// `diff = frame − LIC(golden)` 严格对称。
-    fn restore_referenced(
-        base: Option<&ImageData>,
-        frame: &ImageData,
-        lic: (u8, u8),
-    ) -> ImageData {
+    fn restore_referenced(base: Option<&ImageData>, frame: &ImageData, lic: (u8, u8)) -> ImageData {
         let base_img = base.expect("restore base must be set");
         let (lic_a_num, lic_b) = lic;
         let weighted: Vec<i32> = if lic_a_num != 0 {

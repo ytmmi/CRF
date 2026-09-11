@@ -5,9 +5,9 @@
 //! 二次元插画差分场景特化：RCT 去相关后 Co/Cg 色度平面在赛璐璐
 //! 上色下大面积恒定，独立编码使 RLE 零行程成倍增长。
 
-use crate::crf::error::CrfResult;
 use crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE;
 use crate::crf::core::domain::{ColorFormat, CompressionType, ImageData};
+use crate::crf::error::CrfResult;
 
 use super::frame::candidate::encode_frame_adaptive;
 use super::frame::BandSteps;
@@ -29,6 +29,7 @@ use crate::crf::performance::telemetry::Span;
 /// band_steps 仅透传给 Y 平面子帧（行划分与原帧对齐）；
 /// Co/Cg 子平面可能为半分辨率（条带错位）且已有 chroma_step 粗化，
 /// 一律不启用逐条带自适应步长。
+#[allow(dead_code)] // planar 候选载荷预留入口，待接入候选竞争
 pub(crate) fn encode_planar_payload(
     image: &ImageData,
     compression_type: CompressionType,
@@ -36,8 +37,15 @@ pub(crate) fn encode_planar_payload(
     fq: FrameQuant,
     band_steps: BandSteps<'_>,
 ) -> CrfResult<Vec<u8>> {
-    encode_planar_payload_limited(image, compression_type, block_size, fq, band_steps, usize::MAX)
-        .map(|opt| opt.expect("unlimited planar encoding always yields a payload"))
+    encode_planar_payload_limited(
+        image,
+        compression_type,
+        block_size,
+        fq,
+        band_steps,
+        usize::MAX,
+    )
+    .map(|opt| opt.expect("unlimited planar encoding always yields a payload"))
 }
 
 /// 带字节预算的 planar 载荷编码（Fast-Fail）。

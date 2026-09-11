@@ -70,7 +70,9 @@ pub fn run(root: &str) -> Result<(), String> {
 
         // 默认每组前 2 差分帧（快速）；CRF_PROBE_ALL_FRAMES=1 覆盖全部差分帧。
         // D4 教训：剪枝决策必须基于全帧采样，`take(2)` 结果不可外推。
-        let all_frames = std::env::var("CRF_PROBE_ALL_FRAMES").map(|v| v == "1").unwrap_or(false);
+        let all_frames = std::env::var("CRF_PROBE_ALL_FRAMES")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let diff_take = if all_frames { usize::MAX } else { 2 };
         for frame in frames.iter().skip(1).take(diff_take) {
             if frame.pixels.len() != golden.len() || components != 3 {
@@ -106,13 +108,13 @@ pub fn run(root: &str) -> Result<(), String> {
     }
 
     println!("--- 差分帧胜出 frame_type 分布（共 {total_frames} 帧）---");
-    for t in 0..MAX_TYPES {
-        if wins[t] > 0 {
+    for (t, &w) in wins.iter().enumerate().take(MAX_TYPES) {
+        if w > 0 {
             println!(
                 "  {:<15} {:>3}  ({:>5.1}%)",
                 frame_type_name(t as u8),
-                wins[t],
-                wins[t] as f64 / total_frames.max(1) as f64 * 100.0
+                w,
+                w as f64 / total_frames.max(1) as f64 * 100.0
             );
         }
     }

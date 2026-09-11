@@ -50,6 +50,11 @@ mod tests;
 // ===== 公共 API（保持与拆分前一致的对外路径）=====
 pub use frame::encode_frame;
 pub use sequence::encode_sequence;
-pub use sequence_batched::encode_sequence_batched;
 
-pub(crate) use frame::{assemble_frame, FrameQuant};
+pub(crate) use frame::FrameQuant;
+
+// `assemble_frame` 仅被 decoder 的测试路径（`decoder/tests.rs`）以
+// `crate::crf::encoder::assemble_frame` 引用；生产代码直接使用 `frame::assemble_frame`。
+// 以 `cfg(test)` 限定，避免非 test 构建将其误判为 unused_imports。
+#[cfg(test)]
+pub(crate) use frame::assemble_frame;

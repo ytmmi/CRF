@@ -12,11 +12,12 @@
 //! **P0 约束**：本文件只定义类型，不实现逻辑。字段类型引用现有 `format` 类型，
 //! 避免引入未实现的依赖。所有类型标注 `#[allow(dead_code)]`——P1 起逐步接入。
 
+// P0 契约冻结：本文件类型为 encoder/decoder 共享契约，P1 起逐步接入；冻结期允许 dead_code。
+#![allow(dead_code)]
+
 use crate::crf::core::bitstream::header::CrfHeader;
 use crate::crf::core::config::lossy_v2::KernelLossyConfig;
-use crate::crf::core::domain::{
-    EncodeParams, FrameHeader, FrameIndexEntry, ImageData,
-};
+use crate::crf::core::domain::{EncodeParams, FrameHeader, FrameIndexEntry, ImageData};
 
 // ============================================================================
 // §7.2 FramePacket —— 统一内部帧包
@@ -78,8 +79,7 @@ pub struct FramePacket<'a> {
 impl<'a> FramePacket<'a> {
     /// 创建新的帧包（`file_offset` 为帧头在文件中的起始偏移）
     pub fn new(header: FrameHeader, payload: &'a [u8], file_offset: usize) -> Self {
-        let total_len =
-            crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE + payload.len();
+        let total_len = crate::crf::core::bitstream::constants::FRAME_HEADER_SIZE + payload.len();
         FramePacket {
             header,
             payload,
@@ -194,7 +194,7 @@ impl ResolvedConfig {
         use crate::crf::core::domain::{CompressionType, Flags};
         use crate::crf::error::CrfError;
 
-        let first = first.ok_or_else(|| CrfError::FrameCountOutOfRange(0))?;
+        let first = first.ok_or(CrfError::FrameCountOutOfRange(0))?;
         let frame_count = frame_count_usize as u16;
 
         // 压缩类型解析（与 encoder/sequence.rs 保持同一映射）

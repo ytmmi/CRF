@@ -14,6 +14,10 @@
 //! **P0 状态**：定义 [`BackendKernel`] trait 骨架。scalar/cpu/gpu 子模块为空声明。
 //! P5 阶段接入性能后端时实现具体 kernel。
 
+// backend 契约层：BackendKernel trait / KernelInput / KernelOutput / KernelLayout /
+// BackendError 为 P5 接入具体 kernel 前的预留 API，暂无调用方；契约冻结期允许 dead_code。
+#![allow(dead_code)]
+
 /// scalar 参考实现（唯一正确性基准）
 pub mod scalar;
 

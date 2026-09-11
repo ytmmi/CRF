@@ -25,7 +25,7 @@ impl GpuMemoryEstimate {
     }
 
     pub fn fits(self, budget_bytes: Option<u64>) -> bool {
-        budget_bytes.map_or(true, |budget| self.total_bytes() <= budget)
+        budget_bytes.is_none_or(|budget| self.total_bytes() <= budget)
     }
 }
 

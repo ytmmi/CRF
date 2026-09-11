@@ -132,6 +132,7 @@ fn reduce_step(base_step: u8, protection_x100: u16) -> u8 {
 ///
 /// 解码端无感（与 [`estimate_band_quant_steps`] 相同的自描述残差语义，格式零改动）。
 /// 默认 100 为中性（保持 base_step）；增步长省码率、减步长属质量优先。
+#[allow(clippy::too_many_arguments)] // 感知活动性旋钮为算法固有维度，语义相互独立
 pub fn estimate_band_activity_steps(
     pixels: &[i32],
     width: usize,
@@ -168,16 +169,10 @@ pub fn estimate_band_activity_steps(
         }
     }
     let avg: Vec<u64> = (0..bands)
-        .map(|b| if grad_cnt[b] > 0 { grad_sum[b] / grad_cnt[b] } else { 0 })
+        .map(|b| grad_sum[b].checked_div(grad_cnt[b]).unwrap_or(0))
         .collect();
     let non_zero_avg: Vec<u64> = (0..bands)
-        .map(|b| {
-            if non_zero_cnt[b] > 0 {
-                grad_sum[b] / non_zero_cnt[b]
-            } else {
-                0
-            }
-        })
+        .map(|b| grad_sum[b].checked_div(non_zero_cnt[b]).unwrap_or(0))
         .collect();
 
     // 中性参考 = 全帧平均梯度（含零 band，稳健区分纹理/平坦）。

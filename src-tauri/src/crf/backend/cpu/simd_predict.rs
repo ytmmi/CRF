@@ -132,7 +132,8 @@ unsafe fn predict_vertical_avx2(
         let mut x = 0usize;
         while x + 8 <= width {
             let cur = _mm256_loadu_si256(pixels.as_ptr().add(base_in + x).cast::<__m256i>());
-            let top = _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - width).cast::<__m256i>());
+            let top =
+                _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - width).cast::<__m256i>());
             let r = _mm256_sub_epi32(cur, top);
             _mm256_storeu_si256(out.as_mut_ptr().add(base_out + x).cast::<__m256i>(), r);
             x += 8;
@@ -254,11 +255,20 @@ unsafe fn predict_dc_avx2(
             let cur = _mm256_loadu_si256(pixels.as_ptr().add(base_in + x).cast::<__m256i>());
             let left = _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - 1).cast::<__m256i>());
             let sum = if has_top {
-                let top = _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - width).cast::<__m256i>());
-                let top_left =
-                    _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - width - 1).cast::<__m256i>());
-                let top_right =
-                    _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - width + 1).cast::<__m256i>());
+                let top =
+                    _mm256_loadu_si256(pixels.as_ptr().add(base_in + x - width).cast::<__m256i>());
+                let top_left = _mm256_loadu_si256(
+                    pixels
+                        .as_ptr()
+                        .add(base_in + x - width - 1)
+                        .cast::<__m256i>(),
+                );
+                let top_right = _mm256_loadu_si256(
+                    pixels
+                        .as_ptr()
+                        .add(base_in + x - width + 1)
+                        .cast::<__m256i>(),
+                );
                 let s0 = _mm256_add_epi32(left, top);
                 let s1 = _mm256_add_epi32(top_left, top_right);
                 _mm256_add_epi32(s0, s1)
@@ -360,7 +370,8 @@ mod tests {
                 scalar_predict_band(&pixels, &mut expected, width, mode, y_start, y_end);
 
                 let mut actual = vec![0i32; expected_len];
-                let ok = predict_plane_avx2(&pixels, &mut actual, width, mode as u8, y_start, y_end);
+                let ok =
+                    predict_plane_avx2(&pixels, &mut actual, width, mode as u8, y_start, y_end);
                 if ok {
                     assert_eq!(
                         actual, expected,
@@ -375,7 +386,9 @@ mod tests {
     /// 向零除法辅助的正确性：负值截断（/2、/4）逐位一致。
     #[test]
     fn test_trunc_div_bias_formula() {
-        for &x in &[-9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
+        for &x in &[
+            -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        ] {
             let div2 = (x + ((x >> 31) & 1)) >> 1;
             assert_eq!(div2, x / 2, "div2 x={x}");
             let div4 = (x + ((x >> 31) & 3)) >> 2;

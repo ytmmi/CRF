@@ -11,4 +11,4 @@ pub use builder::LossyOptionsV2Builder;
 pub use kernel::KernelLossyConfig;
 pub use resolve::{ConfigError, ResolveContext};
 pub use types::*;
-pub use ui::{expert_panel_schema, ExpertField, ExpertPanel};
+pub use ui::expert_panel_schema;

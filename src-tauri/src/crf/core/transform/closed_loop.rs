@@ -153,7 +153,7 @@ pub(crate) fn closed_loop_predict_quant_banded_into(
         for x in 0..width {
             for c in 0..components {
                 let idx = y * stride + x * components + c;
-                let predicted = predict_at(&recon, idx, x, y, stride, components, width, mode);
+                let predicted = predict_at(recon, idx, x, y, stride, components, width, mode);
                 let raw = pixels[idx] - predicted;
                 let quantized = quant_scalar_biased(raw, q_row as i32, deadzone_bias as i32);
                 residuals[idx] = quantized;

@@ -160,7 +160,10 @@ pub fn run(root: &str) -> Result<(), String> {
                 .data
                 .len();
                 sum_a2 += n;
-                (n, format!("{:+.1}%", (b as f64 - n as f64) / n as f64 * 100.0))
+                (
+                    n,
+                    format!("{:+.1}%", (b as f64 - n as f64) / n as f64 * 100.0),
+                )
             } else {
                 (0usize, "skip".to_string())
             };

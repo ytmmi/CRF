@@ -7,7 +7,7 @@ fn make_frame(shift: i32, width: u16, height: u16) -> ImageData {
     let mut px = Vec::with_capacity(width as usize * height as usize * 3);
     for y in 0..height {
         for x in 0..width {
-            px.push((((x as i32 + shift * 3) % 200) + 30));
+            px.push(((x as i32 + shift * 3) % 200) + 30);
             px.push((100 - ((y as i32 + shift) % 70)) + 20);
             px.push(((x as i32 + y as i32 + shift) % 150) + 50);
         }
@@ -485,7 +485,7 @@ fn test_prev2_used_in_hybrid_roundtrip() {
         off += FRAME_HEADER_SIZE + fs;
     }
     assert!(
-        ref_types.iter().any(|&r| r == 2),
+        ref_types.contains(&2),
         "周期内容下 prev2 候选应胜出，参考类型分布: {:?}",
         ref_types
     );

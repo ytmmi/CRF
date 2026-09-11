@@ -137,14 +137,14 @@ mod tests {
 
     #[test]
     fn test_identical_images_ssim_one() {
-        let a = gray_img(32, 32, &(0..1024).map(|i| (i % 256) as i32).collect::<Vec<_>>());
+        let a = gray_img(32, 32, &(0..1024).map(|i| i % 256).collect::<Vec<_>>());
         let s = ssim(&a, &a);
         assert!((s - 1.0).abs() < 1e-9, "identical SSIM 应为 1，实际 {s}");
     }
 
     #[test]
     fn test_noise_lowers_ssim() {
-        let base: Vec<i32> = (0..1024).map(|i| ((i * 7) % 256) as i32).collect();
+        let base: Vec<i32> = (0..1024).map(|i| (i * 7) % 256).collect();
         let noisy: Vec<i32> = base.iter().map(|&v| (v + 40).min(255)).collect();
         let a = gray_img(32, 32, &base);
         let b = gray_img(32, 32, &noisy);

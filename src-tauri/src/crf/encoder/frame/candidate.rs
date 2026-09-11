@@ -231,14 +231,12 @@ pub fn encode_frame_adaptive(
             .as_ref()
             .map_or(usize::MAX, |(sz, ..)| sz.saturating_sub(FRAME_HEADER_SIZE));
         if !skip_sub_palette && palette_plausible(&image.pixels, components) {
-            match encode_palette_payload(&image.pixels, width, palette_limit)? {
-                Some(payload) => {
-                    let pal = assemble_frame(&payload, image, 0x01, 4)?;
-                    if best.as_ref().is_none_or(|(sz, ..)| pal.len() < *sz) {
-                        best = Some((pal.len(), pal, None));
-                    }
+            // 色数超限或 Fast-Fail 时 encode_palette_payload 返回 None，直接放弃候选
+            if let Some(payload) = encode_palette_payload(&image.pixels, width, palette_limit)? {
+                let pal = assemble_frame(&payload, image, 0x01, 4)?;
+                if best.as_ref().is_none_or(|(sz, ..)| pal.len() < *sz) {
+                    best = Some((pal.len(), pal, None));
                 }
-                None => {} // 色数超限或 Fast-Fail，放弃候选
             }
         }
         drop(palette_span);
@@ -279,7 +277,7 @@ pub fn encode_frame_adaptive(
     // P6 预筛（§5-P6）：残差能量极低时 CABAC 无法改善平面化候选
     //（RLE 对零行程已最优），跳过闭环预测以节省时间。
     if compression_type == CompressionType::GolombRice {
-        let cabac_span = Span::begin("encode.adaptive.cabac");
+        let _cabac_span = Span::begin("encode.adaptive.cabac");
         if let Some(&(_, best_mode)) = ranked.first().filter(|_| avg_abs_res >= 0.5) {
             // CABAC 候选同样走闭环（有损）或开环（无损），与帧级路径一致。
             // v2 梯度分级上下文：空间域残差流传入 stride 启用因果梯度分级
@@ -318,7 +316,7 @@ pub fn encode_frame_adaptive(
                 sz.saturating_sub(FRAME_HEADER_SIZE + 1)
             });
             let cabac_payload = rle_cabac::encode_frame_rle_cabac_adaptive_limited(
-                &predicted,
+                predicted,
                 Some(stride),
                 cabac_limit,
             )?;
@@ -565,7 +563,7 @@ fn palette_plausible(pixels: &[i32], components: usize) -> bool {
         if set.insert(v) && set.len() > PALETTE_MAX_COLORS {
             return false;
         }
-        if px_stride > 1 && i % px_stride == 0 {
+        if px_stride > 1 && i.is_multiple_of(px_stride) {
             // 当前像素起点：取 px_stride 个分量编码为 u64 键（低 16 位线性组合）
             let mut key = 0u64;
             for &c in pixels[i..].iter().take(px_stride).take(4) {

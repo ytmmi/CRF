@@ -68,9 +68,7 @@ pub fn run(root: &str) -> Result<(), String> {
         }
     }
 
-    println!(
-        "统计帧数: {frames_seen}（height<128 跳过: {skip_small}）"
-    );
+    println!("统计帧数: {frames_seen}（height<128 跳过: {skip_small}）");
     println!(
         "64 行档胜出: {wins_64} / {frames_seen} ({:.1}%)  累计省 {total_saved_64} 字节",
         wins_64 as f64 / frames_seen.max(1) as f64 * 100.0

@@ -387,6 +387,7 @@ mod tests {
     use crate::crf::ImageData;
 
     /// 安全取像素（越界返回 -9，仅诊断用）
+    #[allow(dead_code)] // 测试诊断辅助，保留供调试
     fn px_get(buf: &[i32], x: usize, y: usize, w: usize) -> i32 {
         if x >= w || y >= buf.len() / w {
             -9
@@ -514,8 +515,8 @@ mod tests {
             .map(|fi| {
                 let pixels: Vec<i32> = (0..64 * 64 * 3)
                     .map(|j| {
-                        let base = ((j * 31) % 211) as i32 - 105;
-                        let delta = (((j * 7 + fi * 13) % 9) as i32) - 4;
+                        let base = ((j * 31) % 211) - 105;
+                        let delta = ((j * 7 + fi * 13) % 9) - 4;
                         base + delta
                     })
                     .collect();
@@ -581,7 +582,7 @@ mod tests {
                 ]) as usize;
                 let kd = itbc_payload[5];
                 let mut p = 7usize;
-                let mut rdseg = |p: &mut usize| {
+                let rdseg = |p: &mut usize| {
                     let l = u32::from_le_bytes([
                         itbc_payload[*p],
                         itbc_payload[*p + 1],
@@ -666,7 +667,7 @@ mod tests {
         let block_count = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
         let pm = payload[4];
         let k_dec = payload[5];
-        let k_res = payload[6];
+        let _k_res = payload[6];
         let rd = |o: usize| -> usize {
             u32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]])
                 as usize

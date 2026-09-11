@@ -28,6 +28,8 @@ fn satd4x4(block: &[i32; 16]) -> u64 {
     }
 
     let mut total = 0u64;
+    // c 为 Hadamard 列索引：需同时读取 4 行的同一列，无法用行迭代器替代。
+    #[allow(clippy::needless_range_loop)]
     for c in 0..4 {
         let a0 = rows[0][c] + rows[1][c];
         let a1 = rows[0][c] - rows[1][c];
@@ -91,14 +93,10 @@ pub fn satd_for_mode_sampled(
             }
         }
     }
-    let total_values = width
-        .saturating_mul(height)
-        .saturating_mul(components) as u64;
-    if sampled_values == 0 {
-        0
-    } else {
-        satd.saturating_mul(total_values) / sampled_values
-    }
+    let total_values = width.saturating_mul(height).saturating_mul(components) as u64;
+    satd.saturating_mul(total_values)
+        .checked_div(sampled_values)
+        .unwrap_or(0)
 }
 
 /// 采样预测残差的平均绝对值，仅用于候选启用阈值。
@@ -126,17 +124,18 @@ pub(crate) fn residual_activity_for_mode_sampled(
         for x in 0..width {
             for c in 0..components {
                 let index = y * stride + x * components + c;
-                let predicted = predict_at(
-                    pixels, index, x, y, stride, components, width, mode,
-                );
-                total = total.saturating_add(
-                    pixels[index].wrapping_sub(predicted).unsigned_abs() as u64,
-                );
+                let predicted = predict_at(pixels, index, x, y, stride, components, width, mode);
+                total = total
+                    .saturating_add(pixels[index].wrapping_sub(predicted).unsigned_abs() as u64);
                 count += 1;
             }
         }
     }
-    if count == 0 { 0.0 } else { total as f64 / count as f64 }
+    if count == 0 {
+        0.0
+    } else {
+        total as f64 / count as f64
+    }
 }
 
 #[cfg(test)]

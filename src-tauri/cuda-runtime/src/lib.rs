@@ -105,7 +105,7 @@ unsafe fn sym<T: Copy>(lib: *mut c_void, name: &str) -> Result<T, R> {
 #[cfg(windows)]
 impl Driver {
     unsafe fn load() -> Result<Self, R> {
-        let lib = LoadLibraryA(b"nvcuda.dll\0".as_ptr().cast());
+        let lib = LoadLibraryA(c"nvcuda.dll".as_ptr().cast());
         if lib.is_null() {
             return Err(-1);
         }
@@ -250,7 +250,7 @@ unsafe fn execute_diff(
             (&mut n as *mut u32).cast(),
         ];
         let block = 256u32;
-        let grid = ((n + block - 1) / block).max(1);
+        let grid = n.div_ceil(block).max(1);
         if (session.driver.launch)(
             function,
             grid,
@@ -316,7 +316,7 @@ unsafe fn execute_rct(
             (&mut n as *mut u32).cast(),
         ];
         let block = 256u32;
-        let grid = ((n + block - 1) / block).max(1);
+        let grid = n.div_ceil(block).max(1);
         if (session.driver.launch)(
             function,
             grid,
@@ -370,6 +370,10 @@ fn with_session<T>(device_id: u32, f: impl FnOnce(&Session) -> Result<T, R>) -> 
 
 /// Executes `out[i] = a[i] - b[i]` using the cached CUDA session.
 /// Returns zero on success and a non-zero code on any driver/device error.
+///
+/// # Safety
+/// `a`、`b` 必须指向至少 `len` 个 `i32` 的有效只读内存，`out` 指向可写的
+/// `len` 个 `i32`；三者互不重叠，且 `len` 与实际分配长度一致。
 #[no_mangle]
 pub unsafe extern "system" fn crf_cuda_diff_i32(
     device_id: u32,
@@ -387,8 +391,7 @@ pub unsafe extern "system" fn crf_cuda_diff_i32(
 
     #[cfg(windows)]
     {
-        return with_session(device_id, |session| execute_diff(session, a, b, out, len))
-            .map_or(-1, |_| OK);
+        with_session(device_id, |session| execute_diff(session, a, b, out, len)).map_or(-1, |_| OK)
     }
 
     #[cfg(not(windows))]
@@ -400,6 +403,9 @@ pub unsafe extern "system" fn crf_cuda_diff_i32(
 
 /// 执行 YCoCg-R 正向变换（3 分量交织，原地）。`npix` 为像素数（i32 元素数 = npix*3）。
 /// 返回零表示成功，非零表示驱动/设备错误。
+///
+/// # Safety
+/// `pixels` 必须指向至少 `npix * 3` 个 `i32` 的有效可写内存（原地读写）。
 #[no_mangle]
 pub unsafe extern "system" fn crf_cuda_rct_forward(
     device_id: u32,
@@ -415,10 +421,10 @@ pub unsafe extern "system" fn crf_cuda_rct_forward(
 
     #[cfg(windows)]
     {
-        return with_session(device_id, |session| {
+        with_session(device_id, |session| {
             execute_rct(session, "rct_forward", pixels, npix)
         })
-        .map_or(-1, |_| OK);
+        .map_or(-1, |_| OK)
     }
 
     #[cfg(not(windows))]
@@ -430,6 +436,9 @@ pub unsafe extern "system" fn crf_cuda_rct_forward(
 
 /// 执行 YCoCg-R 逆向变换（3 分量交织，原地）。`npix` 为像素数（i32 元素数 = npix*3）。
 /// 返回零表示成功，非零表示驱动/设备错误。
+///
+/// # Safety
+/// `pixels` 必须指向至少 `npix * 3` 个 `i32` 的有效可写内存（原地读写）。
 #[no_mangle]
 pub unsafe extern "system" fn crf_cuda_rct_inverse(
     device_id: u32,
@@ -445,10 +454,10 @@ pub unsafe extern "system" fn crf_cuda_rct_inverse(
 
     #[cfg(windows)]
     {
-        return with_session(device_id, |session| {
+        with_session(device_id, |session| {
             execute_rct(session, "rct_inverse", pixels, npix)
         })
-        .map_or(-1, |_| OK);
+        .map_or(-1, |_| OK)
     }
 
     #[cfg(not(windows))]

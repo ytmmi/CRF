@@ -1,4 +1,4 @@
-﻿//! frame_type=8 解码：三平面预测后变换 + CABAC 系数解码
+//! frame_type=8 解码：三平面预测后变换 + CABAC 系数解码
 //!
 //! 与 encoder/intra_transform.rs 对称：
 //! 1. 解析子载荷 [len][mode_stream][coeff_stream]
@@ -6,8 +6,8 @@
 //! 3. DC 模式：逆量化残差 + 预测重建
 //! 4. HVMED 模式：逆 zigzag → 逆量化 → 逆 DCT + 预测重建
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::transform::dct8x8_inverse_into;
+use crate::crf::error::{CrfError, CrfResult};
 
 const BLK: usize = 8;
 const MODE_DC: i32 = 0;
@@ -36,24 +36,20 @@ pub fn decode_intra_transform(
     let flags = data[0];
     let mut offset = 1;
     let luma_step = if flags & 0b10 != 0 {
-        let v = *data
-            .get(offset)
-            .ok_or_else(|| CrfError::InsufficientData {
-                expected: offset + 1,
-                actual: data.len(),
-            })?;
+        let v = *data.get(offset).ok_or_else(|| CrfError::InsufficientData {
+            expected: offset + 1,
+            actual: data.len(),
+        })?;
         offset += 1;
         v
     } else {
         0
     };
     let chroma_step = if flags & 0b100 != 0 {
-        let v = *data
-            .get(offset)
-            .ok_or_else(|| CrfError::InsufficientData {
-                expected: offset + 1,
-                actual: data.len(),
-            })?;
+        let v = *data.get(offset).ok_or_else(|| CrfError::InsufficientData {
+            expected: offset + 1,
+            actual: data.len(),
+        })?;
         offset += 1;
         v
     } else {

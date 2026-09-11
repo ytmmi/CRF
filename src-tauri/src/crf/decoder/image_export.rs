@@ -3,8 +3,8 @@
 //! 自包含的轻量编码器（灰度语义），用于调试与产物落盘场景；
 //! 生产级 RGB 导出走 test 模块的 save_frame_lossless（image-rs）。
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::domain::ImageData;
+use crate::crf::error::{CrfError, CrfResult};
 
 /// 将解码后的帧保存为图像文件
 #[allow(dead_code)] // 调试落盘工具：生产导出走 test 模块 save_frame_lossless

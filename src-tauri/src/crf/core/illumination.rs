@@ -182,7 +182,10 @@ mod tests {
         assert_eq!(fit_predict(-100, 120, 0), -120);
         assert_eq!(fit_predict(-50, 80, 0), -40);
         // 饱和保护（i32 极值不溢出）
-        assert_eq!(fit_predict(i32::MAX, 120, 0), i32::MAX.saturating_mul(120) / 100);
+        assert_eq!(
+            fit_predict(i32::MAX, 120, 0),
+            i32::MAX.saturating_mul(120) / 100
+        );
     }
 
     #[test]
@@ -204,7 +207,7 @@ mod tests {
     #[test]
     fn test_search_identity_when_no_benefit() {
         // 纯差分无乘加收益：最优应接近 (100, 0)
-        let golden: Vec<i32> = (0..4096).map(|i| (i % 256) as i32).collect();
+        let golden: Vec<i32> = (0..4096).map(|i| i % 256).collect();
         // frame = golden + 少量随机扰动（无系统性乘加偏移）
         let frame: Vec<i32> = golden
             .iter()
@@ -221,7 +224,7 @@ mod tests {
     #[test]
     fn test_search_detects_multiplicative_shading() {
         // 构造光照渐变：frame = (0.92·golden) + 3（整帧乘加，与模型同形）
-        let golden: Vec<i32> = (0..8192).map(|i| (i % 200 + 20) as i32).collect();
+        let golden: Vec<i32> = (0..8192).map(|i| i % 200 + 20).collect();
         let frame: Vec<i32> = golden.iter().map(|&g| (g * 92) / 100 + 3).collect();
         let fit = search_lic(&golden, &frame).expect("scan must find a fit");
         assert!(fit.worthwhile(), "shading must be worthwhile: {fit:?}");

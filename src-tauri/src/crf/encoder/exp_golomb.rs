@@ -1,5 +1,5 @@
-use crate::crf::error::CrfResult;
 use crate::crf::core::entropy::scan::zigzag_encode;
+use crate::crf::error::CrfResult;
 
 /// 指数哥伦布编码器
 ///
@@ -193,9 +193,9 @@ mod tests {
         // 标准指数哥伦布 ue(v): value=2 → value+1=3="11"(2位), m=floor(log2(3))=1
         // 编码为 "0"(m个前导0) + "11"(m+1位数据) -> 011xxxxx
         let bits = bytes_to_bits(&bytes);
-        assert_eq!(bits[0], false); // 前导 0
-        assert_eq!(bits[1], true); // 数据 11 的第一位
-        assert_eq!(bits[2], true); // 数据 11 的第二位
+        assert!(!bits[0]); // 前导 0
+        assert!(bits[1]); // 数据 11 的第一位
+        assert!(bits[2]); // 数据 11 的第二位
     }
 
     #[test]

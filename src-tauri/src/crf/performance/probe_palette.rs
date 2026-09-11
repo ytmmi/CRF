@@ -24,7 +24,9 @@ fn pixel_unique(pixels: &[i32], components: usize) -> usize {
         // 只用于计数不需要抗碰撞）
         let mut key = 0u64;
         for &v in chunk.iter().take(4) {
-            key = key.wrapping_mul(0x1_0000_01B3).wrapping_add(v as u64 & 0xFFFF);
+            key = key
+                .wrapping_mul(0x1_0000_01B3)
+                .wrapping_add(v as u64 & 0xFFFF);
         }
         set.insert(key);
     }
@@ -102,10 +104,7 @@ pub fn run(root: &str) -> Result<(), String> {
     }
 
     println!("--- 首帧（原始像素域）---");
-    println!(
-        "{:<14} {:>10} {:>10}",
-        "组", "分量级唯一", "像素级唯一"
-    );
+    println!("{:<14} {:>10} {:>10}", "组", "分量级唯一", "像素级唯一");
     for (name, cu, pu) in &frame_stats_first {
         println!("{name:<14} {cu:>10} {pu:>10}");
     }

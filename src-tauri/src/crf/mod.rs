@@ -21,25 +21,23 @@ pub mod performance;
 // 重新导出常用类型（公共 API 面，供集成与测试路径使用）
 // P4 后类型统一自 core::domain / core::bitstream / core::config 提供
 #[allow(unused_imports)]
-pub use decoder::{decode_from_bytes, decode_from_file};
-#[allow(unused_imports)]
-pub use encoder::{encode_frame, encode_sequence};
-pub use error::CrfResult;
-#[allow(unused_imports)]
-pub use core::prediction::intra::apply_prediction;
-#[allow(unused_imports)]
-pub use core::transform::closed_loop::closed_loop_predict_quant_banded;
-#[allow(unused_imports)]
-pub use core::prediction::cost::satd_for_mode_sampled;
-#[allow(unused_imports)]
 pub use core::config::lossy_v2::{
     expert_panel_schema, ChromaSampling, ConfigError, LossyBase, LossyOptionsV2,
     LossyOptionsV2Builder, ResolvedLossyReport,
 };
 #[allow(unused_imports)]
-pub use core::domain::{
-    ColorFormat, DecodeResult, EncodeParams, ImageData, PredictionMode,
-};
+pub use core::domain::{ColorFormat, DecodeResult, EncodeParams, ImageData, PredictionMode};
+#[allow(unused_imports)]
+pub use core::prediction::cost::satd_for_mode_sampled;
+#[allow(unused_imports)]
+pub use core::prediction::intra::apply_prediction;
+#[allow(unused_imports)]
+pub use core::transform::closed_loop::closed_loop_predict_quant_banded;
+#[allow(unused_imports)]
+pub use decoder::{decode_from_bytes, decode_from_file};
+#[allow(unused_imports)]
+pub use encoder::{encode_frame, encode_sequence};
+pub use error::CrfResult;
 
 /// CRF 格式版本信息
 #[allow(dead_code)] // 公共版本标识，供外部集成与测试使用

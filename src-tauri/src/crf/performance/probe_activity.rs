@@ -97,10 +97,24 @@ pub fn run(root: &str) -> Result<(), String> {
     }
     if run_flat_edge {
         for &f in &FLAT_SCAN {
-            rows.push(scan_config(&groups, &format!("flat={f}"), 100, f, 100, max_frames)?);
+            rows.push(scan_config(
+                &groups,
+                &format!("flat={f}"),
+                100,
+                f,
+                100,
+                max_frames,
+            )?);
         }
         for &e in &EDGE_SCAN {
-            rows.push(scan_config(&groups, &format!("edge={e}"), 100, 100, e, max_frames)?);
+            rows.push(scan_config(
+                &groups,
+                &format!("edge={e}"),
+                100,
+                100,
+                e,
+                max_frames,
+            )?);
         }
     }
 

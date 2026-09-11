@@ -85,16 +85,8 @@ fn frame_band_stats(ycocg: &[i32], width: usize, height: usize) -> Vec<(u64, u64
     }
     let mut out = Vec::with_capacity(bands);
     for band in 0..bands {
-        let avg = if grad_cnt[band] > 0 {
-            grad_sum[band] / grad_cnt[band]
-        } else {
-            0
-        };
-        let nz_avg = if non_zero_cnt[band] > 0 {
-            grad_sum[band] / non_zero_cnt[band]
-        } else {
-            0
-        };
+        let avg = grad_sum[band].checked_div(grad_cnt[band]).unwrap_or(0);
+        let nz_avg = grad_sum[band].checked_div(non_zero_cnt[band]).unwrap_or(0);
         let lap = band_laplacian_p90(ycocg, width, height, band);
         out.push((avg, nz_avg, lap));
     }

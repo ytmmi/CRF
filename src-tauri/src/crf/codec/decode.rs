@@ -10,7 +10,6 @@
 /// **迁移状态（P0）**：仅定义请求类型。生产路径仍为
 /// `crate::crf::decoder::decode_from_bytes` / `decode_from_file`。
 /// P2 完成后将在此文件实现 facade 转发。
-
 use crate::crf::core::domain::DecodeResult;
 
 /// 解码请求
@@ -30,6 +29,7 @@ pub fn decode_from_bytes(request: DecodeRequest) -> Result<DecodeResult, super::
 
 /// 从 reader 解码：读出全部字节后走内存解码路径。
 /// 迁移期实现；P2 容器层完成后将支持真正的流式 bounded reader。
+#[allow(dead_code)] // codec facade 预留流式入口，待 P2 接线
 pub fn decode_from_reader<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
 ) -> Result<DecodeResult, super::CodecError> {

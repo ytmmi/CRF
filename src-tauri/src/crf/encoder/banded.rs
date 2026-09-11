@@ -11,9 +11,9 @@
 
 use rayon::prelude::*;
 
-use crate::crf::error::{CrfError, CrfResult};
 use crate::crf::core::domain::{ImageData, PredictionMode};
 use crate::crf::core::prediction::intra::{apply_prediction_band_into, predict_at};
+use crate::crf::error::{CrfError, CrfResult};
 
 use super::frame::candidate::ADAPTIVE_CANDIDATES;
 use super::rle_golomb;
@@ -82,15 +82,7 @@ fn encode_one_band_with_scratch(
         std::array::from_fn(|index| (0, ADAPTIVE_CANDIDATES[index], index));
     for (index, &mode) in ADAPTIVE_CANDIDATES.iter().enumerate() {
         let residuals = scratch.candidate(index, sample_count);
-        apply_prediction_band_into(
-            pixels,
-            residuals,
-            width,
-            components,
-            mode,
-            y_start,
-            y_end,
-        );
+        apply_prediction_band_into(pixels, residuals, width, components, mode, y_start, y_end);
         // 条带内数据量小（≤96K 像素），SAD 直接精确统计
         // ⚠ D6 已回退（2026-09-08）：曾接入 `sad_abs_sum` AVX2 求和——
         // 实测 encode p50 7315ms vs 标量 7056ms（+3.7% 变慢），与 §33
@@ -111,8 +103,7 @@ fn encode_one_band_with_scratch(
     // top-2 试编码，取最小
     let mut best: Option<(usize, u8, u8, Vec<u8>)> = None; // (len, mode, k, data)
     for &(_, mode, index) in candidates.iter().take(2) {
-        let (data, k) =
-            rle_golomb::encode_frame_rle_golomb_adaptive(scratch.candidate_ref(index))?;
+        let (data, k) = rle_golomb::encode_frame_rle_golomb_adaptive(scratch.candidate_ref(index))?;
         if best.as_ref().is_none_or(|(l, ..)| data.len() < *l) {
             best = Some((data.len(), mode as u8, k, data));
         }
