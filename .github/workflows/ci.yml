@@ -57,9 +57,8 @@ jobs:
             Write-Error "源码行数门禁失败：存在超过 1000 行硬限制的文件（禁止构建/合并/发布）"
             exit 1
           }
-          if ($code -eq 2) {
-            Write-Host "源码行数门禁通过（存在 >=800 行预警文件，CI 视为通过）"
-          }
+          Write-Host "源码行数门禁通过（退出码 $code，2 为 >=800 行预警，CI 视为通过）"
+          exit 0
 
       - name: 分层依赖门禁
         shell: pwsh
