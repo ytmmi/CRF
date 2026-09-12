@@ -23,15 +23,15 @@
 
 use crate::crf::core::bitstream::constants::BAND_HEIGHT;
 
-/// 默认最大树深（根为 0）：≤ 2^3 = 8 叶子（默认行为，字节透明基准）
-pub const MA_MAX_DEPTH: usize = 3;
-/// 默认节点总数上限（满二叉树 2^(d+1)−1）
+/// 默认最大树深（根为 0）：P0-A 第二杠杆采纳 depth=6（≤ 2^6 = 64 叶子）
+pub const MA_MAX_DEPTH: usize = 6;
+/// 历史默认（depth=3）的节点上限；现由 `max_nodes = 2^(max_depth+1)−1` 动态计算
 pub const MA_MAX_NODES: usize = 15;
 /// 格式级最大树深（序列化/反序列化上限，`CRF_MA_MAX_DEPTH` 可升到的顶格）
 pub const MA_FORMAT_MAX_DEPTH: usize = 6;
 /// 格式级节点总数上限（满二叉树 2^(6+1)−1 = 127，u8 计数/子索引仍安全）
 pub const MA_FORMAT_MAX_NODES: usize = 127;
-/// 运行时实际生效的最大树深（默认 3，可用 `CRF_MA_MAX_DEPTH` 提升到 ≤6）
+/// 运行时实际生效的最大树深（默认 6，可用 `CRF_MA_MAX_DEPTH` 覆盖）
 static MA_DEPTH_RUNTIME: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
 /// 读取运行时 MA 树最大深度：环境变量 `CRF_MA_MAX_DEPTH` 解析为 usize，
@@ -50,14 +50,17 @@ pub fn ma_max_depth() -> usize {
 }
 /// 最小分裂样本数（低于此值不再分裂）
 pub const MA_MIN_SAMPLES: usize = 192;
-/// 最小不纯度下降（bits/样本），低于此值停止分裂
-pub const MA_MIN_GAIN: f64 = 0.04;
-/// 默认候选分裂阈值（覆盖典型残差幅度谱；生产默认集，P0-A 第二杠杆基准）
-pub const CANDIDATE_THRESHOLDS: [u32; 4] = [2, 6, 14, 30];
+/// 最小不纯度下降（bits/样本），低于此值停止分裂（P0-A 第二杠杆采纳 0.001）
+pub const MA_MIN_GAIN: f64 = 0.001;
+/// 默认候选分裂阈值（P0-A 第二杠杆采纳 dense 集：覆盖到 128 的尾区，
+/// 替代旧 4 阈值集 `[2,6,14,30]`——旧集使 >30 残差无区分度）
+pub const CANDIDATE_THRESHOLDS: [u32; 14] =
+    [1, 2, 3, 4, 6, 8, 11, 14, 20, 30, 45, 64, 96, 128];
 
 /// MA 树训练参数（P0-A 第二杠杆：放宽 `min_gain` / 加密候选阈值）。
 ///
-/// `Default` 与历史常量逐位一致——不设 env 时树结构与编码字节完全不变。
+/// `Default` 为 P0-A 第二杠杆采纳值（`gain=0.001` + dense 阈值集）——全组扫描
+/// 26 组无劣化、全局 −4.35%。env 可覆盖以回退或复测。
 /// 桶数 `MAG_BUCKETS` 保持编译期常量（改变它会改 gain 量纲，本轮不动）。
 #[derive(Debug, Clone)]
 pub struct MaTrainParams {

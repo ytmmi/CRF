@@ -1,7 +1,7 @@
 [package]
 name = "crf-cuda"
-# 与 crf-viewer 版本同步(三位 semver:0.3.6.0 → 0.3.6);规则见 docs/project-standards.md §13。
-version = "0.3.6"
+# 与 crf-viewer 版本同步(三位 semver:0.3.7.0 → 0.3.7);规则见 docs/project-standards.md §13。
+version = "0.3.7"
 edition = "2021"
 description = "Sidecar NVIDIA CUDA driver-API backend for CRF"
 

@@ -236,9 +236,9 @@ pub fn run(root: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// 探针口径守卫：depth-3 的 MA 变体字节必须与生产变体 0（默认深度）逐位一致。
+    /// 探针口径守卫：生产默认深度的 MA 变体字节必须与生产变体 0 逐位一致。
     #[test]
-    fn test_probe_ma_depth3_equals_variant0() {
+    fn test_probe_ma_default_depth_equals_variant0() {
         let width = 64usize;
         let height = 48usize;
         let stride = width * 3;
@@ -252,14 +252,20 @@ mod tests {
             pixels.push(if state >> 45 & 7 != 0 { 0 } else { v });
         }
         let k = CabacEncoder::adaptive(&pixels).k();
-        let d3 = encode_ma_variant(&pixels, k, Some(stride), usize::MAX, 3)
-            .unwrap()
-            .map(|(body, total)| (body, total))
-            .expect("depth-3 MA 变体应成功");
+        let d = encode_ma_variant(
+            &pixels,
+            k,
+            Some(stride),
+            usize::MAX,
+            crate::crf::core::entropy::context::ma_max_depth(),
+        )
+        .unwrap()
+        .map(|(body, total)| (body, total))
+        .expect("默认深度 MA 变体应成功");
         let v0 = encode_cabac_variant(&pixels, k, Some(stride), usize::MAX, 0)
             .unwrap()
             .map(|(body, total)| (body, total))
             .expect("生产 MA 变体应成功");
-        assert_eq!(d3, v0, "depth-3 MA 变体与生产变体 0 字节不一致");
+        assert_eq!(d, v0, "默认深度 MA 变体与生产变体 0 字节不一致");
     }
 }

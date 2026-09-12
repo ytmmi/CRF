@@ -247,8 +247,8 @@ fn stage2_top() -> usize {
         .unwrap_or(6)
 }
 
-/// 收集所有可用组的帧（`(name, frames)`），供 Stage 1/2 复用。
-fn collect_groups(root: &str) -> Result<Vec<(String, Vec<crate::crf::ImageData>)>, String> {
+/// 收集所有可用组的目录（不预加载——逐组处理以控内存，避免全组帧同时驻留）。
+fn collect_group_dirs(root: &str) -> Result<Vec<(String, std::path::PathBuf)>, String> {
     let mut groups: Vec<_> = std::fs::read_dir(root)
         .map_err(|e| format!("{root}: {e}"))?
         .filter_map(|e| e.ok())
@@ -259,30 +259,36 @@ fn collect_groups(root: &str) -> Result<Vec<(String, Vec<crate::crf::ImageData>)
     if load_frames(root).map(|f| f.len() >= 2).unwrap_or(false) {
         groups = vec![std::path::PathBuf::from(root)];
     }
+    Ok(groups
+        .into_iter()
+        .map(|p| {
+            let name = p
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            (name, p)
+        })
+        .collect())
+}
+
+/// 加载单组帧并应用帧数上限；非「≥2 帧同尺寸 RGB」组返回 None。
+fn load_group(dir: &std::path::Path) -> Option<Vec<crate::crf::ImageData>> {
+    let mut frames = match load_frames(&dir.to_string_lossy()) {
+        Ok(f) if f.len() >= 2 => f,
+        _ => return None,
+    };
     let limit = group_frame_limit();
-    let mut out = Vec::new();
-    for dir in &groups {
-        let name = dir
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let mut frames = match load_frames(&dir.to_string_lossy()) {
-            Ok(f) if f.len() >= 2 => f,
-            _ => continue,
-        };
-        if limit > 0 && frames.len() > limit {
-            frames.truncate(limit);
-        }
-        if frames[0].color_format.component_count() != 3 {
-            continue;
-        }
-        let px = frames[0].pixels.len();
-        if frames.iter().any(|f| f.pixels.len() != px) {
-            continue;
-        }
-        out.push((name, frames));
+    if limit > 0 && frames.len() > limit {
+        frames.truncate(limit);
     }
-    Ok(out)
+    if frames[0].color_format.component_count() != 3 {
+        return None;
+    }
+    let px = frames[0].pixels.len();
+    if frames.iter().any(|f| f.pixels.len() != px) {
+        return None;
+    }
+    Some(frames)
 }
 
 /// 单帧 RCT 残差（生产路径-G 语义）。
@@ -300,8 +306,8 @@ fn residuals_of(
 pub fn run(root: &str) -> Result<(), String> {
     let combos = build_combos();
     let top_k = stage2_top();
-    let groups = collect_groups(root)?;
-    if groups.is_empty() {
+    let dirs = collect_group_dirs(root)?;
+    if dirs.is_empty() {
         println!("未找到可用图像组（需要 ≥2 帧的 RGB 组）");
         return Ok(());
     }
@@ -324,7 +330,10 @@ pub fn run(root: &str) -> Result<(), String> {
     // ===== Stage 1：廉价代理筛选（全局累加）=====
     let mut proxy_sum = vec![0f64; combos.len()];
     let mut frames_total = 0usize;
-    for (_name, frames) in &groups {
+    for (_name, dir) in &dirs {
+        let Some(frames) = load_group(dir) else {
+            continue;
+        };
         let golden = &frames[0].pixels;
         let stride = frames[0].width as usize * 3;
         let per_frame: Vec<Vec<f64>> = (1..frames.len())
@@ -392,7 +401,10 @@ pub fn run(root: &str) -> Result<(), String> {
     let mut real_sum = vec![0u64; combos.len()];
     let mut base_sum = 0u64;
     let mut frames_used = 0usize;
-    for (_name, frames) in &groups {
+    for (name, dir) in &dirs {
+        let Some(frames) = load_group(dir) else {
+            continue;
+        };
         let golden = &frames[0].pixels;
         let stride = frames[0].width as usize * 3;
         let per_frame: Vec<(u64, Vec<(usize, u64)>)> = (1..frames.len())
@@ -435,13 +447,40 @@ pub fn run(root: &str) -> Result<(), String> {
                 Ok((base, per_combo))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let mut g_base = 0u64;
+        let mut g_combo = vec![0u64; combos.len()];
+        let mut g_used = 0usize;
         for (base, per_combo) in per_frame {
-            base_sum += base;
+            g_base += base;
             for (ci, v) in per_combo {
-                real_sum[ci] += v;
+                g_combo[ci] += v;
             }
-            frames_used += 1;
+            g_used += 1;
         }
+        if g_used == 0 {
+            continue;
+        }
+        if let Some((bci, bv)) = sel_set
+            .iter()
+            .map(|&ci| (ci, g_combo[ci]))
+            .min_by_key(|&(_, v)| v)
+        {
+            let gpct = if g_base == 0 {
+                0.0
+            } else {
+                (bv as f64 - g_base as f64) / g_base as f64 * 100.0
+            };
+            println!(
+                "组 {name:<12} ({} 帧): base={g_base} best={bv} ({gpct:+.2}%) [{}]",
+                g_used,
+                combos[bci].label()
+            );
+        }
+        base_sum += g_base;
+        for (ci, v) in g_combo.iter().enumerate() {
+            real_sum[ci] += v;
+        }
+        frames_used += g_used;
     }
 
     println!(
