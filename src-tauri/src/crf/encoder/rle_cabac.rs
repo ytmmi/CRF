@@ -12,7 +12,9 @@
 use rayon::prelude::*;
 
 use crate::crf::core::entropy::cabac::{INIT_PROB, RC_BITS, RC_MOVE, RC_TOP};
-use crate::crf::core::entropy::context::{build_ma_tree_with_depth, ma_max_depth, CtxModel, N_CTX};
+use crate::crf::core::entropy::context::{
+    build_ma_tree_with_params, ma_max_depth, ma_train_params, CtxModel, MaTrainParams, N_CTX,
+};
 
 // ===== Range Coder（32 位区间 + 64 位低位累积）=====
 // RC 常量（RC_BITS/RC_MOVE/RC_TOP/INIT_PROB）统一定义在 core/entropy/cabac.rs（P4）。
@@ -386,7 +388,14 @@ pub(crate) fn encode_cabac_variant(
     variant: u8,
 ) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
     match variant {
-        0 => encode_ma_variant(pixels, k, stride, byte_limit, ma_max_depth()),
+        0 => encode_ma_variant_with_params(
+            pixels,
+            k,
+            stride,
+            byte_limit,
+            ma_max_depth(),
+            ma_train_params(),
+        ),
         1 => {
             // 变体 2：固定梯度 4 档（仅空间域可用）
             let model = CtxModel::Gradient;
@@ -432,29 +441,23 @@ pub(crate) fn encode_cabac_variant(
     }
 }
 
-/// 编码 MA 树变体（载荷 flags bit0），`max_depth` 显式指定树深
-/// （生产路径传 [`ma_max_depth`]，探针 A/B 传各候选深度）。
+/// 给定已训练 MA 树直接编码（载荷 flags bit0），含树头字节。
 ///
 /// 返回完整 body（含 flags 字节与 MA 树头）与总体积；超 `byte_limit`
 /// 返回 None（该变体必败）。总体积含树头：`1 + ma_header.len() + stream.len()`。
-pub(crate) fn encode_ma_variant(
+pub(crate) fn encode_ma_tree(
     pixels: &[i32],
     k: u8,
-    stride: Option<usize>,
+    stride: usize,
     byte_limit: usize,
-    max_depth: usize,
+    tree: &crate::crf::core::entropy::context::MaTree,
 ) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
-    // 变体 1：MA 树（仅空间域可用）
-    let Some(st) = stride else {
-        return Ok(None);
-    };
-    let tree = build_ma_tree_with_depth(pixels, Some(st), max_depth)?;
     let ma_header = tree.serialize();
-    let model = CtxModel::Ma(&tree);
+    let model = CtxModel::Ma(tree);
     let mut enc = CabacEncoder::new(k);
     let stream_limit = byte_limit.saturating_sub(1 + ma_header.len());
     if enc
-        .encode_signed_array_limited(pixels, k, &model, stride, stream_limit)
+        .encode_signed_array_limited(pixels, k, &model, Some(stride), stream_limit)
         .is_none()
     {
         return Ok(None);
@@ -469,6 +472,42 @@ pub(crate) fn encode_ma_variant(
     body.extend_from_slice(&ma_header);
     body.extend_from_slice(&stream);
     Ok(Some((body, total)))
+}
+
+/// 编码 MA 树变体（载荷 flags bit0），`max_depth` 显式指定树深、默认训练参数
+/// （供既有深度 A/B 探针复用）。
+pub(crate) fn encode_ma_variant(
+    pixels: &[i32],
+    k: u8,
+    stride: Option<usize>,
+    byte_limit: usize,
+    max_depth: usize,
+) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
+    encode_ma_variant_with_params(
+        pixels,
+        k,
+        stride,
+        byte_limit,
+        max_depth,
+        &MaTrainParams::default(),
+    )
+}
+
+/// 编码 MA 树变体，`max_depth` + 训练参数均显式指定（探针参数扫描复用）。
+pub(crate) fn encode_ma_variant_with_params(
+    pixels: &[i32],
+    k: u8,
+    stride: Option<usize>,
+    byte_limit: usize,
+    max_depth: usize,
+    params: &MaTrainParams,
+) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
+    // 变体 1：MA 树（仅空间域可用）
+    let Some(st) = stride else {
+        return Ok(None);
+    };
+    let tree = build_ma_tree_with_params(pixels, Some(st), max_depth, params)?;
+    encode_ma_tree(pixels, k, st, byte_limit, &tree)
 }
 
 #[cfg(test)]
@@ -714,5 +753,35 @@ mod tests {
             let decoded = decode_frame_rle_cabac(&body, k, data.len(), Some(st));
             assert_eq!(data, decoded, "depth {d} 往返失败");
         }
+    }
+
+    /// P0-A 第二杠杆：默认训练参数编码与既有 `encode_ma_variant` 逐字节一致。
+    #[test]
+    fn test_encode_ma_variant_params_default_equals() {
+        let st = 32usize;
+        let mut state: u64 = 0xABCD_1234_5678_9EF0;
+        let mut values = vec![0i32; st * 96];
+        for v in values.iter_mut() {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *v = if state >> 45 & 7 != 0 {
+                0
+            } else {
+                ((state >> 33) % 128) as i32 - 64
+            };
+        }
+        let k = CabacEncoder::adaptive(&values).k();
+        let a = encode_ma_variant(&values, k, Some(st), usize::MAX, 3).unwrap();
+        let b = encode_ma_variant_with_params(
+            &values,
+            k,
+            Some(st),
+            usize::MAX,
+            3,
+            &MaTrainParams::default(),
+        )
+        .unwrap();
+        assert_eq!(a, b, "默认参数应与 encode_ma_variant 逐字节一致");
     }
 }

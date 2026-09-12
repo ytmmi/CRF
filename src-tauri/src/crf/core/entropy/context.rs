@@ -49,9 +49,76 @@ pub fn ma_max_depth() -> usize {
     })
 }
 /// 最小分裂样本数（低于此值不再分裂）
-const MA_MIN_SAMPLES: usize = 192;
+pub const MA_MIN_SAMPLES: usize = 192;
 /// 最小不纯度下降（bits/样本），低于此值停止分裂
-const MA_MIN_GAIN: f64 = 0.04;
+pub const MA_MIN_GAIN: f64 = 0.04;
+/// 默认候选分裂阈值（覆盖典型残差幅度谱；生产默认集，P0-A 第二杠杆基准）
+pub const CANDIDATE_THRESHOLDS: [u32; 4] = [2, 6, 14, 30];
+
+/// MA 树训练参数（P0-A 第二杠杆：放宽 `min_gain` / 加密候选阈值）。
+///
+/// `Default` 与历史常量逐位一致——不设 env 时树结构与编码字节完全不变。
+/// 桶数 `MAG_BUCKETS` 保持编译期常量（改变它会改 gain 量纲，本轮不动）。
+#[derive(Debug, Clone)]
+pub struct MaTrainParams {
+    /// 最小不纯度下降（bits/样本），低于此值停止分裂
+    pub min_gain: f64,
+    /// 候选分裂阈值（`attr < t` 走左）；须 ≤255（`MaNode.threshold` 为 u8）
+    pub thresholds: Vec<u32>,
+    /// 最小分裂样本数
+    pub min_samples: usize,
+}
+
+impl Default for MaTrainParams {
+    fn default() -> Self {
+        MaTrainParams {
+            min_gain: MA_MIN_GAIN,
+            thresholds: CANDIDATE_THRESHOLDS.to_vec(),
+            min_samples: MA_MIN_SAMPLES,
+        }
+    }
+}
+
+impl MaTrainParams {
+    /// 从环境变量读取训练参数（生产 A/B 用）：
+    /// - `CRF_MA_MIN_GAIN`：f64，默认 [`MA_MIN_GAIN`]；
+    /// - `CRF_MA_THRESHOLDS`：逗号分隔 u32，过滤到 `1..=255`、升序去重；
+    ///   空/无效则回退 [`CANDIDATE_THRESHOLDS`]。
+    ///
+    /// 仅训练端读取；解码端从序列化树重建、绝不读 env（编解码对称红线）。
+    pub fn from_env() -> Self {
+        let min_gain = std::env::var("CRF_MA_MIN_GAIN")
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|g| g.is_finite() && *g >= 0.0)
+            .unwrap_or(MA_MIN_GAIN);
+        let mut thresholds: Vec<u32> = std::env::var("CRF_MA_THRESHOLDS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .filter_map(|s| s.trim().parse::<u32>().ok())
+                    .filter(|&t| (1..=255).contains(&t))
+                    .collect()
+            })
+            .unwrap_or_default();
+        thresholds.sort_unstable();
+        thresholds.dedup();
+        if thresholds.is_empty() {
+            thresholds = CANDIDATE_THRESHOLDS.to_vec();
+        }
+        MaTrainParams {
+            min_gain,
+            thresholds,
+            min_samples: MA_MIN_SAMPLES,
+        }
+    }
+}
+
+/// 运行时训练参数（OnceLock 缓存，镜像 [`ma_max_depth`]）。
+pub fn ma_train_params() -> &'static MaTrainParams {
+    static RUNTIME: std::sync::OnceLock<MaTrainParams> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(MaTrainParams::from_env)
+}
 
 /// 分裂属性编号
 pub const MA_ATTR_LEFT: u8 = 0; // |left residual|
@@ -261,17 +328,30 @@ pub fn build_ma_tree(
     pixels: &[i32],
     stride: Option<usize>,
 ) -> crate::crf::error::CrfResult<MaTree> {
-    build_ma_tree_with_depth(pixels, stride, ma_max_depth())
+    build_ma_tree_with_params(pixels, stride, ma_max_depth(), ma_train_params())
 }
 
-/// 由差分场构建指定深度的 MA 树（供生产默认路径与探针 A/B 复用）
+/// 由差分场构建指定深度的 MA 树（默认训练参数；供既有深度 A/B 探针复用）。
 ///
 /// `max_depth`：根为 0 的最大树深（≤ [`MA_FORMAT_MAX_DEPTH`]）；
-/// `max_nodes = 2^(max_depth+1)−1` 随之确定。训练逻辑与生产逐位一致。
+/// `max_nodes = 2^(max_depth+1)−1` 随之确定。
 pub fn build_ma_tree_with_depth(
     pixels: &[i32],
     stride: Option<usize>,
     max_depth: usize,
+) -> crate::crf::error::CrfResult<MaTree> {
+    build_ma_tree_with_params(pixels, stride, max_depth, &MaTrainParams::default())
+}
+
+/// 由差分场构建指定深度与训练参数的 MA 树（生产与探针共用核心）。
+///
+/// `params` 的 `Default` 与历史常量逐位一致；训练逻辑与历史完全一致，
+/// 仅把 `min_gain`/`thresholds`/`min_samples` 由常量改为可配。
+pub fn build_ma_tree_with_params(
+    pixels: &[i32],
+    stride: Option<usize>,
+    max_depth: usize,
+    params: &MaTrainParams,
 ) -> crate::crf::error::CrfResult<MaTree> {
     let max_depth = max_depth.clamp(1, MA_FORMAT_MAX_DEPTH);
     let max_nodes = (1usize << (max_depth + 1)) - 1;
@@ -314,13 +394,11 @@ pub fn build_ma_tree_with_depth(
         });
     }
 
-    // 固定候选阈值（覆盖典型残差幅度谱）
-    const CANDIDATE_THRESHOLDS: [u32; 4] = [2, 6, 14, 30];
-
     struct Builder<'a> {
         samples: &'a [TrainSample],
         max_depth: usize,
         max_nodes: usize,
+        params: &'a MaTrainParams,
     }
 
     impl<'a> Builder<'a> {
@@ -351,10 +429,10 @@ pub fn build_ma_tree_with_depth(
             nodes: &mut Vec<MaNode>,
         ) -> u8 {
             let can_split = depth < self.max_depth
-                && subset.len() >= MA_MIN_SAMPLES
+                && subset.len() >= self.params.min_samples
                 && *next_node + 2 <= self.max_nodes;
 
-            let mut best_gain = MA_MIN_GAIN;
+            let mut best_gain = self.params.min_gain;
             let mut best: Option<(u8, u32, Vec<usize>, Vec<usize>)> = None;
 
             if can_split {
@@ -373,7 +451,7 @@ pub fn build_ma_tree_with_depth(
                     if lo == hi {
                         continue; // 该属性在子集内无区分度
                     }
-                    for &t in CANDIDATE_THRESHOLDS.iter() {
+                    for &t in self.params.thresholds.iter() {
                         if t <= lo || t > hi {
                             continue;
                         }
@@ -386,8 +464,8 @@ pub fn build_ma_tree_with_depth(
                                 right_set.push(i);
                             }
                         }
-                        if left_set.len() < MA_MIN_SAMPLES / 4
-                            || right_set.len() < MA_MIN_SAMPLES / 4
+                        if left_set.len() < self.params.min_samples / 4
+                            || right_set.len() < self.params.min_samples / 4
                         {
                             continue;
                         }
@@ -427,6 +505,7 @@ pub fn build_ma_tree_with_depth(
         samples: &samples,
         max_depth,
         max_nodes,
+        params,
     };
     let all: Vec<usize> = (0..samples.len()).collect();
     let mut nodes: Vec<MaNode> = Vec::with_capacity(max_nodes);
@@ -527,6 +606,132 @@ mod tests {
         assert!(MaTree::deserialize(&bad128).is_none());
         // count=0 → 拒绝
         assert!(MaTree::deserialize(&[0u8, 0x80]).is_none());
+    }
+
+    /// P0-A 第二杠杆：默认训练参数与历史 `build_ma_tree_with_depth` 逐位一致。
+    #[test]
+    fn test_ma_train_params_default_matches_with_depth() {
+        let stride = 32usize;
+        let mut data = vec![0i32; stride * 96];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = ((i * 7) % 19) as i32 - 9;
+        }
+        for d in [1usize, 3, 6] {
+            let a = build_ma_tree_with_params(&data, Some(stride), d, &MaTrainParams::default())
+                .unwrap()
+                .serialize();
+            let b = build_ma_tree_with_depth(&data, Some(stride), d)
+                .unwrap()
+                .serialize();
+            assert_eq!(a, b, "默认参数应与 with_depth 逐位一致 (d={d})");
+        }
+    }
+
+    /// 极端参数组合：建树 → serialize → deserialize → walk 全样本一致（解码对称）。
+    #[test]
+    fn test_ma_train_params_scan_roundtrip() {
+        let stride = 32usize;
+        let mut data = vec![0i32; stride * 128];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = if i % 5 == 0 {
+                0
+            } else {
+                ((i * 13) % 41) as i32 - 20
+            };
+        }
+        let params = MaTrainParams {
+            min_gain: 0.001,
+            thresholds: vec![
+                1, 2, 3, 4, 6, 8, 11, 14, 18, 23, 30, 39, 51, 66, 85, 110, 142, 183, 236, 255,
+            ],
+            min_samples: MA_MIN_SAMPLES,
+        };
+        let tree = build_ma_tree_with_params(&data, Some(stride), 6, &params).unwrap();
+        let bytes = tree.serialize();
+        let (rebuilt, consumed) = MaTree::deserialize(&bytes).expect("反序列化失败");
+        assert_eq!(consumed, bytes.len());
+        assert_eq!(rebuilt.leaf_count(), tree.leaf_count());
+        for i in 0..data.len() {
+            let l = data[i.saturating_sub(1)].unsigned_abs();
+            let t = if i >= stride {
+                data[i - stride].unsigned_abs()
+            } else {
+                0
+            };
+            let tl = if i > stride {
+                data[i - stride - 1].unsigned_abs()
+            } else {
+                0
+            };
+            let tr = if i + 1 >= stride {
+                data[i + 1 - stride].unsigned_abs()
+            } else {
+                0
+            };
+            assert_eq!(
+                tree.walk(l, t, tl, tr),
+                rebuilt.walk(l, t, tl, tr),
+                "walk 不一致 @ {i}"
+            );
+        }
+    }
+
+    /// 阈值含 255（u8 上限）时序列化/反序列化/walk 正确、无溢出。
+    #[test]
+    fn test_ma_threshold_255_boundary() {
+        let stride = 16usize;
+        let mut data = vec![0i32; stride * 96];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = ((i * 31) % 300) as i32 - 150; // 含 >255 幅值
+        }
+        let params = MaTrainParams {
+            min_gain: 0.0,
+            thresholds: vec![1, 255],
+            min_samples: MA_MIN_SAMPLES,
+        };
+        let tree = build_ma_tree_with_params(&data, Some(stride), 6, &params).unwrap();
+        let bytes = tree.serialize();
+        let (rebuilt, _) = MaTree::deserialize(&bytes).expect("255 阈值反序列化失败");
+        for i in 0..data.len() {
+            let l = data[i.saturating_sub(1)].unsigned_abs();
+            let t = if i >= stride {
+                data[i - stride].unsigned_abs()
+            } else {
+                0
+            };
+            assert_eq!(tree.walk(l, t, 0, 0), rebuilt.walk(l, t, 0, 0));
+        }
+    }
+
+    /// 极端参数下节点数不超格式上限（127）。
+    #[test]
+    fn test_ma_node_cap_guard() {
+        let stride = 32usize;
+        let mut data = vec![0i32; stride * 256];
+        let mut state = 0x1234_5678u64;
+        for v in data.iter_mut() {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *v = if state >> 40 & 3 != 0 {
+                0
+            } else {
+                ((state >> 33) % 200) as i32 - 100
+            };
+        }
+        let params = MaTrainParams {
+            min_gain: 0.001,
+            thresholds: vec![
+                1, 2, 3, 4, 6, 8, 11, 14, 18, 23, 30, 39, 51, 66, 85, 110, 142, 183, 236, 255,
+            ],
+            min_samples: MA_MIN_SAMPLES,
+        };
+        let tree = build_ma_tree_with_params(&data, Some(stride), 6, &params).unwrap();
+        assert!(
+            tree.nodes.len() <= MA_FORMAT_MAX_NODES,
+            "节点数 {} 超上限",
+            tree.nodes.len()
+        );
     }
 }
 

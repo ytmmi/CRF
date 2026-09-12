@@ -48,6 +48,9 @@ pub mod probe_ma_depth;
 /// probe_ma_depth_ab：MA 树深度 A/B 真实编码字节探针——按生产口径实测
 /// depth-3 基线 vs 更深深度的整帧竞争字节（含树头开销）
 pub mod probe_ma_depth_ab;
+/// probe_ma_train_ab：MA 树训练参数（min_gain/候选阈值）A/B 真实字节探针
+/// （P0-A 第二杠杆）——Stage 1 树头+条件熵代理筛选 + Stage 2 真实字节确认
+pub mod probe_ma_train_ab;
 /// probe_ma_tree：MA 树叶数分布与直方图共享(§8.2)可行性探针
 pub mod probe_ma_tree;
 /// probe_monotonicity：DAT.1 跨内容单调性验收探针

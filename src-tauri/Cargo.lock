@@ -193,11 +193,11 @@ dependencies = [
 
 [[package]]
 name = "crf-cuda"
-version = "0.3.4"
+version = "0.3.5"
 
 [[package]]
 name = "crf-viewer"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "crc32fast",
  "image",
