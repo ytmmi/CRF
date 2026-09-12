@@ -15,7 +15,7 @@ use crate::crf::core::domain::{CompressionType, FrameHeader, ImageData, Predicti
 use crate::crf::core::prediction::intra::undo_prediction;
 use crate::crf::error::{CrfError, CrfResult};
 
-use super::banded::decode_banded_with_undo;
+use super::banded::{decode_banded_cabac_with_undo, decode_banded_with_undo};
 use super::palette::decode_palette_payload;
 use super::planar::decode_planar;
 use super::{exp_golomb, golomb, intrabc, rle_cabac, rle_golomb, transform};
@@ -60,6 +60,29 @@ pub fn reconstruct_frame(data: &[u8], header: &CrfHeader) -> CrfResult<ImageData
             )));
         }
         let pixels = decode_banded_with_undo(frame_data, width, height, components, band_height)?;
+        return Ok(ImageData {
+            width: header.width,
+            height: header.height,
+            bit_depth: header.bit_depth,
+            color_format: header.color_format,
+            pixels,
+        });
+    }
+
+    // 条带级 + CABAC 路径（frame_type=9）：条带结构与 frame_type=2 相同，
+    // 条带残差由 CABAC 解码（§72：条带残差改 CABAC 全局 −5.46%）。
+    if header.compression_type == CompressionType::GolombRice && frame_header.frame_type == 9 {
+        const BAND_HEIGHT_DEFAULT: usize = 32;
+        const BAND_HEIGHT_ALT: usize = 64;
+        let band_height = (frame_header.coding_params & 0x7F) as usize;
+        if band_height != BAND_HEIGHT_DEFAULT && band_height != BAND_HEIGHT_ALT {
+            return Err(CrfError::InvalidCodingParams(format!(
+                "非法条带高度 {}（合法值 32/64）",
+                band_height
+            )));
+        }
+        let pixels =
+            decode_banded_cabac_with_undo(frame_data, width, height, components, band_height)?;
         return Ok(ImageData {
             width: header.width,
             height: header.height,

@@ -16,6 +16,7 @@ use crate::crf::core::prediction::intra::{apply_prediction_band_into, predict_at
 use crate::crf::error::{CrfError, CrfResult};
 
 use super::frame::candidate::ADAPTIVE_CANDIDATES;
+use super::rle_cabac;
 use super::rle_golomb;
 use super::scratch::BandScratch;
 
@@ -111,6 +112,95 @@ fn encode_one_band_with_scratch(
 
     let (_, mode_u8, k, data) =
         best.ok_or_else(|| CrfError::InvalidCodingParams("no banded candidate".to_string()))?;
+
+    let mut out = Vec::with_capacity(6 + data.len());
+    out.push(mode_u8);
+    out.push(k);
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&data);
+    Ok(out)
+}
+
+/// 编码条带级自适应预测 + CABAC 熵编码（frame_type=9）
+///
+/// 与 [`encode_banded_payload`] 同构（条带级预测模式选择），唯一区别：
+/// 条带残差位流由 RLE+Golomb 改为自适应算术编码（CABAC，含 MA 树上下文）。
+/// §72 探针实测 44 差分帧全局 −5.46%（逐帧全负）。
+///
+/// 载荷布局与 frame_type=2 一致：[band_count u16 LE][逐带: mode u8 + k u8 +
+/// data_len u32 LE + data]，`data` 为 CABAC body（[flags][(MA 树头)][码流]）。
+pub(crate) fn encode_banded_cabac_payload(
+    image: &ImageData,
+    band_height: usize,
+    preferred_mode: PredictionMode,
+) -> CrfResult<Vec<u8>> {
+    let width = image.width as usize;
+    let height = image.height as usize;
+    let components = image.color_format.component_count();
+    let band_count = height.div_ceil(band_height);
+
+    let encoded: Vec<CrfResult<Vec<u8>>> = (0..band_count)
+        .into_par_iter()
+        .map_init(BandScratch::default, |scratch, b| {
+            let y_start = b * band_height;
+            let y_end = (y_start + band_height).min(height);
+            encode_one_band_cabac_with_scratch(
+                &image.pixels,
+                width,
+                components,
+                y_start,
+                y_end,
+                preferred_mode,
+                scratch,
+            )
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(2 + band_count * (6 + width * components * band_height / 4));
+    out.extend_from_slice(&(band_count as u16).to_le_bytes());
+    for r in encoded {
+        out.extend_from_slice(&r?);
+    }
+    Ok(out)
+}
+
+/// 编码单个条带（CABAC 熵编码版）。
+fn encode_one_band_cabac_with_scratch(
+    pixels: &[i32],
+    width: usize,
+    components: usize,
+    y_start: usize,
+    y_end: usize,
+    _preferred_mode: PredictionMode,
+    scratch: &mut BandScratch,
+) -> CrfResult<Vec<u8>> {
+    let sample_count = (y_end - y_start) * width * components;
+    let mut candidates: [(u64, PredictionMode, usize); 8] =
+        std::array::from_fn(|index| (0, ADAPTIVE_CANDIDATES[index], index));
+    for (index, &mode) in ADAPTIVE_CANDIDATES.iter().enumerate() {
+        let residuals = scratch.candidate(index, sample_count);
+        apply_prediction_band_into(pixels, residuals, width, components, mode, y_start, y_end);
+        let sad = residuals
+            .iter()
+            .map(|&value| value.unsigned_abs() as u64)
+            .sum();
+        candidates[index].0 = sad;
+    }
+    candidates.sort_by_key(|c| c.0);
+
+    let stride = width * components;
+    let mut best: Option<(usize, u8, u8, Vec<u8>)> = None;
+    for &(_, mode, index) in candidates.iter().take(2) {
+        let (data, k) =
+            rle_cabac::encode_frame_rle_cabac_adaptive(scratch.candidate_ref(index), Some(stride))?;
+        if best.as_ref().is_none_or(|(l, ..)| data.len() < *l) {
+            best = Some((data.len(), mode as u8, k, data));
+        }
+    }
+
+    let (_, mode_u8, k, data) = best.ok_or_else(|| {
+        CrfError::InvalidCodingParams("no banded cabac candidate".to_string())
+    })?;
 
     let mut out = Vec::with_capacity(6 + data.len());
     out.push(mode_u8);

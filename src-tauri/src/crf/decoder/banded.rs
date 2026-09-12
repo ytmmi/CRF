@@ -88,3 +88,83 @@ pub(crate) fn decode_banded_with_undo(
 
     Ok(pixels)
 }
+
+/// 解码条带级自适应 + CABAC 帧载荷（frame_type=9）并逐条带撤销预测
+///
+/// 载荷布局与 [`super::super::encoder::banded::encode_banded_cabac_payload`] 对应
+/// （与 frame_type=2 同构），唯一区别：条带残差由 CABAC 解码
+/// （`decode_frame_rle_cabac`）而非 RLE+Golomb。
+pub(crate) fn decode_banded_cabac_with_undo(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    components: usize,
+    band_height: usize,
+) -> CrfResult<Vec<i32>> {
+    if data.len() < 2 {
+        return Err(CrfError::InsufficientData {
+            expected: 2,
+            actual: data.len(),
+        });
+    }
+    let band_count = u16::from_le_bytes([data[0], data[1]]) as usize;
+    let stride = width * components;
+
+    let mut pixels = vec![0i32; height * stride];
+    let mut residuals = vec![0i32; height * stride];
+    let mut offset = 2;
+
+    for b in 0..band_count {
+        let y_start = b * band_height;
+        if y_start >= height {
+            break;
+        }
+        let y_end = (y_start + band_height).min(height);
+
+        // 读取条带头 [mode][k][len]
+        if offset + 6 > data.len() {
+            return Err(CrfError::InsufficientData {
+                expected: offset + 6,
+                actual: data.len(),
+            });
+        }
+        let mode = PredictionMode::from_u8(data[offset]);
+        let k = data[offset + 1];
+        let len = u32::from_le_bytes([
+            data[offset + 2],
+            data[offset + 3],
+            data[offset + 4],
+            data[offset + 5],
+        ]) as usize;
+        offset += 6;
+
+        if offset + len > data.len() {
+            return Err(CrfError::InsufficientData {
+                expected: offset + len,
+                actual: data.len(),
+            });
+        }
+        let band_data = &data[offset..offset + len];
+        offset += len;
+
+        // CABAC 解码本条带残差（stride 与编码端一致）
+        let band_pixels = (y_end - y_start) * stride;
+        let band_res =
+            super::rle_cabac::decode_frame_rle_cabac(band_data, k, band_pixels, Some(stride));
+        let start = y_start * stride;
+        let stop = y_end * stride;
+        residuals[start..stop].copy_from_slice(&band_res);
+
+        undo_prediction_range(
+            &residuals,
+            &mut pixels,
+            width,
+            components,
+            mode,
+            y_start,
+            y_end,
+        );
+    }
+
+    Ok(pixels)
+}

@@ -3381,3 +3381,36 @@ RLE+Golomb（较弱），而 cabac 变体用 CABAC 强熵编码却受限于**帧
 **裁决——显著正收益，值得实施**：下一步实施「banded 条带级模式 + CABAC」
 （建议逐条带 RLE/CABAC 取小保证单调不劣化），需评估格式布局与兼容性。
 探针 `--probe-banded-cabac` 保留为回归锚点。
+
+## 73. banded + CABAC（frame_type=9）实施：端到端 −1.6~−4.0%，显著收益（2026-09-12）
+
+**背景**：§72 诊断显示 banded（差分帧最大胜出者 38.6%）的条带残差改 CABAC
+全局 −5.46%。本轮实施为正式候选。
+
+**实现**（新增 frame_type=9，向后兼容）：
+1. `encoder/banded.rs`：`encode_banded_cabac_payload`——与 `encode_banded_payload`
+   同构（条带级预测模式选择），条带残差改 `encode_frame_rle_cabac_adaptive`；
+   载荷布局与 frame_type=2 一致（mode+k+len+data，data 为 CABAC body）。
+2. `encoder/frame/candidate.rs`：新增 frame_type=9 候选（与 banded 同条带高度
+   32/64 竞争），与所有候选取最小 → **单调不劣化**。
+3. `decoder/banded.rs`：`decode_banded_cabac_with_undo`（条带残差 CABAC 解码）；
+   `decoder/reconstruct/mod.rs`：frame_type=9 分派。
+4. 旧文件（frame_type 0-8）完全兼容；新文件用 type 9（旧解码器不支持 → 兼容性变更）。
+
+**端到端 bench（本版 vs 上版默认）**：
+
+| 组 | 上版 | 本版（+banded CABAC） | 收益 |
+|---|---:|---:|---:|
+| 1000 | 11,083,388 | 10,641,862 | **−3.98%** |
+| 2-12-4 | 64,297,292 | 62,380,703 | **−2.98%** |
+| 2-6-3 | 29,188,995 | 28,720,508 | **−1.61%** |
+
+**结论**：
+1. banded+CABAC 端到端 **−1.6~−4.0%**，**远大于 MA 方向（<1%）**——验证 §71/§72
+   判断：端到端收益在候选链主战场（banded 占差分帧 38.6%）；
+2. **单调不劣化**由「新增候选竞争取小」保证（产物只可能更小）；
+3. 无损往返通过（`--test` adaptive 无损模式全通过）；旧文件兼容。
+
+**裁决——实施成功，显著收益**：frame_type=9 正式纳入竞争。探针
+`--probe-banded-cabac` 保留为回归锚点。后续可评估同思路移植到
+intra_transform（20.5%）/planar（15.9%）。

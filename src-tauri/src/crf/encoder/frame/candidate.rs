@@ -16,7 +16,7 @@ use crate::crf::core::prediction::cost::residual_activity_for_mode_sampled;
 use crate::crf::core::prediction::cost::satd_for_mode_sampled;
 use crate::crf::core::prediction::intra::apply_prediction_into;
 use crate::crf::core::transform::closed_loop::closed_loop_predict_quant_banded_into;
-use crate::crf::encoder::banded::encode_banded_payload;
+use crate::crf::encoder::banded::{encode_banded_cabac_payload, encode_banded_payload};
 use crate::crf::encoder::intra_transform::encode_intra_transform_payload;
 use crate::crf::encoder::planar::encode_planar_payload_limited;
 use crate::crf::error::{CrfError, CrfResult};
@@ -213,6 +213,25 @@ pub fn encode_frame_adaptive(
             }
         }
         drop(banded_span);
+
+        // 条带级 + CABAC（frame_type=9）：条带残差改 CABAC 熵编码（§72 实测 −5.46%）
+        let mut banded_cabac_best: Option<(usize, Vec<u8>, u8)> = None;
+        for bh in [BAND_HEIGHT, BAND_HEIGHT_ALT] {
+            if bh != BAND_HEIGHT && height < 128 {
+                continue; // 小图 64 行条带退化为单条带，无竞争意义
+            }
+            let payload = encode_banded_cabac_payload(image, bh, band_preferred)?;
+            let len = payload.len();
+            if banded_cabac_best.as_ref().is_none_or(|(sz, ..)| len < *sz) {
+                banded_cabac_best = Some((len, payload, bh as u8));
+            }
+        }
+        if let Some((_, payload, bh)) = banded_cabac_best {
+            let banded_cabac = assemble_frame(&payload, image, bh, 9)?;
+            if best.as_ref().is_none_or(|(sz, ..)| banded_cabac.len() < *sz) {
+                best = Some((banded_cabac.len(), banded_cabac, None));
+            }
+        }
 
         // 第五阶段：调色板候选（frame_type=4）
         //
