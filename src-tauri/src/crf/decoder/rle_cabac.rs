@@ -10,6 +10,7 @@
 //! 由 `core/entropy/cabac.rs` 提供。
 
 use crate::crf::core::entropy::cabac::{INIT_PROB, RC_BITS, RC_MOVE, RC_TOP};
+use crate::crf::core::entropy::context::N_CTX;
 
 // ===== Range Coder 解码端 =====
 
@@ -89,7 +90,6 @@ const CTX_VAL_Q: usize = 8; // [8, 40)
 #[allow(dead_code)] // 与编码端上下文布局对称保留（格式定义面）
 const CTX_SIGN: usize = 40; // [40, 56)
 pub(crate) const CTX_RUN_LEAD: usize = 56; // [56, 60)
-pub(crate) const N_CTX: usize = 60;
 
 #[inline]
 #[allow(dead_code)] // 与编码端上下文布局对称保留（格式定义面）

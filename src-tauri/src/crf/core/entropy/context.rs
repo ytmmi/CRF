@@ -23,10 +23,31 @@
 
 use crate::crf::core::bitstream::constants::BAND_HEIGHT;
 
-/// 最大树深（根为 0）：≤ 2^3 = 8 叶子
+/// 默认最大树深（根为 0）：≤ 2^3 = 8 叶子（默认行为，字节透明基准）
 pub const MA_MAX_DEPTH: usize = 3;
-/// 节点总数上限（满二叉树 2^(d+1)−1）
+/// 默认节点总数上限（满二叉树 2^(d+1)−1）
 pub const MA_MAX_NODES: usize = 15;
+/// 格式级最大树深（序列化/反序列化上限，`CRF_MA_MAX_DEPTH` 可升到的顶格）
+pub const MA_FORMAT_MAX_DEPTH: usize = 6;
+/// 格式级节点总数上限（满二叉树 2^(6+1)−1 = 127，u8 计数/子索引仍安全）
+pub const MA_FORMAT_MAX_NODES: usize = 127;
+/// 运行时实际生效的最大树深（默认 3，可用 `CRF_MA_MAX_DEPTH` 提升到 ≤6）
+static MA_DEPTH_RUNTIME: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// 读取运行时 MA 树最大深度：环境变量 `CRF_MA_MAX_DEPTH` 解析为 usize，
+/// 钳制到 `1..=MA_FORMAT_MAX_DEPTH`，默认 [`MA_MAX_DEPTH`]。
+/// 用 `OnceLock` 缓存——进程内只读一次（解码路径不依赖 env，见 `deserialize`）。
+pub fn ma_max_depth() -> usize {
+    *MA_DEPTH_RUNTIME.get_or_init(|| match std::env::var("CRF_MA_MAX_DEPTH") {
+        Ok(v) => v
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .unwrap_or(MA_MAX_DEPTH)
+            .clamp(1, MA_FORMAT_MAX_DEPTH),
+        Err(_) => MA_MAX_DEPTH,
+    })
+}
 /// 最小分裂样本数（低于此值不再分裂）
 const MA_MIN_SAMPLES: usize = 192;
 /// 最小不纯度下降（bits/样本），低于此值停止分裂
@@ -98,9 +119,8 @@ impl MaNode {
     }
 }
 
-/// 最大叶子数（= 2^MA_MAX_DEPTH）
-#[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
-pub const MA_MAX_LEAVES: usize = 8;
+/// 最大叶子数（= 2^MA_FORMAT_MAX_DEPTH；上下文布局扩展区以它为瓦片宽）
+pub const MA_MAX_LEAVES: usize = 64;
 
 /// MA 树
 #[derive(Debug, Clone)]
@@ -108,6 +128,8 @@ pub struct MaTree {
     pub nodes: Vec<MaNode>,
     /// node_idx → 叶子槽位（0..leaf_count）；内部节点的项未用
     pub leaf_slots: Vec<u8>,
+    /// 叶子总数缓存（`with_leaf_slots`/`single_leaf` 构建时填充，O(1) 读取）
+    leaf_count: u8,
 }
 
 impl MaTree {
@@ -116,6 +138,7 @@ impl MaTree {
         MaTree {
             nodes: vec![MaNode::leaf()],
             leaf_slots: vec![0],
+            leaf_count: 1,
         }
     }
 
@@ -142,13 +165,13 @@ impl MaTree {
         self.leaf_slots[n] as usize // 叶子槽位（≤ MA_MAX_LEAVES）
     }
 
-    /// 叶子数量（flags 判定）
-    #[allow(dead_code)] // 编解码器对称 API/测试路径依赖，当前入口未直接调用
+    /// 叶子数量（构建期缓存，O(1)）
     pub fn leaf_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.is_leaf()).count()
+        self.leaf_count as usize
     }
 
-    /// 构建后整理：为每个叶子分配连续槽位（DFS 遇到顺序）
+    /// 构建后整理：为每个叶子分配连续槽位（DFS 遇到顺序），
+    /// 同时缓存叶子总数（`leaf_count` 字段）。
     pub(crate) fn with_leaf_slots(nodes: Vec<MaNode>) -> Self {
         let mut slots = vec![0u8; nodes.len()];
         let mut next = 0u8;
@@ -161,6 +184,7 @@ impl MaTree {
         MaTree {
             nodes,
             leaf_slots: slots,
+            leaf_count: next,
         }
     }
 
@@ -188,7 +212,8 @@ impl MaTree {
             return None;
         }
         let count = data[0] as usize;
-        if count == 0 || count > MA_MAX_NODES {
+        // 格式级上限（编译期 127）——解码端绝不读 env，编解码对称红线
+        if count == 0 || count > MA_FORMAT_MAX_NODES {
             return None;
         }
         let mut pos = 1usize;
@@ -228,7 +253,7 @@ struct TrainSample {
     bucket: usize, // mag_bucket(|v|)
 }
 
-/// 由差分场构建 MA 树（贪心不纯度下降）
+/// 由差分场构建 MA 树（贪心不纯度下降，默认深度 = `ma_max_depth()`）
 ///
 /// `pixels`：预测后的残差流（与闭环量化输出同域）；`stride` 为行距，
 /// None 时退化为单叶子树。
@@ -236,6 +261,20 @@ pub fn build_ma_tree(
     pixels: &[i32],
     stride: Option<usize>,
 ) -> crate::crf::error::CrfResult<MaTree> {
+    build_ma_tree_with_depth(pixels, stride, ma_max_depth())
+}
+
+/// 由差分场构建指定深度的 MA 树（供生产默认路径与探针 A/B 复用）
+///
+/// `max_depth`：根为 0 的最大树深（≤ [`MA_FORMAT_MAX_DEPTH`]）；
+/// `max_nodes = 2^(max_depth+1)−1` 随之确定。训练逻辑与生产逐位一致。
+pub fn build_ma_tree_with_depth(
+    pixels: &[i32],
+    stride: Option<usize>,
+    max_depth: usize,
+) -> crate::crf::error::CrfResult<MaTree> {
+    let max_depth = max_depth.clamp(1, MA_FORMAT_MAX_DEPTH);
+    let max_nodes = (1usize << (max_depth + 1)) - 1;
     let st = match stride {
         Some(s) if s > 0 => s,
         _ => return Ok(MaTree::single_leaf()),
@@ -280,6 +319,8 @@ pub fn build_ma_tree(
 
     struct Builder<'a> {
         samples: &'a [TrainSample],
+        max_depth: usize,
+        max_nodes: usize,
     }
 
     impl<'a> Builder<'a> {
@@ -309,9 +350,9 @@ pub fn build_ma_tree(
             next_node: &mut usize,
             nodes: &mut Vec<MaNode>,
         ) -> u8 {
-            let can_split = depth < MA_MAX_DEPTH
+            let can_split = depth < self.max_depth
                 && subset.len() >= MA_MIN_SAMPLES
-                && *next_node + 2 <= MA_MAX_NODES;
+                && *next_node + 2 <= self.max_nodes;
 
             let mut best_gain = MA_MIN_GAIN;
             let mut best: Option<(u8, u32, Vec<usize>, Vec<usize>)> = None;
@@ -382,9 +423,13 @@ pub fn build_ma_tree(
         }
     }
 
-    let builder = Builder { samples: &samples };
+    let builder = Builder {
+        samples: &samples,
+        max_depth,
+        max_nodes,
+    };
     let all: Vec<usize> = (0..samples.len()).collect();
-    let mut nodes: Vec<MaNode> = Vec::with_capacity(MA_MAX_NODES);
+    let mut nodes: Vec<MaNode> = Vec::with_capacity(max_nodes);
     let mut next_node = 0usize;
     builder.grow(&all, 0, &mut next_node, &mut nodes);
 
@@ -467,6 +512,22 @@ mod tests {
         let bad = vec![3u8, 0x00, 4u8, 10, 1, 2, 0x80, 0x80];
         assert!(MaTree::deserialize(&bad).is_none());
     }
+
+    /// 反序列化节点数上限边界：16 接受（≤ MA_FORMAT_MAX_NODES=127）、
+    /// 128 拒绝、0 拒绝。解码端只认格式级上限，不依赖 env。
+    #[test]
+    fn test_deserialize_node_count_cap() {
+        // count=16 全叶子树：合法
+        let mut ok16 = vec![16u8];
+        ok16.extend_from_slice(&[0x80u8; 16]);
+        assert!(MaTree::deserialize(&ok16).is_some());
+        // count=128 超格式上限 → 拒绝（在解析节点体之前即返回 None）
+        let mut bad128 = vec![128u8];
+        bad128.extend_from_slice(&[0x80u8; 128]);
+        assert!(MaTree::deserialize(&bad128).is_none());
+        // count=0 → 拒绝
+        assert!(MaTree::deserialize(&[0u8, 0x80]).is_none());
+    }
 }
 
 // ===== 上下文布局 v3 常量与分类器（编解码共享）=====
@@ -479,11 +540,26 @@ mod tests {
 // | Gradient | 固定梯度 4 档（|left|+|top| 分档） | nz×4+g | g×4+q      | g≥2  |
 // | Uniform  | 单槽位（无分级）                   | 0      | q          | 0    |
 
-pub const CTX_ESCAPE: usize = 0; // [0, 8)
+pub const CTX_ESCAPE: usize = 0; // [0, 8) —— 遗留布局（leaf_count ≤ 8）
 const CTX_VAL_Q: usize = 8; // [8, 40)
 const CTX_SIGN: usize = 40; // [40, 56)
 pub const CTX_RUN_LEAD: usize = 56; // [56, 60)
-pub const N_CTX: usize = 60;
+/// 遗留布局总槽位数（同时也是扩展布局的基址）
+pub const _LEGACY_N_CTX: usize = 60;
+
+/// 扩展布局（leaf_count > 8 时启用，MA_MAX_LEAVES=64 为瓦片宽）：
+/// escape 区 [60, 124)、val_q 区 [124, 380)（每叶 4 个商前缀桶）、
+/// sign 区 [380, 444)。各区基址由推导而非魔数，杜绝瓦片漂移。
+pub const MA_EXT_ESCAPE: usize = _LEGACY_N_CTX; // 60
+pub const MA_EXT_VALQ: usize = MA_EXT_ESCAPE + MA_MAX_LEAVES; // 124
+pub const MA_EXT_SIGN: usize = MA_EXT_VALQ + MA_MAX_LEAVES * 4; // 380
+pub const N_CTX: usize = MA_EXT_SIGN + MA_MAX_LEAVES; // 444
+
+// 编译期瓦片护栏：扩展布局不与遗留布局重叠且总量自洽
+const _: () = assert!(MA_EXT_ESCAPE >= CTX_RUN_LEAD + 4);
+const _: () = assert!(MA_EXT_VALQ + MA_MAX_LEAVES * 4 == MA_EXT_SIGN);
+const _: () = assert!(MA_EXT_SIGN + MA_MAX_LEAVES == N_CTX);
+const _: () = assert!(N_CTX <= 1024);
 
 /// 行程阶前导上下文（全模式共享，pub 供编码器使用）
 #[inline]
@@ -543,10 +619,21 @@ impl CtxModel<'_> {
                     topleft_abs.min(255),
                     topright_abs.min(255),
                 );
-                CtxIds {
-                    escape: CTX_ESCAPE + leaf,
-                    val_q_base: CTX_VAL_Q + leaf * 4,
-                    sign: CTX_SIGN + leaf,
+                // 布局选择由树结构（leaf_count）在编解码两端一致推导：
+                // ≤8 叶走遗留紧凑布局（默认字节透明），>8 叶走扩展布局。
+                // 无任何边信息/侧信道——解码端从同一棵树得到同一 leaf_count。
+                if tree.leaf_count() <= 8 {
+                    CtxIds {
+                        escape: CTX_ESCAPE + leaf,
+                        val_q_base: CTX_VAL_Q + leaf * 4,
+                        sign: CTX_SIGN + leaf,
+                    }
+                } else {
+                    CtxIds {
+                        escape: MA_EXT_ESCAPE + leaf,
+                        val_q_base: MA_EXT_VALQ + leaf * 4,
+                        sign: MA_EXT_SIGN + leaf,
+                    }
                 }
             }
             CtxModel::Gradient => {

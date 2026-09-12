@@ -12,7 +12,7 @@
 use rayon::prelude::*;
 
 use crate::crf::core::entropy::cabac::{INIT_PROB, RC_BITS, RC_MOVE, RC_TOP};
-use crate::crf::core::entropy::context::{CtxModel, N_CTX};
+use crate::crf::core::entropy::context::{build_ma_tree_with_depth, ma_max_depth, CtxModel, N_CTX};
 
 // ===== Range Coder（32 位区间 + 64 位低位累积）=====
 // RC 常量（RC_BITS/RC_MOVE/RC_TOP/INIT_PROB）统一定义在 core/entropy/cabac.rs（P4）。
@@ -378,43 +378,15 @@ pub fn encode_frame_rle_cabac_adaptive_limited(
 /// 为最终体积下界，超限即必败；收紧为串行版收缩 best_len 只是提前淘汰
 /// 败者、节省败者编码时间，不改变胜出变体的字节。故并行版与串行版
 /// 逐字节一致。
-fn encode_cabac_variant(
+pub(crate) fn encode_cabac_variant(
     pixels: &[i32],
     k: u8,
     stride: Option<usize>,
     byte_limit: usize,
     variant: u8,
 ) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
-    use crate::crf::core::entropy::context::{build_ma_tree, CtxModel};
-
     match variant {
-        0 => {
-            // 变体 1：MA 树（仅空间域可用）
-            let Some(st) = stride else {
-                return Ok(None);
-            };
-            let tree = build_ma_tree(pixels, Some(st))?;
-            let ma_header = tree.serialize();
-            let model = CtxModel::Ma(&tree);
-            let mut enc = CabacEncoder::new(k);
-            let stream_limit = byte_limit.saturating_sub(1 + ma_header.len());
-            if enc
-                .encode_signed_array_limited(pixels, k, &model, stride, stream_limit)
-                .is_none()
-            {
-                return Ok(None);
-            }
-            let stream = enc.finish();
-            let total = 1 + ma_header.len() + stream.len();
-            if total >= byte_limit {
-                return Ok(None);
-            }
-            let mut body = Vec::with_capacity(total);
-            body.push(0x01); // flags: MA
-            body.extend_from_slice(&ma_header);
-            body.extend_from_slice(&stream);
-            Ok(Some((body, total)))
-        }
+        0 => encode_ma_variant(pixels, k, stride, byte_limit, ma_max_depth()),
         1 => {
             // 变体 2：固定梯度 4 档（仅空间域可用）
             let model = CtxModel::Gradient;
@@ -458,6 +430,45 @@ fn encode_cabac_variant(
             Ok(Some((body, total)))
         }
     }
+}
+
+/// 编码 MA 树变体（载荷 flags bit0），`max_depth` 显式指定树深
+/// （生产路径传 [`ma_max_depth`]，探针 A/B 传各候选深度）。
+///
+/// 返回完整 body（含 flags 字节与 MA 树头）与总体积；超 `byte_limit`
+/// 返回 None（该变体必败）。总体积含树头：`1 + ma_header.len() + stream.len()`。
+pub(crate) fn encode_ma_variant(
+    pixels: &[i32],
+    k: u8,
+    stride: Option<usize>,
+    byte_limit: usize,
+    max_depth: usize,
+) -> crate::crf::error::CrfResult<Option<(Vec<u8>, usize)>> {
+    // 变体 1：MA 树（仅空间域可用）
+    let Some(st) = stride else {
+        return Ok(None);
+    };
+    let tree = build_ma_tree_with_depth(pixels, Some(st), max_depth)?;
+    let ma_header = tree.serialize();
+    let model = CtxModel::Ma(&tree);
+    let mut enc = CabacEncoder::new(k);
+    let stream_limit = byte_limit.saturating_sub(1 + ma_header.len());
+    if enc
+        .encode_signed_array_limited(pixels, k, &model, stride, stream_limit)
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let stream = enc.finish();
+    let total = 1 + ma_header.len() + stream.len();
+    if total >= byte_limit {
+        return Ok(None);
+    }
+    let mut body = Vec::with_capacity(total);
+    body.push(0x01); // flags: MA
+    body.extend_from_slice(&ma_header);
+    body.extend_from_slice(&stream);
+    Ok(Some((body, total)))
 }
 
 #[cfg(test)]
@@ -581,5 +592,127 @@ mod tests {
             cabac_data.len(),
             golomb_data.len()
         );
+    }
+
+    /// 默认字节锚点（回归守卫）：固定残差场 + stride 下
+    /// `encode_frame_rle_cabac_adaptive` 输出必须与录制 golden 逐字节一致。
+    ///
+    /// 前提：运行环境未设置 `CRF_MA_MAX_DEPTH`（默认深度 3）。任何改动
+    /// 导致此锚点漂移即破坏默认字节透明规则。
+    #[test]
+    fn test_default_bytes_anchor() {
+        let width = 40usize;
+        let height = 30usize;
+        let mut state: u64 = 0xCAFE_1234_5678_9ABC;
+        let mut values = Vec::with_capacity(width * height);
+        for _ in 0..width * height {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((state >> 33) as i32 % 96) - 48;
+            values.push(if state >> 45 & 7 != 0 { 0 } else { v });
+        }
+        let (body, k) = encode_frame_rle_cabac_adaptive(&values, Some(width)).unwrap();
+        assert_eq!(k, 4, "anchor 场自适应 k 漂移");
+        let golden_body: Vec<u8> = vec![
+            2, 0, 71, 184, 202, 133, 105, 253, 81, 206, 54, 173, 191, 230, 116, 75, 155, 56, 80,
+            239, 25, 77, 74, 28, 140, 244, 234, 244, 112, 232, 46, 99, 2, 128, 210, 121, 253, 153,
+            88, 50, 60, 140, 32, 253, 47, 0, 52, 13, 114, 119, 160, 42, 122, 175, 123, 45, 189, 26,
+            196, 114, 110, 174, 98, 241, 216, 233, 102, 84, 230, 192, 149, 31, 38, 190, 21, 4, 216,
+            103, 25, 6, 2, 81, 141, 121, 223, 109, 198, 26, 46, 249, 2, 188, 97, 203, 27, 165, 48,
+            130, 241, 19, 172, 163, 249, 140, 143, 169, 127, 75, 51, 149, 240, 96, 77, 111, 95,
+            147, 114, 86, 187, 209, 111, 199, 193, 164, 223, 5, 9, 66, 7, 153, 46, 154, 93, 249,
+            65, 122, 255, 139, 133, 207, 8, 210, 59, 25, 135, 153, 154, 59, 249, 197, 112, 168, 60,
+            133, 127, 197, 95, 55, 212, 96, 23, 90, 122, 194, 242, 170, 207, 193, 243, 63, 64, 94,
+            69, 70, 179, 156, 64, 146, 16, 97, 157, 154, 232, 205, 83, 5, 35, 50, 94, 53, 207, 31,
+            83, 151, 79, 161, 161, 177, 171, 199, 81, 3, 186, 157, 32, 250, 98, 194, 54, 3, 137,
+            136, 23, 209, 234, 62, 4, 225, 118, 95, 255, 178, 102, 116, 176, 69, 199, 160, 248,
+            164, 254, 238, 67, 223, 211, 164, 167, 201, 188, 181, 156, 23, 216, 145, 138, 58, 80,
+            67, 55, 50, 25, 105, 233, 102, 239, 139, 18, 75, 124, 183, 48, 169, 133, 211, 147, 60,
+            222, 172, 167,
+        ];
+        assert_eq!(body, golden_body, "默认字节锚点漂移");
+    }
+
+    /// depth-6 扩展上下文布局往返：手工构造 16 叶（>8）合法树——
+    /// 4 层满二叉树（15 内部节点 BFS 二分阈值 + 16 叶，节点数 31 ≤
+    /// MA_FORMAT_MAX_NODES=127），编码→解码像素级一致，且扩展布局
+    /// 槽位（escape ≥ MA_EXT_ESCAPE=60）实际被使用。
+    #[test]
+    fn test_ma_depth6_extended_layout_roundtrip() {
+        use crate::crf::core::entropy::context::{
+            CtxModel, MaTree, MA_EXT_ESCAPE, MA_EXT_SIGN, MA_EXT_VALQ, N_CTX,
+        };
+        // 手工树头：[count=31][15 内部: flags=0x00, attr=LEFT, thr, l, r][16 叶: 0x80]
+        let mut header = vec![31u8];
+        const THRESHOLDS: [u8; 15] = [8, 4, 12, 2, 6, 10, 14, 1, 3, 5, 7, 9, 11, 13, 15];
+        for (i, &t) in THRESHOLDS.iter().enumerate() {
+            let li = (i * 2 + 1) as u8;
+            let ri = (i * 2 + 2) as u8;
+            header.extend_from_slice(&[0x00, 0, t, li, ri]);
+        }
+        header.extend_from_slice(&[0x80u8; 16]);
+        let (tree, consumed) = MaTree::deserialize(&header).expect("合法 16 叶树应可反序列化");
+        assert_eq!(consumed, header.len());
+        assert!(tree.leaf_count() > 8, "叶子数 {}", tree.leaf_count());
+
+        // 残差场：|data[i-1]| = (i-1)%16 ∈ 0..15 覆盖全部 16 叶；
+        // 符号交替覆盖 sign 上下文（含扩展区槽位）。
+        let st = 64usize;
+        let rows = 32usize;
+        let mut data = Vec::with_capacity(st * rows);
+        for i in 0..st * rows {
+            let v = (i % 16) as i32;
+            data.push(if (i & 1) == 0 { v } else { -v });
+        }
+
+        // 扩展布局实际被使用：left_abs=8 走右-左-左-左路径 → 叶槽位 8 →
+        // classify 产生的上下文落在扩展区（≥ MA_EXT_ESCAPE）。
+        let leaf_hi = tree.walk(8, 0, 0, 0);
+        assert!(leaf_hi >= 8, "left_abs=8 应落入高半区叶，实际 {leaf_hi}");
+        let ctx_hi = CtxModel::Ma(&tree).classify(8, 0, 0, 0, false);
+        assert!(ctx_hi.escape >= MA_EXT_ESCAPE);
+        assert!(ctx_hi.val_q_base >= MA_EXT_VALQ);
+        assert!(ctx_hi.sign >= MA_EXT_SIGN);
+        assert!(ctx_hi.sign < N_CTX);
+
+        // 完整编码（与 encode_ma_variant 同构：flags + 树头 + cabac 码流）
+        let k = CabacEncoder::adaptive(&data).k;
+        let ma_header = tree.serialize();
+        let model = CtxModel::Ma(&tree);
+        let mut enc = CabacEncoder::new(k);
+        enc.encode_signed_array_limited(&data, k, &model, Some(st), usize::MAX)
+            .expect("扩展布局编码应成功");
+        let stream = enc.finish();
+        let mut body = Vec::with_capacity(1 + ma_header.len() + stream.len());
+        body.push(0x01); // flags: MA
+        body.extend_from_slice(&ma_header);
+        body.extend_from_slice(&stream);
+        let decoded = decode_frame_rle_cabac(&body, k, data.len(), Some(st));
+        assert_eq!(data, decoded, "扩展布局往返失败");
+    }
+
+    /// 深度扫描往返：depth ∈ {1..=6} 各自编码→解码像素级一致。
+    #[test]
+    fn test_ma_depth_scan_roundtrip() {
+        let st = 48usize;
+        let rows = 40usize;
+        let mut state: u64 = 0xB16B_00B5_5EED_BEEF;
+        let mut data = Vec::with_capacity(st * rows);
+        for _ in 0..st * rows {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((state >> 33) as i32 % 80) - 40;
+            data.push(if state >> 45 & 7 != 0 { 0 } else { v });
+        }
+        let k = CabacEncoder::adaptive(&data).k;
+        for d in 1usize..=6 {
+            let (body, _) = encode_ma_variant(&data, k, Some(st), usize::MAX, d)
+                .unwrap()
+                .expect("MA 变体应成功");
+            let decoded = decode_frame_rle_cabac(&body, k, data.len(), Some(st));
+            assert_eq!(data, decoded, "depth {d} 往返失败");
+        }
     }
 }

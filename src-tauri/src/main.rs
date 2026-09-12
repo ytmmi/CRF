@@ -10,7 +10,7 @@ use std::io::BufReader;
 /// 项目正式版本号(四位 `a.b.c.d`),规则见 docs/project-standards.md §13。
 /// Cargo.toml 的三位 semver(`a.b.c`)与 `d` 段(bug 修复位)合并而来;
 /// 升级时须与 Cargo.toml 及项目标准同步。
-pub const APP_VERSION: &str = "0.3.4.6";
+pub const APP_VERSION: &str = "0.3.5.0";
 
 fn main() {
     // 检查命令行参数，决定运行模式
@@ -232,6 +232,32 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "--probe-ma-depth" {
+        // P0-A：MA 树深度/上下文密度收益探针（扫描深度 3..8 的条件熵）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_ma_depth::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-ma-depth-ab" {
+        // MA 树深度 A/B 真实编码字节探针（depth-3 vs 更深，整帧竞争口径）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_ma_depth_ab::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.len() > 1 && args[1] == "--probe-ma-tree" {
         // MA 树叶数分布探针:直方图共享(§8.2)可行性(默认扫 test/png 全部组)
         let dir = if args.len() > 2 {
@@ -266,6 +292,76 @@ fn main() {
             String::from(r"E:\CRF\test\png")
         };
         if let Err(e) = crf::performance::probe_rest_frames::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-ref-graph" {
+        // 参考结构图（MST/深度约束森林）收益探针：星型 golden / 时间链
+        // previous / MST 三方案 SAD + 实际编码字节对比（不写码流）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_ref_graph::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-bit-shuffle" {
+        // 位洗牌 + 零消除掩码（LICO, DCC 2024）收益探针：TCMS+序列化 →
+        // BIT_1 位平面转置 → ZERE_4/ZERE_1，与 CRF 现有编码对比（不写码流）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_bit_shuffle::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-self-correcting" {
+        // JXL Modular 自校正/加权预测器收益探针：RCT 残差 → {MED, Paeth, WP}
+        // 预测 → RLE+Golomb，与 CRF 现有编码对比（不写码流）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_self_correcting::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-squeeze" {
+        // JXL Modular Squeeze 类 Haar 小波收益探针：RCT 残差 → 多级子带分解
+        // → 各子带 RLE+Golomb，与无 squeeze / CRF 现有编码对比（不写码流）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_squeeze::run(&dir) {
+            eprintln!("Probe error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "--probe-squeeze-adaptive" {
+        // Squeeze + CRF adaptive 组合探针：A 交织 / B 分离分量 / C squeeze 子带，
+        // 验证小波子带接强编码器相对当前生产路径的净价值（不写码流）
+        let dir = if args.len() > 2 {
+            args[2].clone()
+        } else {
+            String::from(r"E:\CRF\test\png")
+        };
+        if let Err(e) = crf::performance::probe_squeeze_adaptive::run(&dir) {
             eprintln!("Probe error: {e}");
             std::process::exit(1);
         }

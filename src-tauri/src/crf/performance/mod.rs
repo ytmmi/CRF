@@ -17,6 +17,9 @@ pub mod probe_activity;
 pub mod probe_avif_target;
 /// probe_banded_alt：banded 条带高度自适应（32 vs 64 行）胜出率探针
 pub mod probe_banded_alt;
+/// probe_bit_shuffle：位洗牌 + 零消除掩码（LICO, DCC 2024）收益探针——
+/// TCMS+序列化 → BIT_1 位平面转置 → ZERE_4/ZERE_1 零消除（不写码流）
+pub mod probe_bit_shuffle;
 /// probe_dct_simd：DCT i16 打包 SIMD 可行性探针（§56 新候选）
 pub mod probe_dct_simd;
 /// probe_delta_palette：JPEG-XL 式 delta palette（§8.4）收益探针——像素级色数
@@ -39,6 +42,12 @@ pub mod probe_lic;
 /// probe_lic_ab：LIC A/B 字节对比探针（v1.16 正式实现——on vs
 /// CRF_DISABLE_LIC=1 的实际编码字节差，§49 有效性验证工具）
 pub mod probe_lic_ab;
+/// probe_ma_depth：MA 树深度/上下文密度收益探针（P0-A）——扫描深度 3..8 的
+/// 幅值桶条件熵，量化"加深上下文树"的收益上限
+pub mod probe_ma_depth;
+/// probe_ma_depth_ab：MA 树深度 A/B 真实编码字节探针——按生产口径实测
+/// depth-3 基线 vs 更深深度的整帧竞争字节（含树头开销）
+pub mod probe_ma_depth_ab;
 /// probe_ma_tree：MA 树叶数分布与直方图共享(§8.2)可行性探针
 pub mod probe_ma_tree;
 /// probe_monotonicity：DAT.1 跨内容单调性验收探针
@@ -60,11 +69,23 @@ pub mod probe_planar_candidate;
 pub mod probe_planar_parallel;
 /// probe_planar_sub：planar 子平面次级候选胜出频率探针（profile 验证）
 pub mod probe_planar_sub;
+/// probe_ref_graph：参考结构图（MST/深度约束森林）收益探针——三方案
+/// （星型 golden / 时间链 previous / MST）SAD + 实际编码字节对比（不写码流）
+pub mod probe_ref_graph;
 /// probe_rest_frames：差分帧候选 profile 探针（胜出率 + 阶段耗时分离）
 pub mod probe_rest_frames;
 /// probe_ringing：P4.7 前置验证——ringing 信号（Laplacian 高响应）与
 /// edge 分类的独立性探针（S0）
 pub mod probe_ringing;
+/// probe_self_correcting：JXL Modular 自校正/加权预测器（weighted::State）
+/// 收益探针——4 子预测器 + 历史误差加权，对比 MED/Paeth 残差熵编码字节
+pub mod probe_self_correcting;
+/// probe_squeeze：JXL Modular Squeeze 类 Haar 可逆小波收益探针——多级
+/// 子带分解（LL/LH/HL/HH）后各子带独立熵编码，对比直接编码
+pub mod probe_squeeze;
+/// probe_squeeze_adaptive：Squeeze + CRF adaptive 组合探针——验证小波子带
+/// 接强编码器的净价值（A 交织 / B 分离分量 / C squeeze 子带）
+pub mod probe_squeeze_adaptive;
 /// probe_valid_set：扩展验证集质量趋势探针（30 张分层首帧，§6.1）
 pub mod probe_valid_set;
 pub mod telemetry;
