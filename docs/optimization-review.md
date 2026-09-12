@@ -3320,3 +3320,35 @@ squeeze 无净实施价值。与 MST（§63）/LICO（§64）/WP（§65）一致
 2. 收益有限（<1%），若未来 CABAC 变体胜出率上升（内容分层）则收益放大；
 3. 探针 `--probe-ma-train-ab` 保留为回归锚点；env `CRF_MA_MIN_GAIN`/`CRF_MA_THRESHOLDS`/
    `CRF_MA_MAX_DEPTH` 可回退旧参数复测。
+
+## 71. cabac/MA 变体胜出率诊断：MA 已近极致，端到端天花板在候选链分布（2026-09-12）
+
+**背景**：§69/§70 显示 MA 树优化在 CABAC 内显著（−4.35%）但端到端仅 −0.07~−0.57%。
+诊断根因：`encode_frame_adaptive` 候选链中 MA 所在的 cabac 变体胜出率低。
+
+**探针**：`--probe-cabac-share [root]`（`performance/probe_cabac_share.rs`，零码流改动）。
+每差分帧（路径-G 语义）重建 cabac 候选（SATD 最优模式 + 开环预测 + 三变体竞争，
+复刻生产 `avg_abs_res>=0.5` 预筛），对比最终 `encode_frame_adaptive` 多候选竞争。
+
+**实测（44 差分帧，每组前 2 帧）**：
+1. **frame_type 胜出分布**：banded 17 (38.6%)、intra_transform 9 (20.5%)、
+   planar 7 (15.9%)、**cabac 7 (15.9%)**、rle 4 (9.1%)。
+2. **cabac 内三变体**（仅 12/44 帧通过 `avg_abs_res>=0.5` 预筛）：
+   **MA 10 (83.3%)** / Gradient 2 (16.7%) / Uniform 0%——§70 采纳新参数后 MA
+   在 cabac 内已占绝对多数（旧参数下约 47.7%）。
+3. **cabac 未胜出差距**（5 帧）：min 1.013 / median 1.020 / max 1.098；
+   ≤1.02: 40%、≤1.05: 60%、≤1.10: 100%——cabac 常「差一点点」。
+
+**结论**：
+1. **MA 优化已近极致**：cabac 内 MA 胜出 83.3%，进一步提升空间小（Gradient 仅 16.7%）；
+   §70 训练参数改进的价值已充分兑现到 cabac 内。
+2. **端到端天花板 = 候选链分布**：44 帧中 cabac 仅 7 帧胜出（15.9%）——
+   预筛跳过 32 帧低残差帧（rle/banded 最优），剩余 12 帧 cabac 胜出 7 帧（58%）。
+3. **cabac 与胜出者差距 median 1.02**：cabac 常仅大 2%，若能再优 2~3% 可翻盘
+   更多帧，但收益上限仍受 cabac 占比约束（≤15.9% 帧 × 每帧 ~5% ≈ 端到端 <1%）。
+
+**裁决——诊断闭环，方向转向候选链主战场**：
+1. MA/cabac 方向收敛：MA 已近极致、端到端 <1%，不再加码；
+2. **下一步应聚焦差分帧主胜出者 banded (38.6%) / intra_transform (20.5%) / planar (15.9%)**
+   的上下文/编码改进——它们才是端到端收益的所在；
+3. 探针 `--probe-cabac-share` 保留为回归锚点（`CRF_PROBE_ALL_FRAMES=1` 全帧）。

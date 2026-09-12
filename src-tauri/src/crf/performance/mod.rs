@@ -20,6 +20,9 @@ pub mod probe_banded_alt;
 /// probe_bit_shuffle：位洗牌 + 零消除掩码（LICO, DCC 2024）收益探针——
 /// TCMS+序列化 → BIT_1 位平面转置 → ZERE_4/ZERE_1 零消除（不写码流）
 pub mod probe_bit_shuffle;
+/// probe_cabac_share：cabac/MA 变体胜出率诊断——frame_type 胜出分布 +
+/// cabac 内 MA/Gradient/Uniform 胜出率 + cabac 与最终胜出者字节差距
+pub mod probe_cabac_share;
 /// probe_dct_simd：DCT i16 打包 SIMD 可行性探针（§56 新候选）
 pub mod probe_dct_simd;
 /// probe_delta_palette：JPEG-XL 式 delta palette（§8.4）收益探针——像素级色数
