@@ -17,6 +17,9 @@ pub mod probe_activity;
 pub mod probe_avif_target;
 /// probe_banded_alt：banded 条带高度自适应（32 vs 64 行）胜出率探针
 pub mod probe_banded_alt;
+/// probe_banded_cabac：banded 条带级熵编码升级诊断——条带残差 RLE+Golomb vs
+/// CABAC 的真实字节对比（量化「条带级模式 + CABAC」相对现状的潜力）
+pub mod probe_banded_cabac;
 /// probe_bit_shuffle：位洗牌 + 零消除掩码（LICO, DCC 2024）收益探针——
 /// TCMS+序列化 → BIT_1 位平面转置 → ZERE_4/ZERE_1 零消除（不写码流）
 pub mod probe_bit_shuffle;
